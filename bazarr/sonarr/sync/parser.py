@@ -111,12 +111,15 @@ def episodeParser(episode):
     if 'hasFile' in episode:
         if episode['hasFile'] is True:
             if 'episodeFile' in episode:
-                try:
-                    bazarr_file_size = os.path.getsize(path_mappings.path_replace(episode['episodeFile']['path']))
-                except OSError:
-                    bazarr_file_size = 0
+                bazarr_file_size = episode['episodeFile']['size']
+                is_supported_strm = settings.general.enable_strm_support and episode['episodeFile']['path'].lower().endswith('.strm')
+                if bazarr_file_size <= MINIMUM_VIDEO_SIZE and not is_supported_strm:
+                    try:
+                        bazarr_file_size = os.path.getsize(path_mappings.path_replace(episode['episodeFile']['path']))
+                    except OSError:
+                        bazarr_file_size = 0
                 if (episode['episodeFile']['size'] > MINIMUM_VIDEO_SIZE or bazarr_file_size > MINIMUM_VIDEO_SIZE or
-                        (settings.general.enable_strm_support and episode['episodeFile']['path'].lower().endswith('.strm'))):
+                        is_supported_strm):
                     if 'sceneName' in episode['episodeFile']:
                         sceneName = episode['episodeFile']['sceneName']
                     else:
