@@ -202,7 +202,7 @@ def get_providers():
                 providers_list.remove(provider)
             else:
                 logging.info("Using %s again after %s, (disabled because: %s)", provider, throttle_desc, reason)
-                del tp[provider]
+                tp.pop(provider, None)
                 set_throttled_providers(str(tp))
         # if forced only is enabled: # fixme: Prepared for forced only implementation to remove providers with don't support forced only subtitles
         #     for provider in providers_list:
@@ -467,7 +467,7 @@ def update_throttled_provider():
 
     for provider in list(tp):
         if provider not in providers_list:
-            del tp[provider]
+            tp.pop(provider, None)
             set_throttled_providers(str(tp))
 
         reason, until, throttle_desc = tp.get(provider, (None, None, None))
@@ -478,7 +478,7 @@ def update_throttled_provider():
                 pass
             else:
                 logging.info("Using %s again after %s, (disabled because: %s)", provider, throttle_desc, reason)
-                del tp[provider]
+                tp.pop(provider, None)
                 set_throttled_providers(str(tp))
 
             reason, until, throttle_desc = tp.get(provider, (None, None, None))
@@ -487,7 +487,7 @@ def update_throttled_provider():
                 now = datetime.datetime.now()
                 if now >= until:
                     logging.info("Using %s again after %s, (disabled because: %s)", provider, throttle_desc, reason)
-                    del tp[provider]
+                    tp.pop(provider, None)
                     set_throttled_providers(str(tp))
 
     event_stream(type='badges')
@@ -509,7 +509,7 @@ def reset_throttled_providers(only_auth_or_conf_error=False):
         if only_auth_or_conf_error and tp[provider][0] not in ['AuthenticationError', 'ConfigurationError',
                                                                'PaymentRequired']:
             continue
-        del tp[provider]
+        tp.pop(provider, None)
     set_throttled_providers(str(tp))
     update_throttled_provider()
     if only_auth_or_conf_error:

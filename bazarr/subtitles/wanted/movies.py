@@ -20,6 +20,14 @@ from ..adaptive_searching import is_search_active, updateFailedAttempts
 from ..download import generate_subtitles
 
 
+def _missing_languages_due(missing_subtitles, failed_attempts):
+    due_languages = []
+    for language in ast.literal_eval(missing_subtitles):
+        if is_search_active(desired_language=language, attempt_string=failed_attempts):
+            due_languages.append(language)
+    return due_languages
+
+
 def _wanted_movie(movie, providers_list, job_id=None):
     audio_language_list = get_audio_profile_languages(movie.audio_language)
     if len(audio_language_list) > 0:
@@ -36,10 +44,6 @@ def _wanted_movie(movie, providers_list, job_id=None):
             forced_ = "True" if language.endswith(':forced') else "False"
             languages.append((language.split(":")[0], hi_, forced_))
             languages_to_stamp.append(language)
-
-        else:
-            logging.info(f"BAZARR Search is throttled by adaptive search for this movie {movie.path} and "
-                         f"language: {language}")
 
     found_any = False
     for result in generate_subtitles(path_mappings.path_replace_movie(movie.path),
@@ -72,7 +76,7 @@ def _wanted_movie(movie, providers_list, job_id=None):
                 .where(TableMovies.radarrId == movie.radarrId))
 
 
-def wanted_download_subtitles_movie(radarr_id, job_id=None):
+def wanted_download_subtitles_movie(radarr_id, job_id=None, providers_list=None):
     stmt = select(TableMovies.path,
                   TableMovies.missing_subtitles,
                   TableMovies.radarrId,
@@ -97,7 +101,8 @@ def wanted_download_subtitles_movie(radarr_id, job_id=None):
         list_missing_subtitles_movies(no=radarr_id)
         movie = database.execute(stmt).first()
 
-    providers_list = get_providers()
+    if providers_list is None:
+        providers_list = get_providers()
 
     if providers_list:
         _wanted_movie(movie, providers_list, job_id=job_id)
@@ -118,29 +123,37 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
         select(TableMovies.radarrId,
                TableMovies.tags,
                TableMovies.monitored,
-               TableMovies.title)
+               TableMovies.title,
+               TableMovies.missing_subtitles,
+               TableMovies.failedAttempts)
         .where(reduce(operator.and_, conditions))) \
         .all()
 
-    count_movies = len(movies)
+    movies_to_search = [
+        movie for movie in movies
+        if _missing_languages_due(movie.missing_subtitles, movie.failedAttempts)
+    ]
+
+    count_movies = len(movies_to_search)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_movies)
 
     if count_movies == 0:
         jobs_queue.update_job_progress(job_id=job_id, progress_value='max')
 
-    throttled = False
-    for i, movie in enumerate(movies, start=1):
+    providers = get_providers()
+    throttled = not providers
+    if throttled and count_movies:
+        logging.info("BAZARR All providers are throttled")
+
+    for i, movie in enumerate(movies_to_search, start=1):
         jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_message=movie.title)
 
-        providers = get_providers()
         if providers:
-            wanted_download_subtitles_movie(movie.radarrId, job_id=job_id)
+            wanted_download_subtitles_movie(movie.radarrId, job_id=job_id, providers_list=providers)
 
             # make sure to override the progress value updated by the subtitles synchronization
             jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_max=count_movies)
         else:
-            logging.info("BAZARR All providers are throttled")
-            throttled = True
             break
 
     outcome_msg = ("All providers throttled" if throttled

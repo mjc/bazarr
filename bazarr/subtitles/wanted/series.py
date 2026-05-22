@@ -23,6 +23,14 @@ from ..adaptive_searching import is_search_active, updateFailedAttempts
 from ..download import generate_subtitles
 
 
+def _missing_languages_due(missing_subtitles, failed_attempts):
+    due_languages = []
+    for language in ast.literal_eval(missing_subtitles):
+        if is_search_active(desired_language=language, attempt_string=failed_attempts):
+            due_languages.append(language)
+    return due_languages
+
+
 def _wanted_episode(episode, providers_list, job_id=None):
     audio_language_list = get_audio_profile_languages(episode.audio_language)
     if len(audio_language_list) > 0:
@@ -38,11 +46,6 @@ def _wanted_episode(episode, providers_list, job_id=None):
             forced_ = "True" if language.endswith(':forced') else "False"
             languages.append((language.split(":")[0], hi_, forced_))
             languages_to_stamp.append(language)
-
-        else:
-            logging.debug(
-                f"BAZARR Search is throttled by adaptive search for this episode {episode.path} and "
-                f"language: {language}")
 
     found_any = False
     for result in generate_subtitles(path_mappings.path_replace(episode.path),
@@ -76,7 +79,7 @@ def _wanted_episode(episode, providers_list, job_id=None):
                        episode.sonarrEpisodeId))
 
 
-def wanted_download_subtitles(sonarr_episode_id, job_id=None):
+def wanted_download_subtitles(sonarr_episode_id, job_id=None, providers_list=None):
     stmt = select(TableEpisodes.path,
                   TableEpisodes.missing_subtitles,
                   TableEpisodes.sonarrEpisodeId,
@@ -104,7 +107,8 @@ def wanted_download_subtitles(sonarr_episode_id, job_id=None):
         list_missing_subtitles(epno=sonarr_episode_id)
         episode_details = database.execute(stmt).first()
 
-    providers_list = get_providers()
+    if providers_list is None:
+        providers_list = get_providers()
 
     if providers_list:
         _wanted_episode(episode_details, providers_list, job_id=job_id)
@@ -130,33 +134,41 @@ def wanted_search_missing_subtitles_series(job_id=None, wait_for_completion=Fals
                TableEpisodes.season,
                TableEpisodes.episode,
                TableEpisodes.title.label('episodeTitle'),
-               TableShows.seriesType)
+               TableShows.seriesType,
+               TableEpisodes.missing_subtitles,
+               TableEpisodes.failedAttempts)
         .select_from(TableEpisodes)
         .join(TableShows)
         .where(reduce(operator.and_, conditions))) \
         .all()
 
-    count_episodes = len(episodes)
+    episodes_to_search = [
+        episode for episode in episodes
+        if _missing_languages_due(episode.missing_subtitles, episode.failedAttempts)
+    ]
+
+    count_episodes = len(episodes_to_search)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_episodes)
 
     if count_episodes == 0:
         jobs_queue.update_job_progress(job_id=job_id, progress_value='max')
 
-    throttled = False
-    for i, episode in enumerate(episodes, start=1):
+    providers = get_providers()
+    throttled = not providers
+    if throttled and count_episodes:
+        logging.info("BAZARR All providers are throttled")
+
+    for i, episode in enumerate(episodes_to_search, start=1):
         jobs_queue.update_job_progress(job_id=job_id, progress_value=i,
                                        progress_message=f'{episode.title} - S{episode.season:02d}E{episode.episode:02d}'
                                                         f' - {episode.episodeTitle}')
 
-        providers = get_providers()
         if providers:
-            wanted_download_subtitles(episode.sonarrEpisodeId, job_id=job_id)
+            wanted_download_subtitles(episode.sonarrEpisodeId, job_id=job_id, providers_list=providers)
 
             # make sure to override the progress value updated by the subtitles synchronization
             jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_max=count_episodes)
         else:
-            logging.info("BAZARR All providers are throttled")
-            throttled = True
             break
 
     outcome_msg = ("All providers throttled" if throttled

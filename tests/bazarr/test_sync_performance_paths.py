@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from types import SimpleNamespace
+import datetime
 
 import pytest
 
@@ -264,3 +265,165 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     movies_sync.update_movies(job_id="job")
 
     assert updated_movies == [{"radarrId": 2, "title": "New Movie 2", "path": "/movies/two.mkv"}]
+
+
+def _job_queue():
+    return SimpleNamespace(
+        add_job_from_function=lambda *args, **kwargs: None,
+        update_job_progress=lambda *args, **kwargs: None,
+        update_job_name=lambda *args, **kwargs: None,
+    )
+
+
+def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(monkeypatch):
+    from subtitles.wanted import series as wanted_series
+
+    rows = [
+        SimpleNamespace(
+            sonarrSeriesId=1,
+            sonarrEpisodeId=10,
+            tags=[],
+            monitored="True",
+            title="Due Series",
+            season=1,
+            episode=1,
+            episodeTitle="Due",
+            seriesType="standard",
+            missing_subtitles="['en']",
+            failedAttempts="[]",
+        ),
+        SimpleNamespace(
+            sonarrSeriesId=2,
+            sonarrEpisodeId=20,
+            tags=[],
+            monitored="True",
+            title="Throttled Series",
+            season=1,
+            episode=2,
+            episodeTitle="Skip",
+            seriesType="standard",
+            missing_subtitles="['fr']",
+            failedAttempts="[['fr', 1.0], ['fr', 2.0]]",
+        ),
+    ]
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=rows)
+
+    provider_calls = []
+    downloads = []
+    monkeypatch.setattr(wanted_series, "database", _Database())
+    monkeypatch.setattr(wanted_series, "jobs_queue", _job_queue())
+    monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
+    monkeypatch.setattr(wanted_series, "get_providers", lambda: provider_calls.append(True) or ["provider"])
+    monkeypatch.setattr(wanted_series, "is_search_active", lambda desired_language, attempt_string: desired_language == "en")
+    monkeypatch.setattr(wanted_series, "wanted_download_subtitles", lambda episode_id, **kwargs: downloads.append(episode_id))
+
+    wanted_series.wanted_search_missing_subtitles_series(job_id="job")
+
+    assert provider_calls == [True]
+    assert downloads == [10]
+
+
+def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(monkeypatch):
+    from subtitles.wanted import movies as wanted_movies
+
+    rows = [
+        SimpleNamespace(
+            radarrId=10,
+            tags=[],
+            monitored="True",
+            title="Due Movie",
+            missing_subtitles="['en']",
+            failedAttempts="[]",
+        ),
+        SimpleNamespace(
+            radarrId=20,
+            tags=[],
+            monitored="True",
+            title="Throttled Movie",
+            missing_subtitles="['fr']",
+            failedAttempts="[['fr', 1.0], ['fr', 2.0]]",
+        ),
+    ]
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=rows)
+
+    provider_calls = []
+    downloads = []
+    monkeypatch.setattr(wanted_movies, "database", _Database())
+    monkeypatch.setattr(wanted_movies, "jobs_queue", _job_queue())
+    monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
+    monkeypatch.setattr(wanted_movies, "get_providers", lambda: provider_calls.append(True) or ["provider"])
+    monkeypatch.setattr(wanted_movies, "is_search_active", lambda desired_language, attempt_string: desired_language == "en")
+    monkeypatch.setattr(wanted_movies, "wanted_download_subtitles_movie", lambda radarr_id, **kwargs: downloads.append(radarr_id))
+
+    wanted_movies.wanted_search_missing_subtitles_movies(job_id="job")
+
+    assert provider_calls == [True]
+    assert downloads == [10]
+
+
+def test_adaptive_search_throttle_skip_is_not_logged_per_item(monkeypatch, caplog):
+    from subtitles.wanted import movies as wanted_movies
+
+    movie = SimpleNamespace(
+        audio_language="eng",
+        missing_subtitles="['en', 'fr']",
+        failedAttempts="[['en', 1.0], ['fr', 1.0]]",
+        path="/movies/movie.mkv",
+        sceneName="Scene",
+        title="Movie",
+        profileId=1,
+        radarrId=10,
+    )
+
+    monkeypatch.setattr(wanted_movies, "get_audio_profile_languages", lambda audio_language: [])
+    monkeypatch.setattr(wanted_movies, "is_search_active", lambda desired_language, attempt_string: False)
+    monkeypatch.setattr(wanted_movies.path_mappings, "path_replace_movie", lambda path: path)
+    monkeypatch.setattr(wanted_movies, "generate_subtitles", lambda *args, **kwargs: iter(()))
+
+    with caplog.at_level("DEBUG"):
+        wanted_movies._wanted_movie(movie, providers_list=["provider"], job_id="job")
+
+    assert "Search is throttled by adaptive search" not in caplog.text
+
+
+def test_get_providers_expired_throttle_cleanup_is_idempotent(monkeypatch):
+    from app import get_providers as providers
+
+    provider = "opensubtitlescom"
+    providers.tp.clear()
+    providers.tp[provider] = ("TooManyRequests", datetime.datetime.now(), "1 minute")
+
+    removed_once = {"done": False}
+
+    class _RacingThrottle(dict):
+        def __delitem__(self, key):
+            if not removed_once["done"]:
+                removed_once["done"] = True
+                super().__delitem__(key)
+                raise KeyError(key)
+            super().__delitem__(key)
+
+    racing_tp = _RacingThrottle(providers.tp)
+    monkeypatch.setattr(providers, "tp", racing_tp)
+    monkeypatch.setattr(providers.provider_registry, "names", lambda: [provider])
+    monkeypatch.setattr(providers, "settings", SimpleNamespace(general=SimpleNamespace(enabled_providers=[provider])))
+    monkeypatch.setattr(providers, "set_throttled_providers", lambda data: None)
+
+    assert providers.get_providers() == [provider]
+
+
+def test_wanted_search_indexes_are_declared_on_models():
+    from app.database import TableEpisodes, TableMovies
+
+    episode_indexes = {index.name for index in TableEpisodes.__table__.indexes}
+    movie_indexes = {index.name for index in TableMovies.__table__.indexes}
+
+    assert "idx_table_episodes_sonarrSeriesId" in episode_indexes
+    assert "idx_table_episodes_missing_subtitles" in episode_indexes
+    assert "idx_table_movies_missing_subtitles" in movie_indexes

@@ -10,7 +10,7 @@ import signal
 from dogpile.cache import make_region
 from datetime import datetime
 
-from sqlalchemy import create_engine, inspect, DateTime, ForeignKey, Integer, LargeBinary, Text, func, text, BigInteger
+from sqlalchemy import create_engine, inspect, DateTime, ForeignKey, Index, Integer, LargeBinary, Text, func, text, BigInteger
 # importing here to be indirectly imported in other modules later
 from sqlalchemy import update, delete, select, func  # noqa W0611
 from sqlalchemy.orm import scoped_session, sessionmaker, mapped_column, close_all_sessions
@@ -153,6 +153,14 @@ class TableBlacklistMovie(Base):
 
 class TableEpisodes(Base):
     __tablename__ = 'table_episodes'
+    __table_args__ = (
+        Index('idx_table_episodes_sonarrSeriesId', 'sonarrSeriesId'),
+        Index(
+            'idx_table_episodes_missing_subtitles',
+            'missing_subtitles',
+            sqlite_where=text("missing_subtitles IS NOT NULL AND missing_subtitles != '[]'"),
+        ),
+    )
 
     absoluteEpisode = mapped_column(Integer)
     audio_codec = mapped_column(Text)
@@ -238,6 +246,13 @@ class TableLanguagesProfiles(Base):
 
 class TableMovies(Base):
     __tablename__ = 'table_movies'
+    __table_args__ = (
+        Index(
+            'idx_table_movies_missing_subtitles',
+            'missing_subtitles',
+            sqlite_where=text("missing_subtitles IS NOT NULL AND missing_subtitles != '[]'"),
+        ),
+    )
 
     alternativeTitles = mapped_column(Text)
     audio_codec = mapped_column(Text)
