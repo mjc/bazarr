@@ -277,6 +277,7 @@ def _job_queue():
 
 def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(monkeypatch):
     from subtitles.wanted import series as wanted_series
+    from subtitles.wanted import utils as wanted_utils
 
     rows = [
         SimpleNamespace(
@@ -317,7 +318,7 @@ def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(mo
     monkeypatch.setattr(wanted_series, "jobs_queue", _job_queue())
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_providers", lambda: provider_calls.append(True) or ["provider"])
-    monkeypatch.setattr(wanted_series, "is_search_active", lambda desired_language, attempt_string: desired_language == "en")
+    monkeypatch.setattr(wanted_utils, "is_search_active", lambda desired_language, attempt_string: desired_language == "en")
     monkeypatch.setattr(wanted_series, "wanted_download_subtitles", lambda episode_id, **kwargs: downloads.append(episode_id))
 
     wanted_series.wanted_search_missing_subtitles_series(job_id="job")
@@ -328,6 +329,7 @@ def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(mo
 
 def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(monkeypatch):
     from subtitles.wanted import movies as wanted_movies
+    from subtitles.wanted import utils as wanted_utils
 
     rows = [
         SimpleNamespace(
@@ -358,7 +360,7 @@ def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(mon
     monkeypatch.setattr(wanted_movies, "jobs_queue", _job_queue())
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_providers", lambda: provider_calls.append(True) or ["provider"])
-    monkeypatch.setattr(wanted_movies, "is_search_active", lambda desired_language, attempt_string: desired_language == "en")
+    monkeypatch.setattr(wanted_utils, "is_search_active", lambda desired_language, attempt_string: desired_language == "en")
     monkeypatch.setattr(wanted_movies, "wanted_download_subtitles_movie", lambda radarr_id, **kwargs: downloads.append(radarr_id))
 
     wanted_movies.wanted_search_missing_subtitles_movies(job_id="job")

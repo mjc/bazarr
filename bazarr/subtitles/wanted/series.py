@@ -21,14 +21,7 @@ from app.jobs_queue import jobs_queue
 
 from ..adaptive_searching import is_search_active, updateFailedAttempts
 from ..download import generate_subtitles
-
-
-def _missing_languages_due(missing_subtitles, failed_attempts):
-    due_languages = []
-    for language in ast.literal_eval(missing_subtitles):
-        if is_search_active(desired_language=language, attempt_string=failed_attempts):
-            due_languages.append(language)
-    return due_languages
+from .utils import get_due_missing_languages
 
 
 def _wanted_episode(episode, providers_list, job_id=None):
@@ -144,7 +137,7 @@ def wanted_search_missing_subtitles_series(job_id=None, wait_for_completion=Fals
 
     episodes_to_search = [
         episode for episode in episodes
-        if _missing_languages_due(episode.missing_subtitles, episode.failedAttempts)
+        if get_due_missing_languages(episode.missing_subtitles, episode.failedAttempts)
     ]
 
     count_episodes = len(episodes_to_search)
@@ -152,11 +145,13 @@ def wanted_search_missing_subtitles_series(job_id=None, wait_for_completion=Fals
 
     if count_episodes == 0:
         jobs_queue.update_job_progress(job_id=job_id, progress_value='max')
-
-    providers = get_providers()
-    throttled = not providers
-    if throttled and count_episodes:
-        logging.info("BAZARR All providers are throttled")
+        throttled = False
+        providers = None
+    else:
+        providers = get_providers()
+        throttled = not providers
+        if throttled:
+            logging.info("BAZARR All providers are throttled")
 
     for i, episode in enumerate(episodes_to_search, start=1):
         jobs_queue.update_job_progress(job_id=job_id, progress_value=i,
