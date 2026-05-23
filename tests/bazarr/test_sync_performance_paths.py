@@ -329,7 +329,11 @@ def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(mo
     monkeypatch.setattr(wanted_series, "jobs_queue", _job_queue())
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_providers", lambda: provider_calls.append(True) or ["provider"])
-    monkeypatch.setattr(wanted_utils, "is_search_active", lambda desired_language, attempt_string: desired_language == "en")
+    monkeypatch.setattr(
+        wanted_utils,
+        "get_active_search_languages",
+        lambda desired_languages, attempt_string: [language for language in desired_languages if language == "en"],
+    )
     monkeypatch.setattr(
         wanted_series,
         "wanted_download_subtitles",
@@ -381,7 +385,11 @@ def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(mon
     monkeypatch.setattr(wanted_movies, "jobs_queue", _job_queue())
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_providers", lambda: provider_calls.append(True) or ["provider"])
-    monkeypatch.setattr(wanted_utils, "is_search_active", lambda desired_language, attempt_string: desired_language == "en")
+    monkeypatch.setattr(
+        wanted_utils,
+        "get_active_search_languages",
+        lambda desired_languages, attempt_string: [language for language in desired_languages if language == "en"],
+    )
     monkeypatch.setattr(
         wanted_movies,
         "wanted_download_subtitles_movie",
@@ -521,6 +529,36 @@ def test_update_failed_attempts_writes_json(monkeypatch):
     updated = adaptive_searching.updateFailedAttempts("en", "[['fr', 1.0]]")
 
     assert json.loads(updated) == [["en", fake_now.timestamp()], ["fr", 1.0]]
+
+
+def test_get_active_search_languages_evaluates_attempts_once(monkeypatch):
+    from subtitles import adaptive_searching
+
+    fake_now = datetime.datetime(2026, 5, 23, 14, 0, 0)
+    monkeypatch.setattr(
+        adaptive_searching,
+        "settings",
+        SimpleNamespace(
+            general=SimpleNamespace(
+                adaptive_searching=True,
+                adaptive_searching_delay="3w",
+                adaptive_searching_delta="1w",
+            )
+        ),
+    )
+    monkeypatch.setattr(adaptive_searching, "datetime", SimpleNamespace(now=lambda: fake_now, fromtimestamp=datetime.datetime.fromtimestamp))
+
+    due_languages = adaptive_searching.get_active_search_languages(
+        ["en", "fr", "de"],
+        json.dumps([
+            ["en", fake_now.timestamp() - (8 * 24 * 60 * 60)],
+            ["en", fake_now.timestamp() - (2 * 24 * 60 * 60)],
+            ["fr", fake_now.timestamp() - (40 * 24 * 60 * 60)],
+            ["fr", fake_now.timestamp() - (2 * 24 * 60 * 60)],
+        ]),
+    )
+
+    assert due_languages == ["en", "de"]
 
 
 def test_generate_subtitles_rechecks_missing_languages_only_after_save(monkeypatch):
