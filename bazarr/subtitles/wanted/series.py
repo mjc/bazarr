@@ -67,21 +67,28 @@ def _wanted_episode(episode, providers_list, due_languages=None, job_id=None):
 
 def wanted_download_subtitles(sonarr_episode_id, job_id=None, providers_list=None, episode_details=None,
                               due_languages=None):
-    stmt = select(TableEpisodes.path,
-                  TableEpisodes.missing_subtitles,
-                  TableEpisodes.sonarrEpisodeId,
-                  TableEpisodes.sonarrSeriesId,
-                  TableEpisodes.audio_language,
-                  TableEpisodes.sceneName,
-                  TableEpisodes.failedAttempts,
-                  TableShows.title,
-                  TableShows.profileId,
-                  TableEpisodes.subtitles) \
-        .select_from(TableEpisodes) \
-        .join(TableShows) \
-        .where((TableEpisodes.sonarrEpisodeId == sonarr_episode_id))
+    stmt = None
+
+    def _get_stmt():
+        nonlocal stmt
+        if stmt is None:
+            stmt = select(TableEpisodes.path,
+                          TableEpisodes.missing_subtitles,
+                          TableEpisodes.sonarrEpisodeId,
+                          TableEpisodes.sonarrSeriesId,
+                          TableEpisodes.audio_language,
+                          TableEpisodes.sceneName,
+                          TableEpisodes.failedAttempts,
+                          TableShows.title,
+                          TableShows.profileId,
+                          TableEpisodes.subtitles) \
+                .select_from(TableEpisodes) \
+                .join(TableShows) \
+                .where((TableEpisodes.sonarrEpisodeId == sonarr_episode_id))
+        return stmt
+
     if episode_details is None:
-        episode_details = database.execute(stmt).first()
+        episode_details = database.execute(_get_stmt()).first()
 
     if not episode_details:
         logging.debug(f"BAZARR no episode with that sonarrId can be found in database: {sonarr_episode_id}")
@@ -89,12 +96,12 @@ def wanted_download_subtitles(sonarr_episode_id, job_id=None, providers_list=Non
     elif episode_details.subtitles is None:
         # subtitles indexing for this episode is incomplete, we'll do it again
         store_subtitles(episode_details.path, path_mappings.path_replace(episode_details.path))
-        episode_details = database.execute(stmt).first()
+        episode_details = database.execute(_get_stmt()).first()
         due_languages = None
     elif episode_details.missing_subtitles is None:
         # missing subtitles calculation for this episode is incomplete, we'll do it again
         list_missing_subtitles(epno=sonarr_episode_id)
-        episode_details = database.execute(stmt).first()
+        episode_details = database.execute(_get_stmt()).first()
         due_languages = None
 
     if providers_list is None:

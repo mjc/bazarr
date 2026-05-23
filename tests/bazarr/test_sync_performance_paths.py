@@ -467,6 +467,33 @@ def test_wanted_download_movie_reuses_prefetched_row_and_due_languages(monkeypat
     assert wanted_calls == [(movie, ["provider"], ["en"])]
 
 
+def test_wanted_download_movie_skips_select_build_for_prefetched_row(monkeypatch):
+    from subtitles.wanted import movies as wanted_movies
+
+    movie = SimpleNamespace(
+        path="/movies/movie.mkv",
+        missing_subtitles='["en"]',
+        radarrId=10,
+        audio_language="eng",
+        sceneName="Scene",
+        failedAttempts="[]",
+        title="Movie",
+        profileId=1,
+        subtitles="[]",
+    )
+
+    monkeypatch.setattr(wanted_movies, "select", lambda *args, **kwargs: pytest.fail("select should not be built"))
+    monkeypatch.setattr(wanted_movies, "_wanted_movie", lambda *args, **kwargs: None)
+
+    wanted_movies.wanted_download_subtitles_movie(
+        movie.radarrId,
+        job_id="job",
+        providers_list=["provider"],
+        movie=movie,
+        due_languages=["en"],
+    )
+
+
 def test_wanted_download_series_reuses_prefetched_row_and_due_languages(monkeypatch):
     from subtitles.wanted import series as wanted_series
 
@@ -506,6 +533,34 @@ def test_wanted_download_series_reuses_prefetched_row_and_due_languages(monkeypa
     )
 
     assert wanted_calls == [(episode, ["provider"], ["en"])]
+
+
+def test_wanted_download_series_skips_select_build_for_prefetched_row(monkeypatch):
+    from subtitles.wanted import series as wanted_series
+
+    episode = SimpleNamespace(
+        path="/series/episode.mkv",
+        missing_subtitles='["en"]',
+        sonarrEpisodeId=10,
+        sonarrSeriesId=20,
+        audio_language="eng",
+        sceneName="Scene",
+        failedAttempts="[]",
+        title="Series",
+        profileId=1,
+        subtitles="[]",
+    )
+
+    monkeypatch.setattr(wanted_series, "select", lambda *args, **kwargs: pytest.fail("select should not be built"))
+    monkeypatch.setattr(wanted_series, "_wanted_episode", lambda *args, **kwargs: None)
+
+    wanted_series.wanted_download_subtitles(
+        episode.sonarrEpisodeId,
+        job_id="job",
+        providers_list=["provider"],
+        episode_details=episode,
+        due_languages=["en"],
+    )
 
 
 def test_serialized_subtitle_helpers_accept_json_and_legacy_literals():

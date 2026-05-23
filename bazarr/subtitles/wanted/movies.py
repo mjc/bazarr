@@ -64,18 +64,25 @@ def _wanted_movie(movie, providers_list, due_languages=None, job_id=None):
 
 
 def wanted_download_subtitles_movie(radarr_id, job_id=None, providers_list=None, movie=None, due_languages=None):
-    stmt = select(TableMovies.path,
-                  TableMovies.missing_subtitles,
-                  TableMovies.radarrId,
-                  TableMovies.audio_language,
-                  TableMovies.sceneName,
-                  TableMovies.failedAttempts,
-                  TableMovies.title,
-                  TableMovies.profileId,
-                  TableMovies.subtitles) \
-        .where(TableMovies.radarrId == radarr_id)
+    stmt = None
+
+    def _get_stmt():
+        nonlocal stmt
+        if stmt is None:
+            stmt = select(TableMovies.path,
+                          TableMovies.missing_subtitles,
+                          TableMovies.radarrId,
+                          TableMovies.audio_language,
+                          TableMovies.sceneName,
+                          TableMovies.failedAttempts,
+                          TableMovies.title,
+                          TableMovies.profileId,
+                          TableMovies.subtitles) \
+                .where(TableMovies.radarrId == radarr_id)
+        return stmt
+
     if movie is None:
-        movie = database.execute(stmt).first()
+        movie = database.execute(_get_stmt()).first()
 
     if not movie:
         logging.debug(f"BAZARR no movie with that radarrId can be found in database: {radarr_id}")
@@ -83,12 +90,12 @@ def wanted_download_subtitles_movie(radarr_id, job_id=None, providers_list=None,
     elif movie.subtitles is None:
         # subtitles indexing for this movie is incomplete, we'll do it again
         store_subtitles_movie(movie.path, path_mappings.path_replace_movie(movie.path))
-        movie = database.execute(stmt).first()
+        movie = database.execute(_get_stmt()).first()
         due_languages = None
     elif movie.missing_subtitles is None:
         # missing subtitles calculation for this movie is incomplete, we'll do it again
         list_missing_subtitles_movies(no=radarr_id)
-        movie = database.execute(stmt).first()
+        movie = database.execute(_get_stmt()).first()
         due_languages = None
 
     if providers_list is None:
