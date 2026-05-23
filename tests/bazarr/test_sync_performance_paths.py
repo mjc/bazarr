@@ -332,7 +332,9 @@ def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(mo
     monkeypatch.setattr(
         wanted_utils,
         "get_active_search_languages",
-        lambda desired_languages, attempt_string: [language for language in desired_languages if language == "en"],
+        lambda desired_languages, attempt_string, adaptive_search_policy=None: [
+            language for language in desired_languages if language == "en"
+        ],
     )
     monkeypatch.setattr(
         wanted_series,
@@ -388,7 +390,9 @@ def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(mon
     monkeypatch.setattr(
         wanted_utils,
         "get_active_search_languages",
-        lambda desired_languages, attempt_string: [language for language in desired_languages if language == "en"],
+        lambda desired_languages, attempt_string, adaptive_search_policy=None: [
+            language for language in desired_languages if language == "en"
+        ],
     )
     monkeypatch.setattr(
         wanted_movies,
@@ -400,6 +404,60 @@ def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(mon
 
     assert provider_calls == [True]
     assert downloads == [(10, rows[0], ["en"])]
+
+
+def test_movie_wanted_search_builds_adaptive_policy_once(monkeypatch):
+    from subtitles.wanted import movies as wanted_movies
+
+    rows = [
+        SimpleNamespace(
+            radarrId=10,
+            path="/movies/due-a.mkv",
+            title="Due A",
+            audio_language="eng",
+            sceneName="Scene",
+            profileId=1,
+            subtitles="[]",
+            missing_subtitles='["en"]',
+            failedAttempts="[]",
+        ),
+        SimpleNamespace(
+            radarrId=20,
+            path="/movies/due-b.mkv",
+            title="Due B",
+            audio_language="eng",
+            sceneName="Scene",
+            profileId=1,
+            subtitles="[]",
+            missing_subtitles='["fr"]',
+            failedAttempts="[]",
+        ),
+    ]
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=rows)
+
+    policy = object()
+    due_policy_calls = []
+
+    monkeypatch.setattr(wanted_movies, "database", _Database())
+    monkeypatch.setattr(wanted_movies, "jobs_queue", _job_queue())
+    monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
+    monkeypatch.setattr(wanted_movies, "get_providers", lambda: ["provider"])
+    monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: policy)
+    monkeypatch.setattr(
+        wanted_movies,
+        "get_due_missing_languages",
+        lambda missing_subtitles, failed_attempts, adaptive_search_policy=None: (
+            due_policy_calls.append(adaptive_search_policy) or ["en"]
+        ),
+    )
+    monkeypatch.setattr(wanted_movies, "wanted_download_subtitles_movie", lambda *args, **kwargs: None)
+
+    wanted_movies.wanted_search_missing_subtitles_movies(job_id="job")
+
+    assert due_policy_calls == [policy, policy]
 
 
 def test_adaptive_search_throttle_skip_is_not_logged_per_item(monkeypatch, caplog):
@@ -616,6 +674,43 @@ def test_get_active_search_languages_evaluates_attempts_once(monkeypatch):
     assert due_languages == ["en", "de"]
 
 
+def test_get_active_search_languages_uses_supplied_policy_without_reading_settings(monkeypatch):
+    from subtitles import adaptive_searching
+
+    fake_now = datetime.datetime(2026, 5, 23, 14, 0, 0)
+    monkeypatch.setattr(
+        adaptive_searching,
+        "settings",
+        SimpleNamespace(general=SimpleNamespace(__getattr__=lambda *args, **kwargs: pytest.fail("settings should not be read"))),
+    )
+    monkeypatch.setattr(
+        adaptive_searching,
+        "datetime",
+        SimpleNamespace(now=lambda: fake_now, fromtimestamp=datetime.datetime.fromtimestamp),
+    )
+
+    policy = adaptive_searching.AdaptiveSearchPolicy(
+        enabled=True,
+        delay_setting="3w",
+        delta_setting="1w",
+        extended_search_delay=datetime.timedelta(weeks=3),
+        extended_search_delta=datetime.timedelta(weeks=1),
+    )
+
+    due_languages = adaptive_searching.get_active_search_languages(
+        ["en", "fr"],
+        json.dumps([
+            ["en", fake_now.timestamp() - (40 * 24 * 60 * 60)],
+            ["en", fake_now.timestamp() - (10 * 24 * 60 * 60)],
+            ["fr", fake_now.timestamp() - (8 * 24 * 60 * 60)],
+            ["fr", fake_now.timestamp() - (2 * 24 * 60 * 60)],
+        ]),
+        adaptive_search_policy=policy,
+    )
+
+    assert due_languages == ["en", "fr"]
+
+
 def test_generate_subtitles_rechecks_missing_languages_only_after_save(monkeypatch):
     from subtitles import download
     from subtitles import pool as subtitles_pool
@@ -723,7 +818,11 @@ def test_wanted_movie_search_emits_one_progress_update_per_item(monkeypatch):
     )
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_providers", lambda: ["provider"])
-    monkeypatch.setattr(wanted_movies, "get_due_missing_languages", lambda missing_subtitles, failed_attempts: ["en"])
+    monkeypatch.setattr(
+        wanted_movies,
+        "get_due_missing_languages",
+        lambda missing_subtitles, failed_attempts, adaptive_search_policy=None: ["en"],
+    )
     monkeypatch.setattr(wanted_movies, "wanted_download_subtitles_movie", lambda *args, **kwargs: None)
 
     wanted_movies.wanted_search_missing_subtitles_movies(job_id="job")
@@ -774,7 +873,11 @@ def test_wanted_series_search_emits_one_progress_update_per_item(monkeypatch):
     )
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_providers", lambda: ["provider"])
-    monkeypatch.setattr(wanted_series, "get_due_missing_languages", lambda missing_subtitles, failed_attempts: ["en"])
+    monkeypatch.setattr(
+        wanted_series,
+        "get_due_missing_languages",
+        lambda missing_subtitles, failed_attempts, adaptive_search_policy=None: ["en"],
+    )
     monkeypatch.setattr(wanted_series, "wanted_download_subtitles", lambda *args, **kwargs: None)
 
     wanted_series.wanted_search_missing_subtitles_series(job_id="job")

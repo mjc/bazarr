@@ -15,7 +15,7 @@ from app.database import get_exclusion_clause, get_audio_profile_languages, Tabl
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue
 
-from ..adaptive_searching import updateFailedAttempts
+from ..adaptive_searching import get_adaptive_search_policy, updateFailedAttempts
 from ..download import generate_subtitles
 from .utils import get_due_missing_languages, get_language_search_items
 
@@ -130,8 +130,13 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
         .all()
 
     movies_to_search = []
+    adaptive_search_policy = get_adaptive_search_policy()
     for movie in movies:
-        due_languages = get_due_missing_languages(movie.missing_subtitles, movie.failedAttempts)
+        due_languages = get_due_missing_languages(
+            movie.missing_subtitles,
+            movie.failedAttempts,
+            adaptive_search_policy=adaptive_search_policy,
+        )
         if due_languages:
             movies_to_search.append((movie, due_languages))
 

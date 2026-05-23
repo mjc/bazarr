@@ -3,10 +3,20 @@
 
 import logging
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from app.config import settings
 from .serialization import dump_text_list, parse_text_list
+
+
+@dataclass(frozen=True)
+class AdaptiveSearchPolicy:
+    enabled: bool
+    delay_setting: str = ""
+    delta_setting: str = ""
+    extended_search_delay: timedelta | None = None
+    extended_search_delta: timedelta | None = None
 
 
 def _parse_adaptive_interval(interval_value, setting_name):
@@ -19,8 +29,29 @@ def _parse_adaptive_interval(interval_value, setting_name):
     return None
 
 
-def get_active_search_languages(desired_languages, attempt_string):
+def get_adaptive_search_policy():
     if not settings.general.adaptive_searching:
+        return AdaptiveSearchPolicy(enabled=False)
+
+    delay_setting = settings.general.adaptive_searching_delay
+    delta_setting = settings.general.adaptive_searching_delta
+
+    return AdaptiveSearchPolicy(
+        enabled=True,
+        delay_setting=delay_setting,
+        delta_setting=delta_setting,
+        extended_search_delay=_parse_adaptive_interval(delay_setting, "adaptive_searching_delay"),
+        extended_search_delta=_parse_adaptive_interval(delta_setting, "adaptive_searching_delta"),
+    )
+
+
+def get_active_search_languages(desired_languages, attempt_string, adaptive_search_policy=None):
+    policy = adaptive_search_policy
+
+    if policy is not None and not policy.enabled:
+        logging.debug("adaptive searching is disabled, search will run.")
+        return list(desired_languages)
+    if policy is None and not settings.general.adaptive_searching:
         logging.debug("adaptive searching is disabled, search will run.")
         return list(desired_languages)
 
@@ -35,13 +66,16 @@ def get_active_search_languages(desired_languages, attempt_string):
         logging.debug("Adaptive searching: attempts list is empty, search will run.")
         return list(desired_languages)
 
-    delay_setting = settings.general.adaptive_searching_delay
-    delta_setting = settings.general.adaptive_searching_delta
-    extended_search_delay = _parse_adaptive_interval(delay_setting, "adaptive_searching_delay")
+    if policy is None:
+        policy = get_adaptive_search_policy()
+
+    delay_setting = policy.delay_setting
+    delta_setting = policy.delta_setting
+    extended_search_delay = policy.extended_search_delay
     if extended_search_delay is None:
         return list(desired_languages)
 
-    extended_search_delta = _parse_adaptive_interval(delta_setting, "adaptive_searching_delta")
+    extended_search_delta = policy.extended_search_delta
     if extended_search_delta is None:
         return list(desired_languages)
 
@@ -99,7 +133,7 @@ def get_active_search_languages(desired_languages, attempt_string):
     return due_languages
 
 
-def is_search_active(desired_language, attempt_string):
+def is_search_active(desired_language, attempt_string, adaptive_search_policy=None):
     """
     Function to test if it's time to search again after a previous attempt matching the desired language. For 3 weeks,
     we search on a scheduled basis but after 3 weeks we start searching only once a week.
@@ -113,7 +147,11 @@ def is_search_active(desired_language, attempt_string):
     @rtype: bool
     """
 
-    return desired_language in get_active_search_languages([desired_language], attempt_string)
+    return desired_language in get_active_search_languages(
+        [desired_language],
+        attempt_string,
+        adaptive_search_policy=adaptive_search_policy,
+    )
 
 
 def updateFailedAttempts(desired_language, attempt_string):
