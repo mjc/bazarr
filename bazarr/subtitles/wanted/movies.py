@@ -150,9 +150,6 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
                                             providers_list=providers,
                                             movie=movie,
                                             due_languages=due_languages)
-
-            # make sure to override the progress value updated by the subtitles synchronization
-            jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_max=count_movies)
         else:
             break
 

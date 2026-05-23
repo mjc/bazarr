@@ -60,13 +60,16 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
 
         subz_mods = get_array_from(settings.general.subzero_mods)
         saved_any = False
+        missing_languages = None
 
         if providers:
             if forced_minimum_score:
                 min_score = int(forced_minimum_score) + 1
+            if check_if_still_required:
+                missing_languages = check_missing_languages(path, media_type)
             for language in language_set:
                 # confirm if language is still missing or if cutoff has been reached
-                if check_if_still_required and language not in check_missing_languages(path, media_type):
+                if check_if_still_required and language not in missing_languages:
                     # cutoff has been reached
                     logging.debug(f"BAZARR this language ({parse_language_object(language)}) is ignored because cutoff "
                                   f"has been reached during this search.")
@@ -131,6 +134,8 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
                                     logging.debug(f"BAZARR unable to process this subtitles: {subtitle}")
                                     continue
                                 yield processed_subtitle
+                                if check_if_still_required:
+                                    missing_languages = check_missing_languages(path, media_type)
         else:
             logging.info("BAZARR All providers are throttled")
             return None

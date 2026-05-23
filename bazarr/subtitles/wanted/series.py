@@ -3,13 +3,11 @@
 
 import logging
 import operator
-import gc
 
 from functools import reduce
 
 from utilities.path_mappings import path_mappings
 from subtitles.indexer.series import store_subtitles, list_missing_subtitles
-from subtitles.indexer.series import store_subtitles
 from sonarr.history import history_log
 from app.notifier import send_notifications
 from app.get_providers import get_providers
@@ -166,9 +164,6 @@ def wanted_search_missing_subtitles_series(job_id=None, wait_for_completion=Fals
                                       providers_list=providers,
                                       episode_details=episode,
                                       due_languages=due_languages)
-
-            # make sure to override the progress value updated by the subtitles synchronization
-            jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_max=count_episodes)
         else:
             break
 
@@ -177,5 +172,3 @@ def wanted_search_missing_subtitles_series(job_id=None, wait_for_completion=Fals
     jobs_queue.update_job_progress(job_id=job_id, progress_message=outcome_msg)
     jobs_queue.update_job_name(job_id=job_id, new_job_name="Searched for missing series subtitles")
     logging.info('BAZARR Finished searching for missing Series Subtitles. Check History for more information.')
-
-    gc.collect()
