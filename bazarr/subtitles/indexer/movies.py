@@ -18,6 +18,7 @@ from utilities.path_mappings import path_mappings
 from utilities.video_analyzer import embedded_subs_reader
 from app.event_handler import event_stream
 from subtitles.indexer.utils import guess_external_subtitles, get_external_subtitles_path
+from subtitles.serialization import dump_text_list
 from app.jobs_queue import jobs_queue
 
 gc.enable()
@@ -237,7 +238,7 @@ def list_missing_subtitles_movies(no=None):
                         cutoff_met = True
 
             if cutoff_met:
-                missing_subtitles_text = str([])
+                missing_subtitles_text = dump_text_list([])
             else:
                 # get difference between desired and existing subtitles
                 missing_subtitles_list = []
@@ -265,7 +266,7 @@ def list_missing_subtitles_movies(no=None):
                         lang += ':hi'
                     missing_subtitles_output_list.append(lang)
 
-                missing_subtitles_text = str(missing_subtitles_output_list)
+                missing_subtitles_text = dump_text_list(missing_subtitles_output_list)
 
         database.execute(
             update(TableMovies)

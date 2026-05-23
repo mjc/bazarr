@@ -1,12 +1,12 @@
 # coding=utf-8
 # fmt: off
 
-import ast
 import logging
 
 from datetime import datetime, timedelta
 
 from app.config import settings
+from .serialization import dump_text_list, parse_text_list
 
 
 def is_search_active(desired_language, attempt_string):
@@ -26,11 +26,7 @@ def is_search_active(desired_language, attempt_string):
     if settings.general.adaptive_searching:
         logging.debug("Adaptive searching is enable, we'll see if it's time to search again...")
         try:
-            # let's try to get a list of lists from the string representation in database
-            attempts = ast.literal_eval(attempt_string)
-            if type(attempts) is not list:
-                # attempts should be a list if not, it's malformed or None
-                raise ValueError
+            attempts = parse_text_list(attempt_string)
         except ValueError:
             logging.debug("Adaptive searching: attempts is malformed. As a failsafe, search will run.")
             return True
@@ -122,12 +118,8 @@ def updateFailedAttempts(desired_language, attempt_string):
     """
 
     try:
-        # let's try to get a list of lists from the string representation in database
-        attempts = ast.literal_eval(attempt_string)
+        attempts = parse_text_list(attempt_string)
         logging.debug(f"Adaptive searching: current attempts value is {attempts}")
-        if type(attempts) is not list:
-            # attempts should be a list if not, it's malformed or None
-            raise ValueError
     except ValueError:
         logging.debug("Adaptive searching: failed to parse attempts value, we'll use an empty list.")
         attempts = []
@@ -148,4 +140,4 @@ def updateFailedAttempts(desired_language, attempt_string):
     updated_attempts = sorted(filtered_attempts, key=lambda x: x[0])
     logging.debug(f"Adaptive searching: updated attempts that will be saved to database is {updated_attempts}")
 
-    return str(updated_attempts)
+    return dump_text_list(updated_attempts)

@@ -5,7 +5,6 @@ import os
 import sys
 import logging
 import subliminal
-import ast
 
 from subzero.language import Language
 from subliminal_patch.core import save_subtitles
@@ -16,6 +15,7 @@ from app.database import TableEpisodes, TableMovies, database, select, get_profi
 from utilities.path_mappings import path_mappings
 from utilities.helper import get_target_folder, force_unicode
 from languages.get_languages import alpha3_from_alpha2
+from subtitles.serialization import parse_missing_subtitles, missing_subtitle_to_language_tuple
 
 from .pool import update_pools, _get_pool
 from .utils import get_video, _get_lang_obj, _get_scores, _set_forced_providers
@@ -196,11 +196,9 @@ def check_missing_languages(path, media_type):
         logging.debug(f"BAZARR no media with this path have been found in database: {reversed_path}")
         return []
 
-    languages = []
-    for language in ast.literal_eval(confirmed_missing_subs.missing_subtitles):
-        if language is not None:
-            hi_ = "True" if language.endswith(':hi') else "False"
-            forced_ = "True" if language.endswith(':forced') else "False"
-            languages.append((language.split(":")[0], hi_, forced_))
+    languages = [
+        missing_subtitle_to_language_tuple(language)
+        for language in parse_missing_subtitles(confirmed_missing_subs.missing_subtitles)
+    ]
 
     return _get_language_obj(languages=languages)

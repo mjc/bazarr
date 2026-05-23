@@ -1,7 +1,6 @@
 # coding=utf-8
 
 import operator
-import ast
 
 from functools import reduce
 from flask_restx import Resource, Namespace, fields, marshal
@@ -10,6 +9,7 @@ from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableM
 from app.get_providers import get_throttled_providers
 from app.signalr_client import sonarr_signalr_client, radarr_signalr_client
 from app.announcements import get_all_announcements
+from subtitles.serialization import parse_missing_subtitles
 from utilities.health import get_health_issues
 
 from ..utils import authenticate
@@ -46,7 +46,7 @@ class Badges(Resource):
             .all()
         missing_episodes_count = 0
         for episode in missing_episodes:
-            missing_episodes_count += len(ast.literal_eval(episode.missing_subtitles))
+            missing_episodes_count += len(parse_missing_subtitles(episode.missing_subtitles))
 
         movies_conditions = [(TableMovies.missing_subtitles.is_not(None)),
                              (TableMovies.missing_subtitles != '[]')]
@@ -58,7 +58,7 @@ class Badges(Resource):
             .all()
         missing_movies_count = 0
         for movie in missing_movies:
-            missing_movies_count += len(ast.literal_eval(movie.missing_subtitles))
+            missing_movies_count += len(parse_missing_subtitles(movie.missing_subtitles))
 
         throttled_providers = len(get_throttled_providers())
 

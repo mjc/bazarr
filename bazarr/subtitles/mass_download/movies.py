@@ -1,7 +1,6 @@
 # coding=utf-8
 # fmt: off
 
-import ast
 import logging
 import operator
 import os
@@ -19,6 +18,7 @@ from app.jobs_queue import jobs_queue
 from app.event_handler import event_stream
 
 from ..download import generate_subtitles
+from ..serialization import parse_missing_subtitles, missing_subtitle_to_language_tuple
 
 
 def movies_download_subtitles(no, job_id=None, job_sub_function=False):
@@ -67,10 +67,8 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
         jobs_queue.update_job_progress(job_id=job_id, progress_message=f"Movie path doesn't exists: {moviePath}")
         raise OSError
 
-    if ast.literal_eval(movie.missing_subtitles):
-        count_movie = len(ast.literal_eval(movie.missing_subtitles))
-    else:
-        count_movie = 0
+    missing_languages = parse_missing_subtitles(movie.missing_subtitles)
+    count_movie = len(missing_languages)
 
     audio_language_list = get_audio_profile_languages(movie.audio_language)
     if len(audio_language_list) > 0:
@@ -86,11 +84,8 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
 
     downloaded_count = 0
     if providers_list:
-        for language in ast.literal_eval(movie.missing_subtitles):
-            if language is not None:
-                hi_ = "True" if language.endswith(':hi') else "False"
-                forced_ = "True" if language.endswith(':forced') else "False"
-                languages.append((language.split(":")[0], hi_, forced_))
+        for language in missing_languages:
+            languages.append(missing_subtitle_to_language_tuple(language))
 
         if languages:
             for result in generate_subtitles(moviePath,
