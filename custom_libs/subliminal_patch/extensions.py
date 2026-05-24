@@ -2,29 +2,53 @@
 from __future__ import absolute_import
 from collections import OrderedDict
 
-import subliminal
-import babelfish
-
-
 class ProviderRegistry(object):
     providers = None
 
     def __init__(self):
         self.providers = OrderedDict()
+        self._initialized = False
+        self._initializer = None
+        self._loaded = False
+        self._loader = None
+        self._names_loader = None
+
+    def set_initializer(self, initializer):
+        self._initializer = initializer
+
+    def set_loader(self, loader):
+        self._loader = loader
+
+    def set_names_loader(self, names_loader):
+        self._names_loader = names_loader
+
+    def _ensure_initialized(self):
+        if not self._initialized and self._initializer is not None:
+            self._initializer()
+            self._initialized = True
+
+    def _ensure_loaded(self):
+        self._ensure_initialized()
+        if not self._loaded and self._loader is not None:
+            self._loader()
+            self._loaded = True
 
     def __cmp__(self, d):
         return cmp(self.providers, d)
 
     def __contains__(self, item):
+        self._ensure_loaded()
         return item in self.providers
 
     def __setitem__(self, key, item):
         self.providers[key] = item
 
     def __iter__(self):
+        self._ensure_loaded()
         return iter(self.providers)
 
     def __getitem__(self, key):
+        self._ensure_loaded()
         if key in self.providers:
             return self.providers[key]
 
@@ -35,6 +59,7 @@ class ProviderRegistry(object):
         return str(self.providers)
 
     def __len__(self):
+        self._ensure_loaded()
         return len(self.providers)
 
     def __delitem__(self, key):
@@ -44,23 +69,33 @@ class ProviderRegistry(object):
         self.providers[name] = cls
 
     def names(self):
+        self._ensure_initialized()
+        if not self._loaded and self._names_loader is not None:
+            return self._names_loader()
+        self._ensure_loaded()
         return list(self.providers.keys())
 
 
 provider_registry = ProviderRegistry()
 
-# add language converters
-try:
-    babelfish.language_converters.unregister('addic7ed = subliminal.converters.addic7ed:Addic7edConverter')
-except ValueError:
-    pass
+def _initialize_extensions():
+    import babelfish
+    import subliminal
 
-babelfish.language_converters.register('addic7ed = subliminal_patch.language:PatchedAddic7edConverter')
-babelfish.language_converters.register('szopensubtitles = subliminal_patch.language:PatchedOpenSubtitlesConverter')
-subliminal.refiner_manager.register('sz_metadata = subliminal_patch.refiners.metadata:refine')
-subliminal.refiner_manager.register('sz_omdb = subliminal_patch.refiners.omdb:refine')
-subliminal.refiner_manager.register('sz_tvdb = subliminal_patch.refiners.tvdb:refine')
-subliminal.refiner_manager.register('drone = subliminal_patch.refiners.drone:refine')
-subliminal.refiner_manager.register('filebot = subliminal_patch.refiners.filebot:refine')
-subliminal.refiner_manager.register('file_info_file = subliminal_patch.refiners.file_info_file:refine')
-subliminal.refiner_manager.register('symlinks = subliminal_patch.refiners.symlinks:refine')
+    try:
+        babelfish.language_converters.unregister('addic7ed = subliminal.converters.addic7ed:Addic7edConverter')
+    except ValueError:
+        pass
+
+    babelfish.language_converters.register('addic7ed = subliminal_patch.language:PatchedAddic7edConverter')
+    babelfish.language_converters.register('szopensubtitles = subliminal_patch.language:PatchedOpenSubtitlesConverter')
+    subliminal.refiner_manager.register('sz_metadata = subliminal_patch.refiners.metadata:refine')
+    subliminal.refiner_manager.register('sz_omdb = subliminal_patch.refiners.omdb:refine')
+    subliminal.refiner_manager.register('sz_tvdb = subliminal_patch.refiners.tvdb:refine')
+    subliminal.refiner_manager.register('drone = subliminal_patch.refiners.drone:refine')
+    subliminal.refiner_manager.register('filebot = subliminal_patch.refiners.filebot:refine')
+    subliminal.refiner_manager.register('file_info_file = subliminal_patch.refiners.file_info_file:refine')
+    subliminal.refiner_manager.register('symlinks = subliminal_patch.refiners.symlinks:refine')
+
+
+provider_registry.set_initializer(_initialize_extensions)

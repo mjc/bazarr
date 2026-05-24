@@ -182,12 +182,6 @@ def _subliminal_patch():
 
 
 @lru_cache(maxsize=1)
-def _provider_registry():
-    from subliminal_patch.extensions import provider_registry
-    return provider_registry
-
-
-@lru_cache(maxsize=1)
 def _subliminal_cache_region():
     from subliminal import region
     return region
@@ -239,6 +233,19 @@ def _pretty():
 def _provider_binary(name):
     from utilities.binaries import get_binary
     return get_binary(name)
+
+
+@lru_cache(maxsize=1)
+def _provider_names():
+    providers_dir = os.path.realpath(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'custom_libs', 'subliminal_patch',
+                     'providers')
+    )
+    return tuple(
+        os.path.splitext(name)[0]
+        for name in os.listdir(providers_dir)
+        if name not in ("__init__.py", "mixins.py", "utils.py") and name.endswith(".py")
+    )
 
 
 def provider_pool():
@@ -337,7 +344,7 @@ def get_providers():
         return list(cached_providers) if cached_providers else None
 
     providers_list = []
-    existing_providers = _provider_registry().names()
+    existing_providers = _provider_names()
     providers = [x for x in enabled_providers if x in existing_providers]
     for provider in providers:
         reason, until, throttle_desc = tp.get(provider, (None, None, None))
@@ -615,7 +622,7 @@ def throttled_count(name):
 
 def update_throttled_provider():
     settings = _settings()
-    existing_providers = _provider_registry().names()
+    existing_providers = _provider_names()
     providers_list = [x for x in settings.general.enabled_providers if x in existing_providers]
 
     for provider in list(tp):
@@ -650,7 +657,7 @@ def list_throttled_providers():
     settings = _settings()
     update_throttled_provider()
     throttled_providers = []
-    existing_providers = _provider_registry().names()
+    existing_providers = _provider_names()
     providers = [x for x in settings.general.enabled_providers if x in existing_providers]
     for provider in providers:
         reason, until, throttle_desc = tp.get(provider, (None, None, None))

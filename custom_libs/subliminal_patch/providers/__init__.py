@@ -60,68 +60,75 @@ def reinitialize_on_error(exceptions: tuple, attempts=1):
     return real_decorator
 
 
-# register providers
-# fixme: this is bad
-for name in os.listdir(os.path.dirname(__file__)):
-    if name in ("__init__.py", "mixins.py", "utils.py") or not name.endswith(".py"):
-        continue
+def _provider_module_names():
+    return [
+        os.path.splitext(name)[0]
+        for name in os.listdir(os.path.dirname(__file__))
+        if name not in ("__init__.py", "mixins.py", "utils.py") and name.endswith(".py")
+    ]
 
-    module_name = os.path.splitext(name)[0]
-    mod = importlib.import_module("subliminal_patch.providers.%s" % module_name.lower())
-    for item in dir(mod):
-        cls = getattr(mod, item)
-        if item != "Provider" and item.endswith("Provider") and not item.startswith("_"):
-            is_sz_provider = issubclass(cls, Provider)
-            is_provider = issubclass(cls, _Provider)
 
-            if not is_provider:
-                continue
+def _register_provider_modules():
+    for module_name in _provider_module_names():
+        name = f"{module_name}.py"
+        mod = importlib.import_module("subliminal_patch.providers.%s" % module_name.lower())
+        for item in dir(mod):
+            cls = getattr(mod, item)
+            if item != "Provider" and item.endswith("Provider") and not item.startswith("_"):
+                is_sz_provider = issubclass(cls, Provider)
+                is_provider = issubclass(cls, _Provider)
 
-            if not is_sz_provider:
-                # patch provider bases
-                new_bases = []
+                if not is_provider:
+                    continue
 
-                for base in cls.__bases__:
-                    if base == _Provider:
-                        base = Provider
-                    else:
-                        if _Provider in base.__bases__:
-                            base.__bases__ = (Provider,)
-                    new_bases.append(base)
+                if not is_sz_provider:
+                    # patch provider bases
+                    new_bases = []
 
-                cls.__bases__ = tuple(new_bases)
+                    for base in cls.__bases__:
+                        if base == _Provider:
+                            base = Provider
+                        else:
+                            if _Provider in base.__bases__:
+                                base.__bases__ = (Provider,)
+                        new_bases.append(base)
 
-                # patch subtitle bases
-                new_bases = []
-                for base in cls.subtitle_class.__bases__:
-                    if base == _Subtitle:
-                        base = Subtitle
-                    else:
-                        if _Subtitle in base.__bases__:
-                            base.__bases__ = (Subtitle,)
-                    new_bases.append(base)
+                    cls.__bases__ = tuple(new_bases)
 
-                cls.subtitle_class.__bases__ = tuple(new_bases)
+                    # patch subtitle bases
+                    new_bases = []
+                    for base in cls.subtitle_class.__bases__:
+                        if base == _Subtitle:
+                            base = Subtitle
+                        else:
+                            if _Subtitle in base.__bases__:
+                                base.__bases__ = (Subtitle,)
+                        new_bases.append(base)
 
+                    cls.subtitle_class.__bases__ = tuple(new_bases)
+
+                # inject our requests.Session wrapper for automatic retry but not for specific providers that are
+                # already struggling and that we don't want to hurt more
+                if name not in CUSTOM_SESSION_EXCLUDED_PROVIDERS:
+                    mod.Session = RetryingSession
+
+                # inject our guess_matches function
+                mod.guess_matches = guess_matches
+
+                provider_registry.register(module_name, cls)
+
+        # try patching the correspondent subliminal provider
+        try:
+            subliminal_mod = importlib.import_module("subliminal.providers.%s" % module_name.lower())
+        except ImportError:
+            pass
+        else:
             # inject our requests.Session wrapper for automatic retry but not for specific providers that are already
             # struggling and that we don't want to hurt more
             if name not in CUSTOM_SESSION_EXCLUDED_PROVIDERS:
-                mod.Session = RetryingSession
+                subliminal_mod.Session = RetryingSession
+            subliminal_mod.guess_matches = guess_matches
 
-            # inject our guess_matches function
-            mod.guess_matches = guess_matches
 
-            provider_registry.register(module_name, cls)
-
-    # try patching the correspondent subliminal provider
-    try:
-        subliminal_mod = importlib.import_module("subliminal.providers.%s" % module_name.lower())
-    except ImportError:
-        pass
-    else:
-        # inject our requests.Session wrapper for automatic retry but not for specific providers that are already
-        # struggling and that we don't want to hurt more
-        if name not in CUSTOM_SESSION_EXCLUDED_PROVIDERS:
-            subliminal_mod.Session = RetryingSession
-        subliminal_mod.guess_matches = guess_matches
-
+provider_registry.set_names_loader(_provider_module_names)
+provider_registry.set_loader(_register_provider_modules)
