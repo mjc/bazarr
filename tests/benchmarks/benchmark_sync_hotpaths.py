@@ -92,6 +92,19 @@ class _Queue:
         return None
 
 
+class _SeriesMassDownloadDatabase:
+    def __init__(self, series_row, episodes_details):
+        self.series_row = series_row
+        self.episodes_details = episodes_details
+        self._execute_count = 0
+
+    def execute(self, statement):
+        self._execute_count += 1
+        if self._execute_count == 1:
+            return _Result(first_value=self.series_row)
+        return _Result(all_value=self.episodes_details)
+
+
 def _model(**values):
     return SimpleNamespace(
         __table__=SimpleNamespace(columns=[_Column(name) for name in values]),
@@ -178,6 +191,78 @@ class BenchmarkSuite:
         with open(self.video_path, "wb") as handle:
             handle.write(b"0" * 25000)
         self.episode_payload = self._build_episode_payload()
+        self.provider_names = [
+            "opensubtitlescom",
+            "opensubtitles",
+            "subdl",
+            "podnapisi",
+            "addic7ed",
+            "subsource",
+            "animetosho",
+            "jimaku",
+            "betaseries",
+            "napisy24",
+            "titulky",
+            "titlovi",
+        ]
+        self.throttled_providers = {
+            name: ("TooManyRequests", datetime(2030, 1, 1), "1 hour")
+            for name in ("addic7ed", "subsource", "titlovi")
+        }
+        self.series_download_series_id = 50000
+        self.series_download_series_row = SimpleNamespace(
+            path="/benchmark/series",
+            title="Benchmark Series Download",
+        )
+        self.series_download_episode_rows = [
+            SimpleNamespace(
+                sonarrEpisodeId=60000 + index,
+                title="Benchmark Series Download",
+                season=(index // 10) + 1,
+                episode=(index % 10) + 1,
+                episodeTitle=f"Episode {index + 1}",
+                missing_subtitles='["en", "fr", "de"]',
+            )
+            for index in range(args.provider_loop_count)
+        ]
+        self.upgrade_episode_rows = [
+            SimpleNamespace(
+                id=70000 + index,
+                seriesTitle="Benchmark Upgrade Series",
+                season=(index // 10) + 1,
+                episode=(index % 10) + 1,
+                title=f"Episode {index + 1}",
+                language="en",
+                audio_language="[]",
+                video_path=f"/benchmark/series/episode_{index + 1}.mkv",
+                sceneName=f"benchmark.series.episode.{index + 1}",
+                score=100,
+                sonarrEpisodeId=71000 + index,
+                sonarrSeriesId=72000,
+                subtitles_path=f"/benchmark/subs/episode_{index + 1}.srt",
+                path=f"/benchmark/series/episode_{index + 1}.mkv",
+                profileId=1,
+                external_subtitles=f"/benchmark/subs/episode_{index + 1}.srt",
+            )
+            for index in range(args.provider_loop_count)
+        ]
+        self.upgrade_movie_rows = [
+            SimpleNamespace(
+                id=80000 + index,
+                title=f"Benchmark Upgrade Movie {index + 1}",
+                language="en",
+                audio_language="[]",
+                video_path=f"/benchmark/movies/movie_{index + 1}.mkv",
+                sceneName=f"benchmark.movie.{index + 1}",
+                score=100,
+                radarrId=81000 + index,
+                subtitles_path=f"/benchmark/subs/movie_{index + 1}.srt",
+                path=f"/benchmark/movies/movie_{index + 1}.mkv",
+                profileId=1,
+                external_subtitles=f"/benchmark/subs/movie_{index + 1}.srt",
+            )
+            for index in range(args.provider_loop_count)
+        ]
 
     def _import(self, module_name):
         original_argv = sys.argv[:]
@@ -282,6 +367,10 @@ class BenchmarkSuite:
             "sync.sonarr.episode_parser.filesize_with_stat",
             "sync.radarr.movie_compare.keyed",
             "sync.radarr.movie_compare.subset_scan",
+            "providers.get_providers.repeated",
+            "providers.mass_download.series_loop",
+            "providers.upgrade.episodes_loop",
+            "providers.upgrade.movies_loop",
         ]
 
     def selected_names(self):
@@ -298,7 +387,17 @@ class BenchmarkSuite:
             "series_loop_count": str(self.args.series_loop_count),
             "movie_count": str(self.args.movie_count),
             "sqlite_rounds": str(self.args.sqlite_rounds),
+            "provider_loop_count": str(self.args.provider_loop_count),
         }
+
+    def _provider_environment(self, providers_module):
+        return swap(
+            providers_module,
+            provider_registry=SimpleNamespace(names=lambda: list(self.provider_names)),
+            settings=SimpleNamespace(general=SimpleNamespace(enabled_providers=list(self.provider_names))),
+            tp=dict(self.throttled_providers),
+            set_throttled_providers=lambda data: None,
+        )
 
     def _sqlite_series_episode_lookup(self, db_path):
         with sqlite3.connect(db_path) as conn:
@@ -578,6 +677,93 @@ class BenchmarkSuite:
             }
             any(parsed_movie.items() <= row for row in self.current_movies_db_kv)
 
+    def _providers_get_providers_repeated(self):
+        providers_module = self._import("app.get_providers")
+        originals = self._provider_environment(providers_module)
+        try:
+            for _ in range(self.args.provider_loop_count):
+                providers_module.get_providers()
+        finally:
+            restore(providers_module, originals)
+
+    def _providers_mass_download_series_loop(self):
+        providers_module = self._import("app.get_providers")
+        mass_download_series = self._import("subtitles.mass_download.series")
+        provider_originals = self._provider_environment(providers_module)
+        mass_download_originals = swap(
+            mass_download_series,
+            database=_SeriesMassDownloadDatabase(
+                self.series_download_series_row,
+                self.series_download_episode_rows,
+            ),
+            get_exclusion_clause=lambda media_type: [],
+            jobs_queue=_Queue(),
+            episode_download_subtitles=lambda *args, **kwargs: None,
+            path_mappings=SimpleNamespace(path_replace=lambda path: path),
+            os=SimpleNamespace(path=SimpleNamespace(exists=lambda path: True)),
+            settings=SimpleNamespace(
+                general=SimpleNamespace(
+                    use_whisper_fallback=False,
+                    use_whisper_fallback_series=False,
+                )
+            ),
+        )
+        try:
+            mass_download_series.series_download_subtitles(self.series_download_series_id, job_id="job")
+        finally:
+            restore(mass_download_series, mass_download_originals)
+            restore(providers_module, provider_originals)
+
+    def _providers_upgrade_episodes_loop(self):
+        providers_module = self._import("app.get_providers")
+        upgrade_module = self._import("subtitles.upgrade")
+        provider_originals = self._provider_environment(providers_module)
+        upgrade_originals = swap(
+            upgrade_module,
+            database=StaticDatabase(all_value=self.upgrade_episode_rows),
+            get_upgradable_episode_subtitles=lambda: {row.id: row.id for row in self.upgrade_episode_rows},
+            _language_still_desired=lambda *args, **kwargs: True,
+            jobs_queue=_Queue(),
+            get_audio_profile_languages=lambda *args, **kwargs: [],
+            generate_subtitles=lambda *args, **kwargs: [],
+            store_subtitles=lambda *args, **kwargs: None,
+            history_log=lambda *args, **kwargs: None,
+            send_notifications=lambda *args, **kwargs: None,
+            event_stream=lambda *args, **kwargs: None,
+            _is_hi_required=lambda *args, **kwargs: False,
+            path_mappings=SimpleNamespace(path_replace=lambda path: path),
+        )
+        try:
+            upgrade_module.upgrade_episodes_subtitles(job_id="job")
+        finally:
+            restore(upgrade_module, upgrade_originals)
+            restore(providers_module, provider_originals)
+
+    def _providers_upgrade_movies_loop(self):
+        providers_module = self._import("app.get_providers")
+        upgrade_module = self._import("subtitles.upgrade")
+        provider_originals = self._provider_environment(providers_module)
+        upgrade_originals = swap(
+            upgrade_module,
+            database=StaticDatabase(all_value=self.upgrade_movie_rows),
+            get_upgradable_movies_subtitles=lambda: {row.id: row.id for row in self.upgrade_movie_rows},
+            _language_still_desired=lambda *args, **kwargs: True,
+            jobs_queue=_Queue(),
+            get_audio_profile_languages=lambda *args, **kwargs: [],
+            generate_subtitles=lambda *args, **kwargs: [],
+            store_subtitles_movie=lambda *args, **kwargs: None,
+            history_log_movie=lambda *args, **kwargs: None,
+            send_notifications_movie=lambda *args, **kwargs: None,
+            event_stream=lambda *args, **kwargs: None,
+            _is_hi_required=lambda *args, **kwargs: False,
+            path_mappings=SimpleNamespace(path_replace_movie=lambda path: path),
+        )
+        try:
+            upgrade_module.upgrade_movies_subtitles(job_id="job")
+        finally:
+            restore(upgrade_module, upgrade_originals)
+            restore(providers_module, provider_originals)
+
     def benchmark_map(self):
         return {
             "sync.sqlite.series_episode_lookup.indexed": self._sqlite_series_episode_lookup_indexed,
@@ -598,6 +784,10 @@ class BenchmarkSuite:
             "sync.sonarr.episode_parser.filesize_with_stat": self._sonarr_episode_parser_filesize_with_stat,
             "sync.radarr.movie_compare.keyed": self._radarr_movie_compare_keyed,
             "sync.radarr.movie_compare.subset_scan": self._radarr_movie_compare_subset_scan,
+            "providers.get_providers.repeated": self._providers_get_providers_repeated,
+            "providers.mass_download.series_loop": self._providers_mass_download_series_loop,
+            "providers.upgrade.episodes_loop": self._providers_upgrade_episodes_loop,
+            "providers.upgrade.movies_loop": self._providers_upgrade_movies_loop,
         }
 
 
@@ -642,6 +832,11 @@ def _parse_args(argv):
         type=int,
         default=int(os.environ.get("BAZARR_BENCHMARK_SQLITE_ROUNDS", "5")),
     )
+    parser.add_argument(
+        "--provider-loop-count",
+        type=int,
+        default=int(os.environ.get("BAZARR_BENCHMARK_PROVIDER_LOOP_COUNT", "250")),
+    )
     args, remaining = parser.parse_known_args(argv)
     if not args.config_dir:
         parser.error("the following arguments are required: --config-dir")
@@ -663,6 +858,7 @@ def main():
     os.environ["BAZARR_BENCHMARK_SERIES_LOOP_COUNT"] = str(args.series_loop_count)
     os.environ["BAZARR_BENCHMARK_MOVIE_COUNT"] = str(args.movie_count)
     os.environ["BAZARR_BENCHMARK_SQLITE_ROUNDS"] = str(args.sqlite_rounds)
+    os.environ["BAZARR_BENCHMARK_PROVIDER_LOOP_COUNT"] = str(args.provider_loop_count)
     os.environ["BAZARR_BENCHMARK_FILTERS"] = json.dumps(args.benchmark)
 
     repo_root = Path(args.repo).resolve()
@@ -680,6 +876,7 @@ def main():
                 "BAZARR_BENCHMARK_SERIES_LOOP_COUNT",
                 "BAZARR_BENCHMARK_MOVIE_COUNT",
                 "BAZARR_BENCHMARK_SQLITE_ROUNDS",
+                "BAZARR_BENCHMARK_PROVIDER_LOOP_COUNT",
                 "BAZARR_BENCHMARK_FILTERS",
                 "SZ_USER_AGENT",
                 "BAZARR_VERSION",
