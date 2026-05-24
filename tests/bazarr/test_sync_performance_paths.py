@@ -670,6 +670,77 @@ def test_update_failed_attempts_batches_multiple_languages(monkeypatch):
     ])
 
 
+def test_get_adaptive_search_policy_reuses_cached_timedeltas(monkeypatch):
+    from subtitles import adaptive_searching as adaptive
+
+    original_get_adaptive_timedelta = adaptive._get_adaptive_timedelta
+    adaptive._get_cached_policy_components.cache_clear()
+    timedelta_calls = []
+
+    monkeypatch.setattr(
+        adaptive,
+        "settings",
+        SimpleNamespace(
+            general=SimpleNamespace(
+                adaptive_searching=True,
+                adaptive_searching_delay='3w',
+                adaptive_searching_delta='1w',
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        adaptive,
+        "_get_adaptive_timedelta",
+        lambda name, value: timedelta_calls.append((name, value)) or original_get_adaptive_timedelta(name, value),
+    )
+
+    first_policy = adaptive.get_adaptive_search_policy()
+    second_policy = adaptive.get_adaptive_search_policy()
+
+    assert first_policy["delay"] == second_policy["delay"]
+    assert first_policy["delta"] == second_policy["delta"]
+    assert len(timedelta_calls) == 2
+
+
+def test_get_adaptive_search_policy_avoids_reloading_settings_within_ttl(monkeypatch):
+    from subtitles import adaptive_searching as adaptive
+
+    class _General:
+        def __init__(self):
+            self.calls = 0
+
+        @property
+        def adaptive_searching(self):
+            self.calls += 1
+            return True
+
+        @property
+        def adaptive_searching_delay(self):
+            self.calls += 1
+            return '3w'
+
+        @property
+        def adaptive_searching_delta(self):
+            self.calls += 1
+            return '1w'
+
+    general = _General()
+    adaptive._get_cached_policy_components.cache_clear()
+    adaptive._adaptive_policy_cache["expires_at"] = 0.0
+    adaptive._adaptive_policy_cache["policy_components"] = None
+    monotonic_values = iter([100.0, 100.0, 100.5, 100.5])
+
+    monkeypatch.setattr(adaptive, "settings", SimpleNamespace(general=general))
+    monkeypatch.setattr(adaptive, "monotonic", lambda: next(monotonic_values))
+
+    first_policy = adaptive.get_adaptive_search_policy()
+    second_policy = adaptive.get_adaptive_search_policy()
+
+    assert first_policy["delay"] == second_policy["delay"]
+    assert first_policy["delta"] == second_policy["delta"]
+    assert general.calls == 3
+
+
 def test_wanted_episode_updates_failed_attempts_once_for_all_due_languages(monkeypatch):
     from subtitles.wanted import series as wanted_series
 

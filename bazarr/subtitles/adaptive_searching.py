@@ -5,8 +5,17 @@ import ast
 import logging
 
 from datetime import datetime, timedelta
+from functools import lru_cache
+from time import monotonic
 
 from app.config import settings
+
+
+_ADAPTIVE_POLICY_CACHE_TTL = 1.0
+_adaptive_policy_cache = {
+    "expires_at": 0.0,
+    "policy_components": None,
+}
 
 
 def _get_attempts(attempt_string):
@@ -55,28 +64,47 @@ def _get_adaptive_timedelta(setting_name, setting_value):
     return None
 
 
-def get_adaptive_search_policy():
-    if not settings.general.adaptive_searching:
+@lru_cache(maxsize=32)
+def _get_cached_policy_components(adaptive_searching_enabled, adaptive_searching_delay, adaptive_searching_delta):
+    if not adaptive_searching_enabled:
         logging.debug("adaptive searching is disabled, search will run.")
         return None
 
     extended_search_delay = _get_adaptive_timedelta(
         'adaptive_searching_delay',
-        settings.general.adaptive_searching_delay,
+        adaptive_searching_delay,
     )
     if extended_search_delay is None:
         return None
 
     extended_search_delta = _get_adaptive_timedelta(
         'adaptive_searching_delta',
-        settings.general.adaptive_searching_delta,
+        adaptive_searching_delta,
     )
     if extended_search_delta is None:
         return None
 
+    return extended_search_delay, extended_search_delta
+
+
+def get_adaptive_search_policy():
+    if _adaptive_policy_cache["expires_at"] > monotonic():
+        policy_components = _adaptive_policy_cache["policy_components"]
+    else:
+        policy_components = _get_cached_policy_components(
+            settings.general.adaptive_searching,
+            settings.general.adaptive_searching_delay,
+            settings.general.adaptive_searching_delta,
+        )
+        _adaptive_policy_cache["policy_components"] = policy_components
+        _adaptive_policy_cache["expires_at"] = monotonic() + _ADAPTIVE_POLICY_CACHE_TTL
+
+    if policy_components is None:
+        return None
+
     return {
-        "delay": extended_search_delay,
-        "delta": extended_search_delta,
+        "delay": policy_components[0],
+        "delta": policy_components[1],
         "now": datetime.now(),
     }
 
