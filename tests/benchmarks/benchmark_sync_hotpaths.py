@@ -105,6 +105,14 @@ class _SeriesMassDownloadDatabase:
         return _Result(all_value=self.episodes_details)
 
 
+class _StaticFirstValueDatabase:
+    def __init__(self, first_value):
+        self.first_value = first_value
+
+    def execute(self, statement):
+        return _Result(first_value=self.first_value)
+
+
 def _model(**values):
     return SimpleNamespace(
         __table__=SimpleNamespace(columns=[_Column(name) for name in values]),
@@ -225,6 +233,34 @@ class BenchmarkSuite:
             )
             for index in range(args.provider_loop_count)
         ]
+        self.mass_download_movie_row = SimpleNamespace(
+            path="/benchmark/movies/movie_00001.mkv",
+            missing_subtitles='["en", "fr", "de"]',
+            audio_language='["English"]',
+            radarrId=90000,
+            sceneName="benchmark.movie.1",
+            title="Benchmark Download Movie",
+            year="2026",
+            tags="[]",
+            monitored="True",
+            profileId=1,
+        )
+        self.mass_download_episode_row = SimpleNamespace(
+            path="/benchmark/shows/show_00001/Season 01/S01E01.mkv",
+            missing_subtitles='["en", "fr", "de"]',
+            monitored="True",
+            sonarrEpisodeId=91000,
+            sceneName="benchmark.show.1.s01e01",
+            tags="[]",
+            title="Benchmark Download Series",
+            sonarrSeriesId=92000,
+            audio_language='["English"]',
+            seriesType="standard",
+            episodeTitle="Episode 1",
+            season=1,
+            episode=1,
+            profileId=1,
+        )
         self.upgrade_episode_rows = [
             SimpleNamespace(
                 id=70000 + index,
@@ -371,6 +407,10 @@ class BenchmarkSuite:
             "providers.mass_download.series_loop",
             "providers.upgrade.episodes_loop",
             "providers.upgrade.movies_loop",
+            "subtitle_jobs.mass_download.movie_download",
+            "subtitle_jobs.mass_download.episode_download",
+            "subtitle_jobs.upgrade.episodes_loop",
+            "subtitle_jobs.upgrade.movies_loop",
         ]
 
     def selected_names(self):
@@ -398,6 +438,23 @@ class BenchmarkSuite:
             tp=dict(self.throttled_providers),
             set_throttled_providers=lambda data: None,
         )
+
+    def _language_environment(self):
+        languages_module = self._import("languages.get_languages")
+        original = getattr(languages_module, "languages_dict", None)
+        setattr(
+            languages_module,
+            "languages_dict",
+            [
+                {
+                    "code3": "eng",
+                    "code2": "en",
+                    "name": "English",
+                    "code3b": "eng",
+                }
+            ],
+        )
+        return languages_module, original
 
     def _sqlite_series_episode_lookup(self, db_path):
         with sqlite3.connect(db_path) as conn:
@@ -764,6 +821,122 @@ class BenchmarkSuite:
             restore(upgrade_module, upgrade_originals)
             restore(providers_module, provider_originals)
 
+    def _subtitle_jobs_mass_download_movie_download(self):
+        mass_download_movies = self._import("subtitles.mass_download.movies")
+        languages_module, original_languages_dict = self._language_environment()
+        originals = swap(
+            mass_download_movies,
+            database=_StaticFirstValueDatabase(self.mass_download_movie_row),
+            get_subtitles=lambda *args, **kwargs: [{"embedded_track_id": 1, "path": "/tmp/sub.srt"}],
+            get_exclusion_clause=lambda media_type: [],
+            jobs_queue=_Queue(),
+            get_providers=lambda: ["provider"],
+            generate_subtitles=lambda *args, **kwargs: [],
+            store_subtitles_movie=lambda *args, **kwargs: None,
+            history_log_movie=lambda *args, **kwargs: None,
+            send_notifications_movie=lambda *args, **kwargs: None,
+            event_stream=lambda *args, **kwargs: None,
+            list_missing_subtitles_movies=lambda *args, **kwargs: None,
+            path_mappings=SimpleNamespace(path_replace_movie=lambda path: path),
+            os=SimpleNamespace(path=SimpleNamespace(exists=lambda path: True)),
+        )
+        try:
+            for _ in range(self.args.provider_loop_count):
+                mass_download_movies.movies_download_subtitles(self.mass_download_movie_row.radarrId, job_id="job")
+        finally:
+            restore(mass_download_movies, originals)
+            if original_languages_dict is None:
+                delattr(languages_module, "languages_dict")
+            else:
+                setattr(languages_module, "languages_dict", original_languages_dict)
+
+    def _subtitle_jobs_mass_download_episode_download(self):
+        mass_download_series = self._import("subtitles.mass_download.series")
+        languages_module, original_languages_dict = self._language_environment()
+        originals = swap(
+            mass_download_series,
+            database=_StaticFirstValueDatabase(self.mass_download_episode_row),
+            get_subtitles=lambda *args, **kwargs: [{"embedded_track_id": 1, "path": "/tmp/sub.srt"}],
+            get_exclusion_clause=lambda media_type: [],
+            jobs_queue=_Queue(),
+            generate_subtitles=lambda *args, **kwargs: [],
+            store_subtitles=lambda *args, **kwargs: None,
+            history_log=lambda *args, **kwargs: None,
+            send_notifications=lambda *args, **kwargs: None,
+            event_stream=lambda *args, **kwargs: None,
+            list_missing_subtitles=lambda *args, **kwargs: None,
+            path_mappings=SimpleNamespace(path_replace=lambda path: path),
+            os=SimpleNamespace(path=SimpleNamespace(exists=lambda path: True)),
+        )
+        try:
+            for _ in range(self.args.provider_loop_count):
+                mass_download_series.episode_download_subtitles(
+                    self.mass_download_episode_row.sonarrEpisodeId,
+                    job_id="job",
+                    job_sub_function=True,
+                    providers_list=["provider"],
+                )
+        finally:
+            restore(mass_download_series, originals)
+            if original_languages_dict is None:
+                delattr(languages_module, "languages_dict")
+            else:
+                setattr(languages_module, "languages_dict", original_languages_dict)
+
+    def _subtitle_jobs_upgrade_episodes_loop(self):
+        upgrade_module = self._import("subtitles.upgrade")
+        languages_module, original_languages_dict = self._language_environment()
+        originals = swap(
+            upgrade_module,
+            database=StaticDatabase(all_value=self.upgrade_episode_rows),
+            get_upgradable_episode_subtitles=lambda: {row.id: row.id for row in self.upgrade_episode_rows},
+            _language_still_desired=lambda *args, **kwargs: True,
+            jobs_queue=_Queue(),
+            get_providers=lambda: ["provider"],
+            generate_subtitles=lambda *args, **kwargs: [],
+            store_subtitles=lambda *args, **kwargs: None,
+            history_log=lambda *args, **kwargs: None,
+            send_notifications=lambda *args, **kwargs: None,
+            event_stream=lambda *args, **kwargs: None,
+            _is_hi_required=lambda *args, **kwargs: False,
+            path_mappings=SimpleNamespace(path_replace=lambda path: path),
+        )
+        try:
+            upgrade_module.upgrade_episodes_subtitles(job_id="job")
+        finally:
+            restore(upgrade_module, originals)
+            if original_languages_dict is None:
+                delattr(languages_module, "languages_dict")
+            else:
+                setattr(languages_module, "languages_dict", original_languages_dict)
+
+    def _subtitle_jobs_upgrade_movies_loop(self):
+        upgrade_module = self._import("subtitles.upgrade")
+        languages_module, original_languages_dict = self._language_environment()
+        originals = swap(
+            upgrade_module,
+            database=StaticDatabase(all_value=self.upgrade_movie_rows),
+            get_upgradable_movies_subtitles=lambda: {row.id: row.id for row in self.upgrade_movie_rows},
+            _language_still_desired=lambda *args, **kwargs: True,
+            jobs_queue=_Queue(),
+            get_providers=lambda: ["provider"],
+            generate_subtitles=lambda *args, **kwargs: [],
+            store_subtitles_movie=lambda *args, **kwargs: None,
+            history_log_movie=lambda *args, **kwargs: None,
+            send_notifications_movie=lambda *args, **kwargs: None,
+            event_stream=lambda *args, **kwargs: None,
+            _is_hi_required=lambda *args, **kwargs: False,
+            path_mappings=SimpleNamespace(path_replace_movie=lambda path: path),
+        )
+        try:
+            upgrade_module.upgrade_movies_subtitles(job_id="job")
+        finally:
+            restore(upgrade_module, originals)
+            if original_languages_dict is None:
+                delattr(languages_module, "languages_dict")
+            else:
+                setattr(languages_module, "languages_dict", original_languages_dict)
+
     def benchmark_map(self):
         return {
             "sync.sqlite.series_episode_lookup.indexed": self._sqlite_series_episode_lookup_indexed,
@@ -788,6 +961,10 @@ class BenchmarkSuite:
             "providers.mass_download.series_loop": self._providers_mass_download_series_loop,
             "providers.upgrade.episodes_loop": self._providers_upgrade_episodes_loop,
             "providers.upgrade.movies_loop": self._providers_upgrade_movies_loop,
+            "subtitle_jobs.mass_download.movie_download": self._subtitle_jobs_mass_download_movie_download,
+            "subtitle_jobs.mass_download.episode_download": self._subtitle_jobs_mass_download_episode_download,
+            "subtitle_jobs.upgrade.episodes_loop": self._subtitle_jobs_upgrade_episodes_loop,
+            "subtitle_jobs.upgrade.movies_loop": self._subtitle_jobs_upgrade_movies_loop,
         }
 
 
