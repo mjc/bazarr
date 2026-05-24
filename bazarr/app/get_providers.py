@@ -135,12 +135,50 @@ PROVIDERS_FORCED_OFF = ["addic7ed", "tvsubtitles", "legendasdivx", "napiprojekt"
                         "hosszupuska", "supersubtitles", "titlovi", "assrt"]
 
 throttle_count = {}
+_providers_cache = {
+    'signature': None,
+    'providers': None,
+    'valid_until': None,
+}
 
 
 def provider_pool():
     if settings.general.multithreading:
         return subliminal_patch.core.SZAsyncProviderPool
     return subliminal_patch.core.SZProviderPool
+
+
+def _providers_signature(enabled_providers):
+    return (
+        tuple(enabled_providers),
+        tuple(sorted(
+            (provider, reason, until, throttle_desc)
+            for provider, (reason, until, throttle_desc) in tp.items()
+        )),
+    )
+
+
+def _providers_cache_value(now, signature):
+    if _providers_cache['signature'] != signature:
+        return None
+
+    valid_until = _providers_cache['valid_until']
+    if valid_until is not None and now >= valid_until:
+        return None
+
+    return _providers_cache['providers']
+
+
+def _store_providers_cache(signature, providers):
+    valid_until = min(
+        (until for reason, until, _ in tp.values() if reason and until is not None),
+        default=None,
+    )
+    _providers_cache.update({
+        'signature': signature,
+        'providers': tuple(providers),
+        'valid_until': valid_until,
+    })
 
 
 def _lang_from_str(content: str):
@@ -187,15 +225,21 @@ def get_language_equals(settings_=None):
 
 
 def get_providers():
+    enabled_providers = settings.general.enabled_providers if isinstance(settings.general.enabled_providers, list) else []
+    signature = _providers_signature(enabled_providers)
+    now = datetime.datetime.now()
+    cached_providers = _providers_cache_value(now, signature)
+    if cached_providers is not None:
+        return list(cached_providers) if cached_providers else None
+
     providers_list = []
     existing_providers = provider_registry.names()
-    providers = [x for x in settings.general.enabled_providers if x in existing_providers]
+    providers = [x for x in enabled_providers if x in existing_providers]
     for provider in providers:
         reason, until, throttle_desc = tp.get(provider, (None, None, None))
         providers_list.append(provider)
 
         if reason:
-            now = datetime.datetime.now()
             if now < until:
                 logging.debug("Not using %s until %s, because of: %s", provider,
                               until.strftime("%y/%m/%d %H:%M"), reason)
@@ -209,10 +253,11 @@ def get_providers():
         #         if provider in PROVIDERS_FORCED_OFF:
         #             providers_list.remove(provider)
 
+    _store_providers_cache(signature, providers_list)
     if not providers_list:
-        providers_list = None
+        return None
 
-    return providers_list
+    return list(providers_list)
 
 
 def get_enabled_providers():
