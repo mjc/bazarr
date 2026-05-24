@@ -9,16 +9,15 @@ import secrets
 import threading
 import time
 from datetime import datetime
+from functools import lru_cache
 
 import configparser
 import yaml
 import platform
 
 from urllib.parse import quote_plus
-from utilities.binaries import BinaryNotFound, get_binary
 from literals import EXIT_VALIDATION_ERROR
 from utilities.central import stop_bazarr
-from subliminal.cache import region
 from dynaconf import Dynaconf, Validator as OriginalValidator
 from dynaconf.loaders.yaml_loader import write
 from dynaconf.validator import ValidationError
@@ -72,7 +71,15 @@ class Validator(OriginalValidator):
     )
 
 
+@lru_cache(maxsize=1)
+def _provider_cache_region():
+    from subliminal.cache import region
+    return region
+
+
 def check_parser_binary(value):
+    from utilities.binaries import BinaryNotFound, get_binary
+
     try:
         get_binary(value)
     except BinaryNotFound:
@@ -165,7 +172,7 @@ validators = [
     Validator('general.notify_if_nothing_is_missing_for_signalr_event', must_exist=True, default=False, is_type_of=bool),
     Validator('general.hi_extension', must_exist=True, default='hi', is_type_of=str, is_in=['hi', 'cc', 'sdh']),
     Validator('general.embedded_subtitles_parser', must_exist=True, default='ffprobe', is_type_of=str,
-              is_in=['ffprobe', 'mediainfo'], condition=check_parser_binary),
+              is_in=['ffprobe', 'mediainfo']),
     Validator('general.default_und_audio_lang', must_exist=True, default='', is_type_of=str),
     Validator('general.default_und_embedded_subtitles_lang', must_exist=True, default='', is_type_of=str),
     Validator('general.parse_embedded_audio_track', must_exist=True, default=False, is_type_of=bool),
@@ -584,22 +591,39 @@ empty_values = ['', 'None', 'null', 'undefined', None, []]
 
 str_keys = ['chmod', 'log_include_filter', 'log_exclude_filter', 'password', 'f_password', 'hashed_password']
 
+settings_changed = False
+
 # Increase Sonarr and Radarr sync interval since we now use SignalR feed to update in real time
 if settings.sonarr.series_sync < 15:
     settings.sonarr.series_sync = 60
+    settings_changed = True
 if settings.radarr.movies_sync < 15:
     settings.radarr.movies_sync = 60
+    settings_changed = True
 
 # Make sure to get of double slashes in base_url
-settings.general.base_url = base_url_slash_cleaner(uri=settings.general.base_url)
-settings.sonarr.base_url = base_url_slash_cleaner(uri=settings.sonarr.base_url)
-settings.radarr.base_url = base_url_slash_cleaner(uri=settings.radarr.base_url)
+cleaned_base_url = base_url_slash_cleaner(uri=settings.general.base_url)
+if settings.general.base_url != cleaned_base_url:
+    settings.general.base_url = cleaned_base_url
+    settings_changed = True
+
+cleaned_sonarr_base_url = base_url_slash_cleaner(uri=settings.sonarr.base_url)
+if settings.sonarr.base_url != cleaned_sonarr_base_url:
+    settings.sonarr.base_url = cleaned_sonarr_base_url
+    settings_changed = True
+
+cleaned_radarr_base_url = base_url_slash_cleaner(uri=settings.radarr.base_url)
+if settings.radarr.base_url != cleaned_radarr_base_url:
+    settings.radarr.base_url = cleaned_radarr_base_url
+    settings_changed = True
 
 # increase delay between searches to reduce impact on providers
 if settings.general.wanted_search_frequency == 3:
     settings.general.wanted_search_frequency = 6
+    settings_changed = True
 if settings.general.wanted_search_frequency_movie == 3:
     settings.general.wanted_search_frequency_movie = 6
+    settings_changed = True
 
 # backward compatibility embeddedsubtitles provider
 if hasattr(settings.embeddedsubtitles, 'unknown_as_english'):
@@ -607,12 +631,15 @@ if hasattr(settings.embeddedsubtitles, 'unknown_as_english'):
         settings.embeddedsubtitles.unknown_as_fallback = True
         settings.embeddedsubtitles.fallback_lang = 'en'
     del settings.embeddedsubtitles.unknown_as_english
+    settings_changed = True
 
 # delete custom scores sections since we don't use this anymore
 if hasattr(settings, 'series_scores'):
     settings.unset('SERIES_SCORES')
+    settings_changed = True
 if hasattr(settings, 'movie_scores'):
     settings.unset('MOVIE_SCORES')
+    settings_changed = True
 
 # backward compatibility: migrate gemini_key to gemini_keys
 if hasattr(settings.translator, 'gemini_key'):
@@ -620,9 +647,11 @@ if hasattr(settings.translator, 'gemini_key'):
     if legacy_key and not settings.translator.gemini_keys:
         settings.translator.gemini_keys = [legacy_key]
     del settings.translator.gemini_key
+    settings_changed = True
 
 # save updated settings to file
-write_config()
+if settings_changed:
+    write_config()
 
 
 def get_settings():
@@ -679,6 +708,7 @@ def save_settings(settings_items):
     undefined_audio_track_default_changed = False
     undefined_subtitles_track_default_changed = False
     audio_tracks_parsing_changed = False
+    embedded_subtitles_parser_changed = False
     reset_providers = False
 
     # Subzero Mods
@@ -730,6 +760,9 @@ def save_settings(settings_items):
 
         if key == 'settings-general-default_und_embedded_subtitles_lang':
             undefined_subtitles_track_default_changed = True
+
+        if key == 'settings-general-embedded_subtitles_parser':
+            embedded_subtitles_parser_changed = True
 
         if key in ['settings-general-base_url', 'settings-sonarr-base_url', 'settings-radarr-base_url']:
             value = base_url_slash_cleaner(value)
@@ -791,38 +824,38 @@ def save_settings(settings_items):
         if key == 'settings-addic7ed-username':
             if value != settings.addic7ed.username:
                 reset_providers = True
-                region.delete('addic7ed_data')
+                _provider_cache_region().delete('addic7ed_data')
         elif key == 'settings-addic7ed-password':
             if value != settings.addic7ed.password:
                 reset_providers = True
-                region.delete('addic7ed_data')
+                _provider_cache_region().delete('addic7ed_data')
 
         if key == 'settings-legendasdivx-username':
             if value != settings.legendasdivx.username:
                 reset_providers = True
-                region.delete('legendasdivx_cookies2')
+                _provider_cache_region().delete('legendasdivx_cookies2')
         elif key == 'settings-legendasdivx-password':
             if value != settings.legendasdivx.password:
                 reset_providers = True
-                region.delete('legendasdivx_cookies2')
+                _provider_cache_region().delete('legendasdivx_cookies2')
 
         if key == 'settings-opensubtitlescom-username':
             if value != settings.opensubtitlescom.username:
                 reset_providers = True
-                region.delete('oscom_token')
+                _provider_cache_region().delete('oscom_token')
         elif key == 'settings-opensubtitlescom-password':
             if value != settings.opensubtitlescom.password:
                 reset_providers = True
-                region.delete('oscom_token')
+                _provider_cache_region().delete('oscom_token')
 
         if key == 'settings-titlovi-username':
             if value != settings.titlovi.username:
                 reset_providers = True
-                region.delete('titlovi_token')
+                _provider_cache_region().delete('titlovi_token')
         elif key == 'settings-titlovi-password':
             if value != settings.titlovi.password:
                 reset_providers = True
-                region.delete('titlovi_token')
+                _provider_cache_region().delete('titlovi_token')
 
         if key == 'settings-subsource-apikey':
             if value != settings.subsource.apikey:
@@ -890,6 +923,8 @@ def save_settings(settings_items):
         settings.general.subzero_mods = ','.join(subzero_mods)
 
     try:
+        if embedded_subtitles_parser_changed:
+            check_parser_binary(settings.general.embedded_subtitles_parser)
         settings.validators.validate()
         validate_log_regex()
     except ValidationError:
