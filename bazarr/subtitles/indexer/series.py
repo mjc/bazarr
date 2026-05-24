@@ -9,7 +9,7 @@ from subliminal_patch import core, search_external_subtitles
 
 from languages.custom_lang import CustomLanguage
 from app.database import get_profiles_list, get_profile_cutoff, TableEpisodes, TableShows, TableEpisodesSubtitles, \
-    get_audio_profile_languages, database, update, select, get_subtitles, insert, delete
+    get_audio_profile_languages, database, update, select, insert, delete
 from languages.get_languages import alpha2_from_alpha3, get_language_set
 from app.config import settings
 from utilities.helper import get_subtitle_destination_folder
@@ -92,13 +92,106 @@ def _should_skip_full_scan_episode(episode, mapped_path, scan_signature_cache):
     return scan_signature == episode.subtitles_last_indexed_external_signature
 
 
-def store_subtitles(sonarr_episode_id, use_cache=True, item=None):
+def _get_indexed_subtitles(sonarr_episode_id):
+    return database.execute(
+        select(
+            TableEpisodesSubtitles.path,
+            TableEpisodesSubtitles.size.label("file_size"),
+            TableEpisodesSubtitles.language.label("code2"),
+            TableEpisodesSubtitles.forced,
+            TableEpisodesSubtitles.hi,
+            TableEpisodesSubtitles.embedded_track_id,
+        )
+        .where(TableEpisodesSubtitles.sonarrEpisodeId == sonarr_episode_id)
+    ).all()
+
+
+def _subtitle_entry(language, forced, hi):
+    return language, str(forced), str(hi)
+
+
+def _actual_subtitles_list(indexed_subtitles, use_embedded_subs):
+    actual_subtitles = []
+    for subtitles in indexed_subtitles:
+        if subtitles.get('path') is None and not use_embedded_subs:
+            continue
+
+        actual_subtitles.append(_subtitle_entry(subtitles['language'], subtitles['forced'], subtitles['hi']))
+
+    return actual_subtitles
+
+
+def _get_missing_subtitles_text(profile_id, audio_language, indexed_subtitles):
+    if not profile_id:
+        return '[]'
+
+    audio_languages = get_audio_profile_languages(audio_language)
+    actual_subtitles = set(_actual_subtitles_list(indexed_subtitles, settings.general.use_embedded_subs))
+
+    def matches_audio(language):
+        return any(x['code2'] == language['language'] for x in audio_languages)
+
+    desired_subtitles = get_profiles_list(profile_id=profile_id)
+    desired_subtitles_list = []
+    if desired_subtitles:
+        for language in desired_subtitles['items']:
+            if language['audio_exclude'] == "True" and matches_audio(language):
+                continue
+            if language['audio_only_include'] == "True" and not matches_audio(language):
+                continue
+
+            desired_subtitles_list.append(
+                _subtitle_entry(language['language'], language['forced'], language['hi'])
+            )
+
+    cutoff_temp_list = get_profile_cutoff(profile_id=profile_id)
+    if cutoff_temp_list:
+        for cutoff_temp in cutoff_temp_list:
+            cutoff_language = _subtitle_entry(cutoff_temp['language'], cutoff_temp['forced'], cutoff_temp['hi'])
+            if cutoff_temp['audio_only_include'] == 'True' and not matches_audio(cutoff_temp):
+                continue
+            if cutoff_temp['audio_exclude'] == 'True' and matches_audio(cutoff_temp):
+                return dump_text_list([])
+            if cutoff_language in actual_subtitles:
+                return dump_text_list([])
+            if _subtitle_entry(cutoff_temp['language'], False, True) in actual_subtitles:
+                return dump_text_list([])
+
+    hi_languages = {
+        language
+        for language, _, hi in actual_subtitles
+        if hi == 'True'
+    }
+    missing_subtitles_output_list = []
+    for language, forced, hi in desired_subtitles_list:
+        if (language, forced, hi) in actual_subtitles:
+            continue
+        if forced == 'False' and hi == 'False' and language in hi_languages:
+            continue
+
+        missing_language = language
+        if forced == 'True':
+            missing_language += ':forced'
+        elif hi == 'True':
+            missing_language += ':hi'
+        missing_subtitles_output_list.append(missing_language)
+
+    return dump_text_list(missing_subtitles_output_list)
+
+
+def store_subtitles(sonarr_episode_id, use_cache=True, item=None, languages=None):
     if item is None:
         item = database.execute(
-            select(TableEpisodes.sonarrSeriesId,
-                   TableEpisodes.path,
-                   TableEpisodes.episode_file_id,
-                   TableEpisodes.file_size)
+            select(
+                TableEpisodes.sonarrSeriesId,
+                TableEpisodes.path,
+                TableEpisodes.episode_file_id,
+                TableEpisodes.file_size,
+                TableShows.profileId,
+                TableEpisodes.audio_language,
+            )
+            .select_from(TableEpisodes)
+            .join(TableShows)
             .where(TableEpisodes.sonarrEpisodeId == sonarr_episode_id)
         ).first()
 
@@ -196,17 +289,23 @@ def store_subtitles(sonarr_episode_id, use_cache=True, item=None):
             core.CUSTOM_PATHS = [dest_folder] if dest_folder else []
 
             # Get previously indexed subtitles that haven't changed:
-            previously_indexed_subtitles = get_subtitles(sonarr_episode_id=sonarr_episode_id)
-            previously_indexed_subtitles_to_exclude = \
-                [x for x in previously_indexed_subtitles
-                 if x['path'] and
-                 os.path.isfile(x['path']) and
-                 os.stat(x['path']).st_size == x['file_size']]
+            previously_indexed_subtitles_to_exclude = []
+            previously_indexed_subtitles_to_delete = []
+            for subtitles in _get_indexed_subtitles(sonarr_episode_id):
+                if not subtitles.path:
+                    continue
 
-            # Get previously indexed subtitles that no longer exist:
-            previously_indexed_subtitles_to_delete = \
-                [path_mappings.path_replace_reverse(x['path']) for x in previously_indexed_subtitles
-                 if x['path'] and not os.path.isfile(x['path'])]
+                mapped_subtitles_path = path_mappings.path_replace(subtitles.path)
+                if os.path.isfile(mapped_subtitles_path) and os.stat(mapped_subtitles_path).st_size == subtitles.file_size:
+                    previously_indexed_subtitles_to_exclude.append({
+                        'path': mapped_subtitles_path,
+                        'file_size': subtitles.file_size,
+                        'code2': subtitles.code2,
+                        'forced': subtitles.forced,
+                        'hi': subtitles.hi,
+                    })
+                elif not os.path.isfile(mapped_subtitles_path):
+                    previously_indexed_subtitles_to_delete.append(subtitles.path)
 
             if previously_indexed_subtitles_to_delete:
                 database.execute(
@@ -214,8 +313,11 @@ def store_subtitles(sonarr_episode_id, use_cache=True, item=None):
                     .where(TableEpisodesSubtitles.path.in_(previously_indexed_subtitles_to_delete)))
 
             # Search for external subtitles:
-            subtitles = search_external_subtitles(mapped_path, languages=get_language_set(),
-                                                  only_one=settings.general.single_language)
+            subtitles = search_external_subtitles(
+                mapped_path,
+                languages=languages if languages is not None else get_language_set(),
+                only_one=settings.general.single_language,
+            )
 
             # Guess external subtitles language if not specified in the file name:
             subtitles = guess_external_subtitles(full_dest_folder_path, subtitles,
@@ -291,20 +393,29 @@ def store_subtitles(sonarr_episode_id, use_cache=True, item=None):
     # We store actual subtitles for this episode in the database
     logging.debug(f"BAZARR has stored those languages to DB: {embedded_subtitles + external_subtitles}")
 
-    # We list missing subtitles for this episode and store them in the database
-    list_missing_subtitles(epno=sonarr_episode_id)
-
+    updated_episode_values = {
+        'missing_subtitles': _get_missing_subtitles_text(
+            item.profileId,
+            item.audio_language,
+            embedded_subtitles + external_subtitles,
+        ),
+    }
     if index_complete:
-        database.execute(
-            update(TableEpisodes)
-            .values(
-                subtitles_last_indexed_episode_file_id=item.episode_file_id,
-                subtitles_last_indexed_external_signature=_get_subtitles_scan_signature(scan_paths),
-                subtitles_last_indexed_file_size=item.file_size,
-                subtitles_last_indexed_path=item.path,
-            )
-            .where(TableEpisodes.sonarrEpisodeId == sonarr_episode_id)
-        )
+        updated_episode_values.update({
+            'subtitles_last_indexed_episode_file_id': item.episode_file_id,
+            'subtitles_last_indexed_external_signature': _get_subtitles_scan_signature(scan_paths),
+            'subtitles_last_indexed_file_size': item.file_size,
+            'subtitles_last_indexed_path': item.path,
+        })
+
+    database.execute(
+        update(TableEpisodes)
+        .values(**updated_episode_values)
+        .where(TableEpisodes.sonarrEpisodeId == sonarr_episode_id)
+    )
+    event_stream(type='episode', payload=sonarr_episode_id)
+    event_stream(type='episode-wanted', action='update', payload=sonarr_episode_id)
+    event_stream(type='badges')
 
     logging.debug(f'BAZARR ended subtitles indexing for this file: {mapped_path}')
 
@@ -324,97 +435,20 @@ def list_missing_subtitles(no=None, epno=None):
     else:
         episodes_subtitles = database.execute(stmt).all()
 
-    use_embedded_subs = settings.general.use_embedded_subs
-
-    matches_audio = lambda language: any(x['code2'] == language['language'] for x in get_audio_profile_languages(
-                                episode_subtitles.audio_language))
-
     for episode_subtitles in episodes_subtitles:
-        missing_subtitles_text = '[]'
-        if episode_subtitles.profileId:
-            # get desired subtitles
-            desired_subtitles_temp = get_profiles_list(profile_id=episode_subtitles.profileId)
-            desired_subtitles_list = []
-            if desired_subtitles_temp:
-                for language in desired_subtitles_temp['items']:
-                    if language['audio_exclude'] == "True":
-                        if matches_audio(language):
-                            continue
-                    if language['audio_only_include'] == "True":
-                        if not matches_audio(language):
-                            continue
-                    desired_subtitles_list.append({'language': language['language'],
-                                                   'forced': str(language['forced']),
-                                                   'hi': str(language['hi'])})
-
-            # get existing subtitles
-            actual_subtitles_list = []
-            actual_subtitles_temp = get_subtitles(sonarr_episode_id=episode_subtitles.sonarrEpisodeId)
-            if not use_embedded_subs:
-                actual_subtitles_temp = [x for x in actual_subtitles_temp if x['path']]
-
-            for subtitles in actual_subtitles_temp:
-                actual_subtitles_list.append({'language': subtitles['code2'],
-                                              'forced': str(subtitles['forced']),
-                                              'hi': str(subtitles['hi'])})
-
-            # check if cutoff is reached and skip any further check
-            cutoff_met = False
-            cutoff_temp_list = get_profile_cutoff(profile_id=episode_subtitles.profileId)
-
-            if cutoff_temp_list:
-                for cutoff_temp in cutoff_temp_list:
-                    cutoff_language = {'language': cutoff_temp['language'],
-                                       'forced': cutoff_temp['forced'],
-                                       'hi': cutoff_temp['hi']}
-                    if cutoff_temp['audio_only_include'] == 'True' and not matches_audio(cutoff_temp):
-                        # We don't want subs in this language unless it matches
-                        # the audio. Don't use it to meet the cutoff.
-                        continue
-                    elif cutoff_temp['audio_exclude'] == 'True' and matches_audio(cutoff_temp):
-                        # The cutoff is met through one of the audio tracks.
-                        cutoff_met = True
-                    elif cutoff_language in actual_subtitles_list:
-                        cutoff_met = True
-                    # HI is considered as good as normal
-                    elif (cutoff_language and
-                          {'language': cutoff_language['language'],
-                           'forced': 'False',
-                           'hi': 'True'} in actual_subtitles_list):
-                        cutoff_met = True
-
-            if cutoff_met:
-                missing_subtitles_text = dump_text_list([])
-            else:
-                # if cutoff isn't met or None, we continue
-
-                # get difference between desired and existing subtitles
-                missing_subtitles_list = []
-                for item in desired_subtitles_list:
-                    if item not in actual_subtitles_list:
-                        missing_subtitles_list.append(item)
-
-                # remove missing that have hi subtitles for this language in existing
-                for item in actual_subtitles_list:
-                    if item['hi'] == 'True':
-                        try:
-                            missing_subtitles_list.remove({'language': item['language'],
-                                                           'forced': 'False',
-                                                           'hi': 'False'})
-                        except ValueError:
-                            pass
-
-                # make the missing languages list looks like expected
-                missing_subtitles_output_list = []
-                for item in missing_subtitles_list:
-                    lang = item['language']
-                    if item['forced'] == 'True':
-                        lang += ':forced'
-                    elif item['hi'] == 'True':
-                        lang += ':hi'
-                    missing_subtitles_output_list.append(lang)
-
-                missing_subtitles_text = dump_text_list(missing_subtitles_output_list)
+        missing_subtitles_text = _get_missing_subtitles_text(
+            episode_subtitles.profileId,
+            episode_subtitles.audio_language,
+            [
+                {
+                    'language': subtitles.code2,
+                    'forced': subtitles.forced,
+                    'hi': subtitles.hi,
+                    'path': subtitles.path,
+                }
+                for subtitles in _get_indexed_subtitles(episode_subtitles.sonarrEpisodeId)
+            ],
+        )
 
         database.execute(
             update(TableEpisodes)
@@ -440,6 +474,8 @@ def series_full_scan_subtitles(job_id=None, use_cache=None, wait_for_completion=
                TableEpisodes.sonarrSeriesId,
                TableEpisodes.episode_file_id,
                TableEpisodes.file_size,
+               TableShows.profileId,
+               TableEpisodes.audio_language,
                TableEpisodes.missing_subtitles,
                TableEpisodes.subtitles_last_indexed_episode_file_id,
                TableEpisodes.subtitles_last_indexed_external_signature,
@@ -461,6 +497,7 @@ def series_full_scan_subtitles(job_id=None, use_cache=None, wait_for_completion=
 
     jobs_queue.update_job_progress(job_id=job_id, progress_max=len(episodes), progress_message='Indexing')
     scan_signature_cache = {}
+    language_set = get_language_set()
     for i, episode in enumerate(episodes, start=1):
         jobs_queue.update_job_progress(
             job_id=job_id, progress_value=i,
@@ -468,7 +505,7 @@ def series_full_scan_subtitles(job_id=None, use_cache=None, wait_for_completion=
         mapped_path = path_mappings.path_replace(episode.path)
         if _should_skip_full_scan_episode(episode, mapped_path, scan_signature_cache):
             continue
-        store_subtitles(episode.sonarrEpisodeId, use_cache=use_cache, item=episode)
+        store_subtitles(episode.sonarrEpisodeId, use_cache=use_cache, item=episode, languages=language_set)
 
     logging.info('BAZARR All existing episode subtitles indexed from disk.')
 
@@ -478,6 +515,7 @@ def series_full_scan_subtitles(job_id=None, use_cache=None, wait_for_completion=
 
 
 def series_scan_subtitles(no):
+    language_set = get_language_set()
     episodes = database.execute(
         select(TableEpisodes.sonarrEpisodeId)
         .where(TableEpisodes.sonarrSeriesId == no)
@@ -485,4 +523,4 @@ def series_scan_subtitles(no):
         .all()
 
     for episode in episodes:
-        store_subtitles(episode.sonarrEpisodeId, use_cache=False)
+        store_subtitles(episode.sonarrEpisodeId, use_cache=False, languages=language_set)

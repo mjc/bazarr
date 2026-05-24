@@ -334,6 +334,7 @@ def test_series_full_scan_skips_clean_unchanged_episode(monkeypatch):
     monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
     monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
     monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda paths: signature)
+    monkeypatch.setattr(series_indexer, "get_language_set", lambda: {"en"})
     monkeypatch.setattr(
         series_indexer,
         "store_subtitles",
@@ -343,7 +344,7 @@ def test_series_full_scan_skips_clean_unchanged_episode(monkeypatch):
 
     series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
 
-    assert store_calls == [(102, {"use_cache": True, "item": episodes[1]})]
+    assert store_calls == [(102, {"use_cache": True, "item": episodes[1], "languages": {"en"}})]
 
 
 def test_series_full_scan_does_not_skip_when_signature_changes(monkeypatch):
@@ -386,6 +387,7 @@ def test_series_full_scan_does_not_skip_when_signature_changes(monkeypatch):
     monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
     monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
     monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda paths: 'new-signature')
+    monkeypatch.setattr(series_indexer, "get_language_set", lambda: {"en"})
     monkeypatch.setattr(
         series_indexer,
         "store_subtitles",
@@ -395,7 +397,7 @@ def test_series_full_scan_does_not_skip_when_signature_changes(monkeypatch):
 
     series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
 
-    assert store_calls == [(101, {"use_cache": True, "item": episodes[0]})]
+    assert store_calls == [(101, {"use_cache": True, "item": episodes[0], "languages": {"en"}})]
 
 
 def test_series_full_scan_does_not_skip_without_indexed_subtitles(monkeypatch):
@@ -438,6 +440,7 @@ def test_series_full_scan_does_not_skip_without_indexed_subtitles(monkeypatch):
     monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
     monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
     monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda paths: 'sig')
+    monkeypatch.setattr(series_indexer, "get_language_set", lambda: {"en"})
     monkeypatch.setattr(
         series_indexer,
         "store_subtitles",
@@ -447,7 +450,166 @@ def test_series_full_scan_does_not_skip_without_indexed_subtitles(monkeypatch):
 
     series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
 
-    assert store_calls == [(101, {"use_cache": True, "item": episodes[0]})]
+    assert store_calls == [(101, {"use_cache": True, "item": episodes[0], "languages": {"en"}})]
+
+
+def test_series_full_scan_reuses_language_set_for_each_episode(monkeypatch):
+    from subtitles.indexer import series as series_indexer
+
+    language_set = object()
+    episodes = [
+        SimpleNamespace(
+            path='/series/one.mkv',
+            sonarrSeriesId=1,
+            episode_file_id=123,
+            file_size=456,
+            profileId=1,
+            audio_language='[]',
+            missing_subtitles='["en"]',
+            subtitles_last_indexed_episode_file_id=123,
+            subtitles_last_indexed_external_signature='sig',
+            subtitles_last_indexed_file_size=456,
+            subtitles_last_indexed_path='/series/one.mkv',
+            title='Series',
+            season=1,
+            episode=1,
+            episodeTitle='One',
+            sonarrEpisodeId=101,
+            has_indexed_subtitles=True,
+        ),
+        SimpleNamespace(
+            path='/series/two.mkv',
+            sonarrSeriesId=1,
+            episode_file_id=124,
+            file_size=457,
+            profileId=1,
+            audio_language='[]',
+            missing_subtitles='["fr"]',
+            subtitles_last_indexed_episode_file_id=124,
+            subtitles_last_indexed_external_signature='sig',
+            subtitles_last_indexed_file_size=457,
+            subtitles_last_indexed_path='/series/two.mkv',
+            title='Series',
+            season=1,
+            episode=2,
+            episodeTitle='Two',
+            sonarrEpisodeId=102,
+            has_indexed_subtitles=True,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=episodes)
+
+    monkeypatch.setattr(series_indexer, "database", _Database())
+    monkeypatch.setattr(
+        series_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(series_indexer, "get_language_set", lambda: language_set)
+    monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(
+        series_indexer,
+        "store_subtitles",
+        lambda episode_id, **kwargs: store_calls.append((episode_id, kwargs["languages"])),
+    )
+    monkeypatch.setattr(series_indexer.gc, "collect", lambda: None)
+
+    series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(101, language_set), (102, language_set)]
+    assert store_calls[0][1] is language_set
+    assert store_calls[1][1] is language_set
+
+
+def test_store_subtitles_uses_cached_languages_and_updates_missing_subtitles_inline(monkeypatch):
+    from subtitles.indexer import series as series_indexer
+
+    item = SimpleNamespace(
+        sonarrSeriesId=1,
+        path='/series/episode.mkv',
+        episode_file_id=123,
+        file_size=456,
+        profileId=1,
+        audio_language='[]',
+    )
+    captured_missing = []
+    events = []
+
+    class _Database:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement):
+            self.calls.append(statement)
+            return _Result()
+
+    database = _Database()
+
+    monkeypatch.setattr(series_indexer, "database", database)
+    monkeypatch.setattr(
+        series_indexer,
+        "settings",
+        SimpleNamespace(
+            general=SimpleNamespace(
+                use_embedded_subs=False,
+                single_language=False,
+                ignore_pgs_subs=False,
+                ignore_vobsub_subs=False,
+                ignore_ass_subs=False,
+                subfolder="current",
+                subfolder_custom="",
+            )
+        ),
+    )
+    monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(series_indexer.os.path, "isfile", lambda path: True)
+    monkeypatch.setattr(series_indexer.os, "stat", lambda path: SimpleNamespace(st_size=11, st_mtime_ns=1))
+    monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(series_indexer.path_mappings, "path_replace_reverse", lambda path: path)
+    monkeypatch.setattr(series_indexer, "_get_indexed_subtitles", lambda episode_id: [])
+    monkeypatch.setattr(
+        series_indexer,
+        "search_external_subtitles",
+        lambda *args, **kwargs: {
+            "episode.en.srt": SimpleNamespace(alpha3="eng", basename="en", forced=False, hi=False)
+        },
+    )
+    monkeypatch.setattr(series_indexer, "guess_external_subtitles", lambda dest, subtitles, excluded: subtitles)
+    monkeypatch.setattr(series_indexer, "get_external_subtitles_path", lambda mapped_path, subtitle: f"/series/{subtitle}")
+    monkeypatch.setattr(series_indexer.CustomLanguage, "found_external", lambda *args: None)
+    monkeypatch.setattr(series_indexer, "alpha2_from_alpha3", lambda code: "en")
+    monkeypatch.setattr(series_indexer, "get_language_set", lambda: pytest.fail("store_subtitles should reuse passed languages"))
+    def _capture_missing(profile_id, audio_language, indexed_subtitles):
+        captured_missing.append(indexed_subtitles)
+        return '["fr"]'
+
+    monkeypatch.setattr(series_indexer, "_get_missing_subtitles_text", _capture_missing)
+    monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda scan_paths: "sig")
+    monkeypatch.setattr(
+        series_indexer,
+        "list_missing_subtitles",
+        lambda *args, **kwargs: pytest.fail("store_subtitles should update missing subtitles inline"),
+    )
+    monkeypatch.setattr(series_indexer, "event_stream", lambda **kwargs: events.append(kwargs))
+
+    series_indexer.store_subtitles(101, item=item, languages={"cached"})
+
+    assert captured_missing[0][0]["language"] == "en"
+    assert events == [
+        {"type": "episode", "payload": 101},
+        {"type": "episode-wanted", "action": "update", "payload": 101},
+        {"type": "badges"},
+    ]
+    assert len(database.calls) == 2
 
 
 def test_movies_full_scan_skips_clean_unchanged_movie(monkeypatch):
