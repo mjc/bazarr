@@ -19,7 +19,7 @@ from app.event_handler import event_stream
 from sonarr.info import get_sonarr_info
 from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications
-from subtitles.adaptive_searching import is_search_active
+from subtitles.adaptive_searching import get_active_search_languages, get_adaptive_search_policy
 
 from .parser import episodeParser
 from .utils import get_episodes_from_sonarr_api, get_episodesFiles_from_sonarr_api
@@ -388,8 +388,12 @@ def _is_there_missing_subtitles(series_id: int = None, episode_id: int = None) -
         .join(TableShows)
         .where(reduce(operator.and_, episodes_conditions))) \
         .all()
+    adaptive_search_policy = get_adaptive_search_policy()
     for missing_episode in missing_episodes:
-        for language in missing_episode.missing_subtitles:
-            if is_search_active(desired_language=language, attempt_string=missing_episode.failedAttempts):
-                return True
+        if get_active_search_languages(
+            missing_episode.missing_subtitles,
+            missing_episode.failedAttempts,
+            adaptive_search_policy=adaptive_search_policy,
+        ):
+            return True
     return False

@@ -202,6 +202,40 @@ class StaticDatabase:
         return StaticResult(first_value=self.first_value, all_value=self.all_value)
 
 
+def ensure_benchmark_db_schema(db_path):
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS table_episodes_subtitles (
+                id INTEGER PRIMARY KEY,
+                language TEXT,
+                hi BOOLEAN,
+                forced BOOLEAN,
+                path TEXT,
+                size BIGINT,
+                embedded_track_id INTEGER,
+                sonarrEpisodeId INTEGER,
+                sonarrSeriesId INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS table_movies_subtitles (
+                id INTEGER PRIMARY KEY,
+                language TEXT,
+                hi BOOLEAN,
+                forced BOOLEAN,
+                path TEXT,
+                size BIGINT,
+                embedded_track_id INTEGER,
+                radarrId INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_table_episodes_subtitles_episode
+                ON table_episodes_subtitles(sonarrEpisodeId);
+            CREATE INDEX IF NOT EXISTS idx_table_movies_subtitles_movie
+                ON table_movies_subtitles(radarrId);
+            """
+        )
+        conn.commit()
+
+
 def copy_config_tree(source_config_dir, target_dir):
     source = Path(source_config_dir).resolve()
     target = Path(target_dir).resolve()
@@ -211,7 +245,12 @@ def copy_config_tree(source_config_dir, target_dir):
     db_source = source / "db" / "bazarr.db"
     if not db_source.exists():
         raise FileNotFoundError(f"Missing database at {db_source}")
-    shutil.copy2(db_source, target / "db" / "bazarr.db")
+    db_target = target / "db" / "bazarr.db"
+    with sqlite3.connect(db_source) as source_db, sqlite3.connect(db_target) as target_db:
+        source_db.backup(target_db)
+        target_db.execute("PRAGMA journal_mode=DELETE")
+        target_db.commit()
+    ensure_benchmark_db_schema(db_target)
 
     config_candidates = (
         source / "config" / "config.yaml",

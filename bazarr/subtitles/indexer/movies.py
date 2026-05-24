@@ -3,7 +3,7 @@
 import gc
 import os
 import logging
-import ast
+import json
 
 from subliminal_patch import core, search_external_subtitles
 
@@ -22,14 +22,84 @@ from app.jobs_queue import jobs_queue
 gc.enable()
 
 
-def store_subtitles_movie(radarr_id, use_cache=True):
-    item = database.execute(
-        select(TableMovies.radarrId,
-               TableMovies.path,
-               TableMovies.movie_file_id,
-               TableMovies.file_size)
-        .where(TableMovies.radarrId == radarr_id)
-    ).first()
+def _get_movie_subtitles_scan_paths(mapped_path):
+    video_folder = os.path.dirname(mapped_path)
+    dest_folder = get_subtitle_destination_folder()
+    full_dest_folder_path = video_folder
+
+    if dest_folder:
+        if settings.general.subfolder == "absolute":
+            full_dest_folder_path = dest_folder
+        elif settings.general.subfolder == "relative":
+            full_dest_folder_path = os.path.join(video_folder, dest_folder)
+
+    scan_paths = [video_folder]
+    if full_dest_folder_path != video_folder:
+        scan_paths.append(full_dest_folder_path)
+
+    return dest_folder, full_dest_folder_path, tuple(scan_paths)
+
+
+def _get_movie_subtitles_scan_signature(scan_paths):
+    return json.dumps(
+        {
+            "ignore_ass_subs": settings.general.ignore_ass_subs,
+            "ignore_pgs_subs": settings.general.ignore_pgs_subs,
+            "ignore_vobsub_subs": settings.general.ignore_vobsub_subs,
+            "single_language": settings.general.single_language,
+            "subfolder": settings.general.subfolder,
+            "subfolder_custom": settings.general.subfolder_custom,
+            "use_embedded_subs": settings.general.use_embedded_subs,
+            "paths": [
+                [path, os.stat(path).st_mtime_ns if os.path.exists(path) else None]
+                for path in scan_paths
+            ],
+        },
+        separators=(',', ':'),
+        sort_keys=True,
+    )
+
+
+def _should_skip_full_scan_movie(movie, mapped_path, scan_signature_cache):
+    if movie.missing_subtitles != '[]':
+        return False
+
+    if not movie.has_indexed_subtitles:
+        return False
+
+    if movie.path != movie.subtitles_last_indexed_path:
+        return False
+
+    if movie.movie_file_id != movie.subtitles_last_indexed_movie_file_id:
+        return False
+
+    if movie.file_size != movie.subtitles_last_indexed_file_size:
+        return False
+
+    if not movie.subtitles_last_indexed_external_signature:
+        return False
+
+    if not os.path.exists(mapped_path):
+        return False
+
+    _, _, scan_paths = _get_movie_subtitles_scan_paths(mapped_path)
+    scan_signature = scan_signature_cache.get(scan_paths)
+    if scan_signature is None:
+        scan_signature = _get_movie_subtitles_scan_signature(scan_paths)
+        scan_signature_cache[scan_paths] = scan_signature
+
+    return scan_signature == movie.subtitles_last_indexed_external_signature
+
+
+def store_subtitles_movie(radarr_id, use_cache=True, item=None):
+    if item is None:
+        item = database.execute(
+            select(TableMovies.radarrId,
+                   TableMovies.path,
+                   TableMovies.movie_file_id,
+                   TableMovies.file_size)
+            .where(TableMovies.radarrId == radarr_id)
+        ).first()
 
     if not item:
         logging.warning(f"BAZARR could not find movie with ID {radarr_id} in the database.")
@@ -37,6 +107,8 @@ def store_subtitles_movie(radarr_id, use_cache=True):
     else:
         original_path = item.path
         mapped_path = path_mappings.path_replace_movie(original_path)
+        index_complete = True
+        scan_paths = ()
 
     logging.debug(f'BAZARR started subtitles indexing for this file: {mapped_path}')
     embedded_subtitles = []
@@ -110,13 +182,14 @@ def store_subtitles_movie(radarr_id, use_cache=True):
                             .where(TableMoviesSubtitles.embedded_track_id.not_in(embedded_subtitles_id_list))
                         )
             except Exception:
+                index_complete = False
                 logging.exception(
                     f"BAZARR error when trying to analyze this {os.path.splitext(mapped_path)[1]} file: "
                     f"{mapped_path}")
                 pass
 
         try:
-            dest_folder = get_subtitle_destination_folder()
+            dest_folder, full_dest_folder_path, scan_paths = _get_movie_subtitles_scan_paths(mapped_path)
             core.CUSTOM_PATHS = [dest_folder] if dest_folder else []
 
             # get previously indexed subtitles that haven't changed:
@@ -140,17 +213,12 @@ def store_subtitles_movie(radarr_id, use_cache=True):
             # Search for external subtitles:
             subtitles = search_external_subtitles(mapped_path, languages=get_language_set(),
                                                   only_one=settings.general.single_language)
-            full_dest_folder_path = os.path.dirname(mapped_path)
-            if dest_folder:
-                if settings.general.subfolder == "absolute":
-                    full_dest_folder_path = dest_folder
-                elif settings.general.subfolder == "relative":
-                    full_dest_folder_path = os.path.join(os.path.dirname(mapped_path), dest_folder)
 
             # Guess external subtitles language if not specified in the file name:
             subtitles = guess_external_subtitles(full_dest_folder_path, subtitles,
                                                  previously_indexed_subtitles_to_exclude)
         except Exception as e:
+            index_complete = False
             logging.exception(f"BAZARR unable to index external subtitles for this file {mapped_path}: {repr(e)}")
         else:
             # For each external subtitle, store it in the database
@@ -220,6 +288,18 @@ def store_subtitles_movie(radarr_id, use_cache=True):
 
     # We list missing subtitles for this movie and store them in the database
     list_missing_subtitles_movies(no=radarr_id)
+
+    if index_complete:
+        database.execute(
+            update(TableMovies)
+            .values(
+                subtitles_last_indexed_external_signature=_get_movie_subtitles_scan_signature(scan_paths),
+                subtitles_last_indexed_file_size=item.file_size,
+                subtitles_last_indexed_movie_file_id=item.movie_file_id,
+                subtitles_last_indexed_path=item.path,
+            )
+            .where(TableMovies.radarrId == radarr_id)
+        )
 
     logging.debug(f'BAZARR ended subtitles indexing for this file: {mapped_path}')
 
@@ -345,14 +425,30 @@ def movies_full_scan_subtitles(job_id=None, use_cache=None, wait_for_completion=
 
     movies = database.execute(
         select(TableMovies.path,
+               TableMovies.file_size,
+               TableMovies.missing_subtitles,
+               TableMovies.movie_file_id,
+               TableMovies.radarrId,
+               TableMovies.subtitles_last_indexed_external_signature,
+               TableMovies.subtitles_last_indexed_file_size,
+               TableMovies.subtitles_last_indexed_movie_file_id,
+               TableMovies.subtitles_last_indexed_path,
                TableMovies.title,
-               TableMovies.radarrId))\
+               select(TableMoviesSubtitles.id)
+               .where(TableMoviesSubtitles.radarrId == TableMovies.radarrId)
+               .limit(1)
+               .exists()
+               .label("has_indexed_subtitles")))\
         .all()
 
     jobs_queue.update_job_progress(job_id=job_id, progress_max=len(movies), progress_message='Indexing')
+    scan_signature_cache = {}
     for i, movie in enumerate(movies, start=1):
         jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_message=movie.title)
-        store_subtitles_movie(movie.radarrId, use_cache=use_cache)
+        mapped_path = path_mappings.path_replace_movie(movie.path)
+        if _should_skip_full_scan_movie(movie, mapped_path, scan_signature_cache):
+            continue
+        store_subtitles_movie(movie.radarrId, use_cache=use_cache, item=movie)
 
     logging.info('BAZARR All existing movie subtitles indexed from disk.')
 

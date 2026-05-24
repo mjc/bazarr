@@ -17,7 +17,7 @@ from radarr.rootfolder import check_radarr_rootfolder
 from subtitles.indexer.movies import store_subtitles_movie
 from subtitles.mass_download import movies_download_subtitles
 from utilities.path_mappings import path_mappings
-from subtitles.adaptive_searching import is_search_active
+from subtitles.adaptive_searching import get_active_search_languages, get_adaptive_search_policy
 
 from sqlalchemy.exc import IntegrityError
 from .parser import movieParser
@@ -394,8 +394,12 @@ def _is_there_missing_subtitles(radarr_id: int) -> bool:
         .select_from(TableMovies)
         .where(reduce(operator.and_, movies_conditions))) \
         .all()
+    adaptive_search_policy = get_adaptive_search_policy()
     for missing_movie in missing_movies:
-        for language in missing_movie.missing_subtitles:
-            if is_search_active(desired_language=language, attempt_string=missing_movie.failedAttempts):
-                return True
+        if get_active_search_languages(
+            missing_movie.missing_subtitles,
+            missing_movie.failedAttempts,
+            adaptive_search_policy=adaptive_search_policy,
+        ):
+            return True
     return False

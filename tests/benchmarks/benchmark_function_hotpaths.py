@@ -275,6 +275,7 @@ class BenchmarkSuite:
                 },
             )(),
             get_providers=lambda: ["provider"],
+            _wanted_movie=lambda *args, **kwargs: None,
             wanted_download_subtitles_movie=lambda *args, **kwargs: None,
         )
         try:
@@ -298,6 +299,7 @@ class BenchmarkSuite:
                 },
             )(),
             get_providers=lambda: ["provider"],
+            _wanted_episode=lambda *args, **kwargs: None,
             wanted_download_subtitles=lambda *args, **kwargs: None,
         )
         try:
