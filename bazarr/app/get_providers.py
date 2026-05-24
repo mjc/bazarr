@@ -3,31 +3,17 @@
 import os
 import datetime
 import logging
-import subliminal_patch
-import pretty
 import time
 import socket
 import requests
 import traceback
 import re
 
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 from requests import ConnectionError
-from subzero.language import Language
-from subliminal_patch.exceptions import (TooManyRequests, APIThrottled, ParseResponseError, IPAddressBlocked,
-                                         MustGetBlacklisted, SearchLimitReached, ProviderError, ForbiddenError)
-from subliminal.exceptions import DownloadLimitExceeded, ServiceUnavailable, AuthenticationError, ConfigurationError
-from subliminal import region as subliminal_cache_region
-from subliminal_patch.extensions import provider_registry
 
 from app.get_args import args
-from app.config import settings
-from languages.get_languages import CustomLanguage
-from app.event_handler import event_stream
-from utilities.binaries import get_binary
-from radarr.blacklist import blacklist_log_movie
-from sonarr.blacklist import blacklist_log
-from utilities.analytics import event_tracker
 
 _TRACEBACK_RE = re.compile(r'File "(.*?providers[\\/].*?)", line (\d+)')
 
@@ -54,13 +40,23 @@ def legendasdivx_limit_reset_timedelta():
     return time_until_midnight(timezone=ZoneInfo('Europe/Lisbon')) + datetime.timedelta(minutes=60)
 
 
-VALID_THROTTLE_EXCEPTIONS = (TooManyRequests, DownloadLimitExceeded, ServiceUnavailable, APIThrottled,
-                             ParseResponseError, IPAddressBlocked)
 VALID_COUNT_EXCEPTIONS = ('TooManyRequests', 'ServiceUnavailable', 'APIThrottled', requests.exceptions.Timeout,
                           requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, socket.timeout)
 
 
 def provider_throttle_map():
+    TooManyRequests = _subliminal_patch_exception("TooManyRequests")
+    APIThrottled = _subliminal_patch_exception("APIThrottled")
+    ParseResponseError = _subliminal_patch_exception("ParseResponseError")
+    IPAddressBlocked = _subliminal_patch_exception("IPAddressBlocked")
+    SearchLimitReached = _subliminal_patch_exception("SearchLimitReached")
+    ProviderError = _subliminal_patch_exception("ProviderError")
+    ForbiddenError = _subliminal_patch_exception("ForbiddenError")
+    DownloadLimitExceeded = _subliminal_exception("DownloadLimitExceeded")
+    ServiceUnavailable = _subliminal_exception("ServiceUnavailable")
+    AuthenticationError = _subliminal_exception("AuthenticationError")
+    ConfigurationError = _subliminal_exception("ConfigurationError")
+
     return {
         "default": {
             TooManyRequests: (datetime.timedelta(hours=1), "1 hour"),
@@ -142,7 +138,112 @@ _providers_cache = {
 }
 
 
+@lru_cache(maxsize=1)
+def _settings():
+    from app.config import settings
+    return settings
+
+
+@lru_cache(maxsize=1)
+def _subliminal_patch_exceptions():
+    import subliminal_patch.exceptions
+    return subliminal_patch.exceptions
+
+
+@lru_cache(maxsize=1)
+def _subliminal_exceptions():
+    import subliminal.exceptions
+    return subliminal.exceptions
+
+
+def _subliminal_patch_exception(name):
+    return getattr(_subliminal_patch_exceptions(), name)
+
+
+def _subliminal_exception(name):
+    return getattr(_subliminal_exceptions(), name)
+
+
+def _valid_throttle_exceptions():
+    return (
+        _subliminal_patch_exception("TooManyRequests"),
+        _subliminal_exception("DownloadLimitExceeded"),
+        _subliminal_exception("ServiceUnavailable"),
+        _subliminal_patch_exception("APIThrottled"),
+        _subliminal_patch_exception("ParseResponseError"),
+        _subliminal_patch_exception("IPAddressBlocked"),
+    )
+
+
+@lru_cache(maxsize=1)
+def _subliminal_patch():
+    import subliminal_patch
+    return subliminal_patch
+
+
+@lru_cache(maxsize=1)
+def _provider_registry():
+    from subliminal_patch.extensions import provider_registry
+    return provider_registry
+
+
+@lru_cache(maxsize=1)
+def _subliminal_cache_region():
+    from subliminal import region
+    return region
+
+
+@lru_cache(maxsize=1)
+def _custom_language_cls():
+    from languages.get_languages import CustomLanguage
+    return CustomLanguage
+
+
+@lru_cache(maxsize=1)
+def _language_cls():
+    from subzero.language import Language
+    return Language
+
+
+@lru_cache(maxsize=1)
+def _event_stream():
+    from app.event_handler import event_stream
+    return event_stream
+
+
+@lru_cache(maxsize=1)
+def _blacklist_log():
+    from sonarr.blacklist import blacklist_log
+    return blacklist_log
+
+
+@lru_cache(maxsize=1)
+def _blacklist_log_movie():
+    from radarr.blacklist import blacklist_log_movie
+    return blacklist_log_movie
+
+
+@lru_cache(maxsize=1)
+def _event_tracker():
+    from utilities.analytics import event_tracker
+    return event_tracker
+
+
+@lru_cache(maxsize=1)
+def _pretty():
+    import pretty
+    return pretty
+
+
+@lru_cache(maxsize=2)
+def _provider_binary(name):
+    from utilities.binaries import get_binary
+    return get_binary(name)
+
+
 def provider_pool():
+    settings = _settings()
+    subliminal_patch = _subliminal_patch()
     if settings.general.multithreading:
         return subliminal_patch.core.SZAsyncProviderPool
     return subliminal_patch.core.SZProviderPool
@@ -183,6 +284,8 @@ def _store_providers_cache(signature, providers):
 
 def _lang_from_str(content: str):
     " Formats: es-MX en@hi es-MX@forced "
+    CustomLanguage = _custom_language_cls()
+    subliminal_patch = _subliminal_patch()
     extra_info = content.split("@")
     if len(extra_info) > 1:
         kwargs = {extra_info[-1]: True}
@@ -205,7 +308,7 @@ def _lang_from_str(content: str):
 
 
 def get_language_equals(settings_=None):
-    settings_ = settings_ or settings
+    settings_ = settings_ or _settings()
 
     equals = settings_.general.language_equals
     if not equals:
@@ -225,6 +328,7 @@ def get_language_equals(settings_=None):
 
 
 def get_providers():
+    settings = _settings()
     enabled_providers = settings.general.enabled_providers if isinstance(settings.general.enabled_providers, list) else []
     signature = _providers_signature(enabled_providers)
     now = datetime.datetime.now()
@@ -233,7 +337,7 @@ def get_providers():
         return list(cached_providers) if cached_providers else None
 
     providers_list = []
-    existing_providers = provider_registry.names()
+    existing_providers = _provider_registry().names()
     providers = [x for x in enabled_providers if x in existing_providers]
     for provider in providers:
         reason, until, throttle_desc = tp.get(provider, (None, None, None))
@@ -262,17 +366,14 @@ def get_providers():
 
 def get_enabled_providers():
     # return enabled provider including those who can be throttled
+    settings = _settings()
     if isinstance(settings.general.enabled_providers, list):
         return settings.general.enabled_providers
     else:
         return []
 
-
-_FFPROBE_BINARY = get_binary("ffprobe")
-_FFMPEG_BINARY = get_binary("ffmpeg")
-
-
 def get_providers_auth():
+    settings = _settings()
     return {
         'addic7ed': {
             'username': settings.addic7ed.username,
@@ -352,8 +453,8 @@ def get_providers_auth():
             'included_codecs': settings.embeddedsubtitles.included_codecs,
             'hi_fallback': settings.embeddedsubtitles.hi_fallback,
             'cache_dir': os.path.join(args.config_dir, "cache"),
-            'ffprobe_path': _FFPROBE_BINARY,
-            'ffmpeg_path': _FFMPEG_BINARY,
+            'ffprobe_path': _provider_binary("ffprobe"),
+            'ffmpeg_path': _provider_binary("ffmpeg"),
             'timeout': settings.embeddedsubtitles.timeout,
             'unknown_as_fallback': settings.embeddedsubtitles.unknown_as_fallback,
             'fallback_lang': settings.embeddedsubtitles.fallback_lang,
@@ -376,7 +477,7 @@ def get_providers_auth():
             'endpoint': settings.whisperai.endpoint,
             'response': settings.whisperai.response,
             'timeout': settings.whisperai.timeout,
-            'ffmpeg_path': _FFMPEG_BINARY,
+            'ffmpeg_path': _provider_binary("ffmpeg"),
             'loglevel': settings.whisperai.loglevel,
             'pass_video_name': settings.whisperai.pass_video_name,
         },
@@ -418,19 +519,21 @@ def _handle_mgb(name, exception, ids, language):
     if ids:
         if exception.media_type == "series":
             if 'sonarrSeriesId' in ids and 'sonarrEpsiodeId' in ids:
-                blacklist_log(ids['sonarrSeriesId'], ids['sonarrEpisodeId'], name, exception.id, language_str)
+                _blacklist_log()(ids['sonarrSeriesId'], ids['sonarrEpisodeId'], name, exception.id, language_str)
         else:
-            blacklist_log_movie(ids['radarrId'], name, exception.id, language_str)
+            _blacklist_log_movie()(ids['radarrId'], name, exception.id, language_str)
 
 
 def provider_throttle(name, exception, ids=None, language=None):
-    if isinstance(exception, MustGetBlacklisted) and isinstance(ids, dict) and isinstance(language, Language):
+    if isinstance(exception, _subliminal_patch_exception("MustGetBlacklisted")) and \
+            isinstance(ids, dict) and isinstance(language, _language_cls()):
         return _handle_mgb(name, exception, ids, language)
 
     cls = getattr(exception, "__class__")
     cls_name = getattr(cls, "__name__")
-    if cls not in VALID_THROTTLE_EXCEPTIONS:
-        for valid_cls in VALID_THROTTLE_EXCEPTIONS:
+    valid_throttle_exceptions = _valid_throttle_exceptions()
+    if cls not in valid_throttle_exceptions:
+        for valid_cls in valid_throttle_exceptions:
             if isinstance(cls, valid_cls):
                 cls = valid_cls
 
@@ -447,7 +550,7 @@ def provider_throttle(name, exception, ids=None, language=None):
     if cls_name not in VALID_COUNT_EXCEPTIONS or throttled_count(name):
         if cls_name == 'ValueError' and isinstance(exception.args, tuple) and len(exception.args) and exception.args[
             0].startswith('unsupported pickle protocol'):
-            for fn in subliminal_cache_region.backend.all_filenames:
+            for fn in _subliminal_cache_region().backend.all_filenames:
                 try:
                     os.remove(fn)
                 except (IOError, OSError):
@@ -460,7 +563,7 @@ def provider_throttle(name, exception, ids=None, language=None):
 
             logging.info("Throttling %s for %s, until %s, because of: %s. Exception info: %r", name,
                          throttle_description, throttle_until.strftime("%y/%m/%d %H:%M"), cls_name, trac_info)
-            event_tracker.track_throttling(provider=name, exception_name=cls_name, exception_info=trac_info)
+            _event_tracker().track_throttling(provider=name, exception_name=cls_name, exception_info=trac_info)
 
     update_throttled_provider()
 
@@ -511,7 +614,8 @@ def throttled_count(name):
 
 
 def update_throttled_provider():
-    existing_providers = provider_registry.names()
+    settings = _settings()
+    existing_providers = _provider_registry().names()
     providers_list = [x for x in settings.general.enabled_providers if x in existing_providers]
 
     for provider in list(tp):
@@ -539,17 +643,18 @@ def update_throttled_provider():
                     tp.pop(provider, None)
                     set_throttled_providers(str(tp))
 
-    event_stream(type='badges')
+    _event_stream()(type='badges')
 
 
 def list_throttled_providers():
+    settings = _settings()
     update_throttled_provider()
     throttled_providers = []
-    existing_providers = provider_registry.names()
+    existing_providers = _provider_registry().names()
     providers = [x for x in settings.general.enabled_providers if x in existing_providers]
     for provider in providers:
         reason, until, throttle_desc = tp.get(provider, (None, None, None))
-        throttled_providers.append([provider, reason, pretty.date(until)])
+        throttled_providers.append([provider, reason, _pretty().date(until)])
     return throttled_providers
 
 
