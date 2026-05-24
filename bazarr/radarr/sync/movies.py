@@ -17,7 +17,7 @@ from radarr.rootfolder import check_radarr_rootfolder
 from subtitles.indexer.movies import store_subtitles_movie
 from subtitles.mass_download import movies_download_subtitles
 from utilities.path_mappings import path_mappings
-from subtitles.adaptive_searching import is_search_active
+from subtitles.adaptive_searching import get_active_search_languages, get_adaptive_search_policy
 
 from sqlalchemy.exc import IntegrityError
 from .parser import movieParser
@@ -50,6 +50,15 @@ def get_movie_file_size_from_db(movie_path):
 # Update movies in DB
 def update_movie(updated_movie):
     try:
+        previous_movie_data = database.execute(
+            select(TableMovies.movie_file_id, TableMovies.path)
+            .where(TableMovies.radarrId == updated_movie['radarrId'])
+        ).first()
+
+        previous_movie_id = updated_movie['radarrId']
+        previous_movie_file_id = previous_movie_data.movie_file_id
+        previous_movie_path = previous_movie_data.path
+
         updated_movie['updated_at_timestamp'] = datetime.now()
         database.execute(
             update(TableMovies).values(updated_movie)
@@ -57,8 +66,16 @@ def update_movie(updated_movie):
     except IntegrityError as e:
         logging.error(f"BAZARR cannot update movie {updated_movie['path']} because of {e}")
     else:
-        store_subtitles_movie(updated_movie['path'], path_mappings.path_replace_movie(updated_movie['path']))
-        event_stream(type='movie', action='update', payload=updated_movie['radarrId'])
+        if (previous_movie_file_id != updated_movie['movie_file_id'] or
+                previous_movie_path != updated_movie['path']):
+            # Store subtitles for updated movie where path or movie_file_id changed
+            logging.debug(f'BAZARR updating subtitles for movie {updated_movie["path"]}')
+            store_subtitles_movie(updated_movie['radarrId'])
+        else:
+            logging.debug(f'BAZARR skipping subtitle update for movie {updated_movie["path"]} as path '
+                          f'and movie_file_id unchanged')
+
+        event_stream(type='movie', action='update', payload=previous_movie_id)
 
 
 def get_movie_monitored_status(movie_id):
@@ -82,7 +99,7 @@ def add_movie(added_movie):
     except IntegrityError as e:
         logging.error(f"BAZARR cannot insert movie {added_movie['path']} because of {e}")
     else:
-        store_subtitles_movie(added_movie['path'], path_mappings.path_replace_movie(added_movie['path']))
+        store_subtitles_movie(added_movie['radarrId'])
         event_stream(type='movie', action='update', payload=int(added_movie['radarrId']))
 
 
@@ -304,7 +321,7 @@ def update_one_movie(movie_id, action, defer_search=False, is_signalr=False):
             logging.error(f"BAZARR cannot update movie {path_mappings.path_replace_movie(movie['path'])} because "
                           f"of {e}")
         else:
-            store_subtitles_movie(movie['path'], path_mappings.path_replace_movie(movie['path']))
+            store_subtitles_movie(movie_id)
             event_stream(type='movie', action='update', payload=int(movie_id))
             logging.debug(
                 f'BAZARR updated this movie into the database:{path_mappings.path_replace_movie(movie["path"])}')
@@ -320,7 +337,7 @@ def update_one_movie(movie_id, action, defer_search=False, is_signalr=False):
             logging.error(f"BAZARR cannot insert movie {path_mappings.path_replace_movie(movie['path'])} because "
                           f"of {e}")
         else:
-            store_subtitles_movie(movie['path'], path_mappings.path_replace_movie(movie['path']))
+            store_subtitles_movie(movie_id)
             event_stream(type='movie', action='update', payload=int(movie_id))
             logging.debug(
                 f'BAZARR inserted this movie into the database:{path_mappings.path_replace_movie(movie["path"])}')
@@ -377,8 +394,12 @@ def _is_there_missing_subtitles(radarr_id: int) -> bool:
         .select_from(TableMovies)
         .where(reduce(operator.and_, movies_conditions))) \
         .all()
+    adaptive_search_policy = get_adaptive_search_policy()
     for missing_movie in missing_movies:
-        for language in missing_movie.missing_subtitles:
-            if is_search_active(desired_language=language, attempt_string=missing_movie.failedAttempts):
-                return True
+        if get_active_search_languages(
+            missing_movie.missing_subtitles,
+            missing_movie.failedAttempts,
+            adaptive_search_policy=adaptive_search_policy,
+        ):
+            return True
     return False

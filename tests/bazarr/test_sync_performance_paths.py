@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
+from datetime import datetime as _datetime
+import sqlite3
 from types import SimpleNamespace
-import datetime
-import json
+import time
 
 import pytest
 
@@ -27,6 +28,14 @@ def _model(**values):
     return SimpleNamespace(
         __table__=SimpleNamespace(columns=[_Column(name) for name in values]),
         **values,
+    )
+
+
+def _job_queue():
+    return SimpleNamespace(
+        add_job_from_function=lambda *args, **kwargs: None,
+        update_job_progress=lambda *args, **kwargs: None,
+        update_job_name=lambda *args, **kwargs: None,
     )
 
 
@@ -268,18 +277,623 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     assert updated_movies == [{"radarrId": 2, "title": "New Movie 2", "path": "/movies/two.mkv"}]
 
 
-def _job_queue():
-    return SimpleNamespace(
-        add_job_from_function=lambda *args, **kwargs: None,
-        update_job_progress=lambda *args, **kwargs: None,
-        update_job_name=lambda *args, **kwargs: None,
+def test_series_full_scan_skips_clean_unchanged_episode(monkeypatch):
+    from subtitles.indexer import series as series_indexer
+
+    signature = 'sig'
+    episodes = [
+        SimpleNamespace(
+            path='/series/episode.mkv',
+            episode_file_id=123,
+            file_size=456,
+            missing_subtitles='[]',
+            subtitles_last_indexed_episode_file_id=123,
+            subtitles_last_indexed_external_signature=signature,
+            subtitles_last_indexed_file_size=456,
+            subtitles_last_indexed_path='/series/episode.mkv',
+            title='Series',
+            season=1,
+            episode=1,
+            episodeTitle='Pilot',
+            sonarrEpisodeId=101,
+            has_indexed_subtitles=True,
+        ),
+        SimpleNamespace(
+            path='/series/missing.mkv',
+            episode_file_id=124,
+            file_size=457,
+            missing_subtitles='["en"]',
+            subtitles_last_indexed_episode_file_id=124,
+            subtitles_last_indexed_external_signature=signature,
+            subtitles_last_indexed_file_size=457,
+            subtitles_last_indexed_path='/series/missing.mkv',
+            title='Series',
+            season=1,
+            episode=2,
+            episodeTitle='Episode 2',
+            sonarrEpisodeId=102,
+            has_indexed_subtitles=True,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=episodes)
+
+    monkeypatch.setattr(series_indexer, "database", _Database())
+    monkeypatch.setattr(
+        series_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
     )
+    monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda paths: signature)
+    monkeypatch.setattr(
+        series_indexer,
+        "store_subtitles",
+        lambda episode_id, **kwargs: store_calls.append((episode_id, kwargs)),
+    )
+    monkeypatch.setattr(series_indexer.gc, "collect", lambda: None)
+
+    series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(102, {"use_cache": True, "item": episodes[1]})]
+
+
+def test_series_full_scan_does_not_skip_when_signature_changes(monkeypatch):
+    from subtitles.indexer import series as series_indexer
+
+    episodes = [
+        SimpleNamespace(
+            path='/series/episode.mkv',
+            episode_file_id=123,
+            file_size=456,
+            missing_subtitles='[]',
+            subtitles_last_indexed_episode_file_id=123,
+            subtitles_last_indexed_external_signature='old-signature',
+            subtitles_last_indexed_file_size=456,
+            subtitles_last_indexed_path='/series/episode.mkv',
+            title='Series',
+            season=1,
+            episode=1,
+            episodeTitle='Pilot',
+            sonarrEpisodeId=101,
+            has_indexed_subtitles=True,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=episodes)
+
+    monkeypatch.setattr(series_indexer, "database", _Database())
+    monkeypatch.setattr(
+        series_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda paths: 'new-signature')
+    monkeypatch.setattr(
+        series_indexer,
+        "store_subtitles",
+        lambda episode_id, **kwargs: store_calls.append((episode_id, kwargs)),
+    )
+    monkeypatch.setattr(series_indexer.gc, "collect", lambda: None)
+
+    series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(101, {"use_cache": True, "item": episodes[0]})]
+
+
+def test_series_full_scan_does_not_skip_without_indexed_subtitles(monkeypatch):
+    from subtitles.indexer import series as series_indexer
+
+    episodes = [
+        SimpleNamespace(
+            path='/series/episode.mkv',
+            episode_file_id=123,
+            file_size=456,
+            missing_subtitles='[]',
+            subtitles_last_indexed_episode_file_id=123,
+            subtitles_last_indexed_external_signature='sig',
+            subtitles_last_indexed_file_size=456,
+            subtitles_last_indexed_path='/series/episode.mkv',
+            title='Series',
+            season=1,
+            episode=1,
+            episodeTitle='Pilot',
+            sonarrEpisodeId=101,
+            has_indexed_subtitles=False,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=episodes)
+
+    monkeypatch.setattr(series_indexer, "database", _Database())
+    monkeypatch.setattr(
+        series_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda paths: 'sig')
+    monkeypatch.setattr(
+        series_indexer,
+        "store_subtitles",
+        lambda episode_id, **kwargs: store_calls.append((episode_id, kwargs)),
+    )
+    monkeypatch.setattr(series_indexer.gc, "collect", lambda: None)
+
+    series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(101, {"use_cache": True, "item": episodes[0]})]
+
+
+def test_movies_full_scan_skips_clean_unchanged_movie(monkeypatch):
+    from subtitles.indexer import movies as movies_indexer
+
+    movies = [
+        SimpleNamespace(
+            path='/movies/clean.mkv',
+            file_size=100,
+            missing_subtitles='[]',
+            movie_file_id=50,
+            radarrId=1,
+            subtitles_last_indexed_external_signature='sig',
+            subtitles_last_indexed_file_size=100,
+            subtitles_last_indexed_movie_file_id=50,
+            subtitles_last_indexed_path='/movies/clean.mkv',
+            title='Clean Movie',
+            has_indexed_subtitles=True,
+        ),
+        SimpleNamespace(
+            path='/movies/dirty.mkv',
+            file_size=101,
+            missing_subtitles='["en"]',
+            movie_file_id=51,
+            radarrId=2,
+            subtitles_last_indexed_external_signature='sig',
+            subtitles_last_indexed_file_size=101,
+            subtitles_last_indexed_movie_file_id=51,
+            subtitles_last_indexed_path='/movies/dirty.mkv',
+            title='Dirty Movie',
+            has_indexed_subtitles=True,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=movies)
+
+    monkeypatch.setattr(movies_indexer, "database", _Database())
+    monkeypatch.setattr(
+        movies_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(movies_indexer.path_mappings, "path_replace_movie", lambda path: path)
+    monkeypatch.setattr(movies_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(movies_indexer, "_get_movie_subtitles_scan_signature", lambda paths: 'sig')
+    monkeypatch.setattr(
+        movies_indexer,
+        "store_subtitles_movie",
+        lambda radarr_id, **kwargs: store_calls.append((radarr_id, kwargs)),
+    )
+    monkeypatch.setattr(movies_indexer.gc, "collect", lambda: None)
+
+    movies_indexer.movies_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(2, {"use_cache": True, "item": movies[1]})]
+
+
+def test_movies_full_scan_does_not_skip_without_indexed_subtitles(monkeypatch):
+    from subtitles.indexer import movies as movies_indexer
+
+    movies = [
+        SimpleNamespace(
+            path='/movies/clean.mkv',
+            file_size=100,
+            missing_subtitles='[]',
+            movie_file_id=50,
+            radarrId=1,
+            subtitles_last_indexed_external_signature='sig',
+            subtitles_last_indexed_file_size=100,
+            subtitles_last_indexed_movie_file_id=50,
+            subtitles_last_indexed_path='/movies/clean.mkv',
+            title='Clean Movie',
+            has_indexed_subtitles=False,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=movies)
+
+    monkeypatch.setattr(movies_indexer, "database", _Database())
+    monkeypatch.setattr(
+        movies_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(movies_indexer.path_mappings, "path_replace_movie", lambda path: path)
+    monkeypatch.setattr(movies_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(movies_indexer, "_get_movie_subtitles_scan_signature", lambda paths: 'sig')
+    monkeypatch.setattr(
+        movies_indexer,
+        "store_subtitles_movie",
+        lambda radarr_id, **kwargs: store_calls.append((radarr_id, kwargs)),
+    )
+    monkeypatch.setattr(movies_indexer.gc, "collect", lambda: None)
+
+    movies_indexer.movies_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(1, {"use_cache": True, "item": movies[0]})]
+
+
+def test_movies_full_scan_does_not_skip_when_signature_changes(monkeypatch):
+    from subtitles.indexer import movies as movies_indexer
+
+    movies = [
+        SimpleNamespace(
+            path='/movies/clean.mkv',
+            file_size=100,
+            missing_subtitles='[]',
+            movie_file_id=50,
+            radarrId=1,
+            subtitles_last_indexed_external_signature='old-sig',
+            subtitles_last_indexed_file_size=100,
+            subtitles_last_indexed_movie_file_id=50,
+            subtitles_last_indexed_path='/movies/clean.mkv',
+            title='Clean Movie',
+            has_indexed_subtitles=True,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=movies)
+
+    monkeypatch.setattr(movies_indexer, "database", _Database())
+    monkeypatch.setattr(
+        movies_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(movies_indexer.path_mappings, "path_replace_movie", lambda path: path)
+    monkeypatch.setattr(movies_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(movies_indexer, "_get_movie_subtitles_scan_signature", lambda paths: 'new-sig')
+    monkeypatch.setattr(
+        movies_indexer,
+        "store_subtitles_movie",
+        lambda radarr_id, **kwargs: store_calls.append((radarr_id, kwargs)),
+    )
+    monkeypatch.setattr(movies_indexer.gc, "collect", lambda: None)
+
+    movies_indexer.movies_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(1, {"use_cache": True, "item": movies[0]})]
+
+
+def test_get_active_search_languages_parses_attempts_once_for_multiple_languages(monkeypatch):
+    from subtitles import adaptive_searching as adaptive
+
+    now = time.time()
+    attempt_string = str([
+        ['en', now - (30 * 24 * 3600)],
+        ['en', now - (8 * 24 * 3600)],
+        ['fr', now - (30 * 24 * 3600)],
+        ['fr', now - (1 * 24 * 3600)],
+    ])
+    literal_eval_calls = []
+    original_literal_eval = adaptive.ast.literal_eval
+
+    monkeypatch.setattr(
+        adaptive,
+        "settings",
+        SimpleNamespace(
+            general=SimpleNamespace(
+                adaptive_searching=True,
+                adaptive_searching_delay='3w',
+                adaptive_searching_delta='1w',
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        adaptive.ast,
+        "literal_eval",
+        lambda value: literal_eval_calls.append(value) or original_literal_eval(value),
+    )
+
+    active_languages = adaptive.get_active_search_languages(['en', 'fr'], attempt_string)
+
+    assert active_languages == ['en']
+    assert literal_eval_calls == [attempt_string]
+
+
+def test_update_failed_attempts_batches_multiple_languages(monkeypatch):
+    from subtitles import adaptive_searching as adaptive
+
+    class _FakeDatetime:
+        @staticmethod
+        def now():
+            return _datetime.fromtimestamp(1000)
+
+        @staticmethod
+        def timestamp(value):
+            return _datetime.timestamp(value)
+
+        @staticmethod
+        def fromtimestamp(value):
+            return _datetime.fromtimestamp(value)
+
+    monkeypatch.setattr(adaptive, "datetime", _FakeDatetime)
+
+    updated = adaptive.update_failed_attempts(
+        ['en', 'fr'],
+        str([['en', 100], ['en', 200], ['fr', 300], ['es', 50]]),
+    )
+
+    assert updated == str([
+        ['en', 100],
+        ['en', 1000.0],
+        ['es', 50],
+        ['fr', 300],
+        ['fr', 1000.0],
+    ])
+
+
+def test_get_adaptive_search_policy_reuses_cached_timedeltas(monkeypatch):
+    from subtitles import adaptive_searching as adaptive
+
+    original_get_adaptive_timedelta = adaptive._get_adaptive_timedelta
+    adaptive._get_cached_policy_components.cache_clear()
+    timedelta_calls = []
+
+    monkeypatch.setattr(
+        adaptive,
+        "settings",
+        SimpleNamespace(
+            general=SimpleNamespace(
+                adaptive_searching=True,
+                adaptive_searching_delay='3w',
+                adaptive_searching_delta='1w',
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        adaptive,
+        "_get_adaptive_timedelta",
+        lambda name, value: timedelta_calls.append((name, value)) or original_get_adaptive_timedelta(name, value),
+    )
+
+    first_policy = adaptive.get_adaptive_search_policy()
+    second_policy = adaptive.get_adaptive_search_policy()
+
+    assert first_policy["delay"] == second_policy["delay"]
+    assert first_policy["delta"] == second_policy["delta"]
+    assert len(timedelta_calls) == 2
+
+
+def test_get_adaptive_search_policy_avoids_reloading_settings_within_ttl(monkeypatch):
+    from subtitles import adaptive_searching as adaptive
+
+    class _General:
+        def __init__(self):
+            self.calls = 0
+
+        @property
+        def adaptive_searching(self):
+            self.calls += 1
+            return True
+
+        @property
+        def adaptive_searching_delay(self):
+            self.calls += 1
+            return '3w'
+
+        @property
+        def adaptive_searching_delta(self):
+            self.calls += 1
+            return '1w'
+
+    general = _General()
+    adaptive._get_cached_policy_components.cache_clear()
+    adaptive._adaptive_policy_cache["expires_at"] = 0.0
+    adaptive._adaptive_policy_cache["policy_components"] = None
+    monotonic_values = iter([100.0, 100.0, 100.5, 100.5])
+
+    monkeypatch.setattr(adaptive, "settings", SimpleNamespace(general=general))
+    monkeypatch.setattr(adaptive, "monotonic", lambda: next(monotonic_values))
+
+    first_policy = adaptive.get_adaptive_search_policy()
+    second_policy = adaptive.get_adaptive_search_policy()
+
+    assert first_policy["delay"] == second_policy["delay"]
+    assert first_policy["delta"] == second_policy["delta"]
+    assert general.calls == 3
+
+
+def test_wanted_episode_updates_failed_attempts_once_for_all_due_languages(monkeypatch):
+    from subtitles.wanted import series as wanted_series
+
+    execute_calls = []
+    update_calls = []
+    generated_languages = []
+    episode = SimpleNamespace(
+        audio_language='eng',
+        failedAttempts='[]',
+        missing_subtitles='["en", "fr"]',
+        path='/series/episode.mkv',
+        profileId=1,
+        sceneName='scene',
+        sonarrEpisodeId=101,
+        sonarrSeriesId=202,
+        title='Series',
+    )
+
+    class _Database:
+        def execute(self, statement):
+            execute_calls.append(statement)
+            return _Result()
+
+    monkeypatch.setattr(wanted_series, "database", _Database())
+    monkeypatch.setattr(wanted_series, "get_audio_profile_languages", lambda *args, **kwargs: [])
+    monkeypatch.setattr(wanted_series, "get_due_missing_languages", lambda *args, **kwargs: ['en', 'fr'])
+    monkeypatch.setattr(
+        wanted_series,
+        "generate_subtitles",
+        lambda path, languages, *args, **kwargs: generated_languages.append(languages) or iter(()),
+    )
+    monkeypatch.setattr(
+        wanted_series,
+        "update_failed_attempts",
+        lambda languages, attempts: update_calls.append((languages, attempts)) or 'updated-attempts',
+    )
+    monkeypatch.setattr(wanted_series.path_mappings, "path_replace", lambda path: path)
+
+    wanted_series._wanted_episode(episode, ['provider'], adaptive_search_policy='policy')
+
+    assert generated_languages == [[('en', 'False', 'False'), ('fr', 'False', 'False')]]
+    assert update_calls == [(['en', 'fr'], '[]')]
+    assert len(execute_calls) == 1
+
+
+def test_wanted_download_subtitles_uses_passed_provider_and_policy(monkeypatch):
+    from subtitles.wanted import series as wanted_series
+
+    wanted_calls = []
+    episode = SimpleNamespace(
+        path='/series/episode.mkv',
+        missing_subtitles='["en"]',
+        sonarrEpisodeId=101,
+        sonarrSeriesId=202,
+        audio_language='eng',
+        sceneName='scene',
+        failedAttempts='[]',
+        title='Series',
+        profileId=1,
+    )
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(first_value=episode)
+
+    monkeypatch.setattr(wanted_series, "database", _Database())
+    monkeypatch.setattr(wanted_series, "get_subtitles", lambda *args, **kwargs: [{"embedded_track_id": 1, "path": "/tmp/sub.srt"}])
+    monkeypatch.setattr(wanted_series, "get_providers", lambda: pytest.fail("wanted_download_subtitles should reuse passed providers"))
+    monkeypatch.setattr(
+        wanted_series,
+        "_wanted_episode",
+        lambda episode_details, providers_list, **kwargs: wanted_calls.append((episode_details, providers_list, kwargs)),
+    )
+
+    wanted_series.wanted_download_subtitles(
+        101,
+        job_id='job',
+        providers_list=['provider'],
+        adaptive_search_policy='policy',
+    )
+
+    assert wanted_calls == [
+        (episode, ['provider'], {'due_languages': None, 'job_id': 'job', 'adaptive_search_policy': 'policy'})
+    ]
+
+
+def test_wanted_series_scan_uses_bulk_episode_row_when_already_complete(monkeypatch):
+    from subtitles.wanted import series as wanted_series
+
+    download_calls = []
+    wanted_calls = []
+    episodes = [
+        SimpleNamespace(
+            audio_language='eng',
+            episode=1,
+            episodeTitle='Pilot',
+            failedAttempts='[]',
+            has_incomplete_embedded_subtitles=False,
+            has_indexed_subtitles=True,
+            missing_subtitles='["en"]',
+            monitored='True',
+            path='/series/episode.mkv',
+            profileId=1,
+            sceneName='scene',
+            season=1,
+            seriesType='standard',
+            sonarrEpisodeId=101,
+            sonarrSeriesId=202,
+            tags='[]',
+            title='Series',
+        ),
+    ]
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=episodes)
+
+    monkeypatch.setattr(wanted_series, "database", _Database())
+    monkeypatch.setattr(wanted_series, "jobs_queue", _job_queue())
+    monkeypatch.setattr(wanted_series, "get_providers", lambda: ['provider'])
+    monkeypatch.setattr(wanted_series, "get_adaptive_search_policy", lambda: 'policy')
+    monkeypatch.setattr(
+        wanted_series,
+        "_wanted_episode",
+        lambda episode, providers_list, **kwargs: wanted_calls.append((episode, providers_list, kwargs)),
+    )
+    monkeypatch.setattr(
+        wanted_series,
+        "wanted_download_subtitles",
+        lambda *args, **kwargs: download_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(wanted_series.gc, "collect", lambda: None)
+
+    wanted_series.wanted_search_missing_subtitles_series(job_id="job")
+
+    assert download_calls == []
+    assert wanted_calls == [
+        (episodes[0], ['provider'], {'due_languages': ['en'], 'job_id': 'job', 'adaptive_search_policy': 'policy'})
+    ]
 
 
 def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(monkeypatch):
     from subtitles.wanted import series as wanted_series
-    from subtitles.wanted import utils as wanted_utils
 
+    policy = object()
     rows = [
         SimpleNamespace(
             sonarrSeriesId=1,
@@ -295,9 +909,10 @@ def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(mo
             audio_language="eng",
             sceneName="Scene",
             profileId=1,
-            subtitles="[]",
             missing_subtitles='["en"]',
             failedAttempts="[]",
+            has_indexed_subtitles=True,
+            has_incomplete_embedded_subtitles=False,
         ),
         SimpleNamespace(
             sonarrSeriesId=2,
@@ -313,45 +928,55 @@ def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(mo
             audio_language="eng",
             sceneName="Scene",
             profileId=1,
-            subtitles="[]",
             missing_subtitles='["fr"]',
             failedAttempts='[["fr", 1.0], ["fr", 2.0]]',
+            has_indexed_subtitles=True,
+            has_incomplete_embedded_subtitles=False,
         ),
     ]
+    provider_calls = []
+    wanted_calls = []
 
     class _Database:
         def execute(self, statement):
             return _Result(all_value=rows)
 
-    provider_calls = []
-    downloads = []
     monkeypatch.setattr(wanted_series, "database", _Database())
     monkeypatch.setattr(wanted_series, "jobs_queue", _job_queue())
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_providers", lambda: provider_calls.append(True) or ["provider"])
+    monkeypatch.setattr(wanted_series, "get_adaptive_search_policy", lambda: policy)
     monkeypatch.setattr(
-        wanted_utils,
-        "get_active_search_languages",
-        lambda desired_languages, attempt_string, adaptive_search_policy=None: [
-            language for language in desired_languages if language == "en"
-        ],
+        wanted_series,
+        "get_due_missing_languages",
+        lambda missing_subtitles, failed_attempts, adaptive_search_policy=None: ["en"]
+        if missing_subtitles == '["en"]'
+        else [],
+    )
+    monkeypatch.setattr(
+        wanted_series,
+        "_wanted_episode",
+        lambda episode, providers_list, **kwargs: wanted_calls.append((episode.sonarrEpisodeId, providers_list, kwargs)),
     )
     monkeypatch.setattr(
         wanted_series,
         "wanted_download_subtitles",
-        lambda episode_id, **kwargs: downloads.append((episode_id, kwargs["episode_details"], kwargs["due_languages"])),
+        lambda *args, **kwargs: pytest.fail("complete rows should use _wanted_episode directly"),
     )
+    monkeypatch.setattr(wanted_series.gc, "collect", lambda: None)
 
     wanted_series.wanted_search_missing_subtitles_series(job_id="job")
 
     assert provider_calls == [True]
-    assert downloads == [(10, rows[0], ["en"])]
+    assert wanted_calls == [
+        (10, ["provider"], {"due_languages": ["en"], "job_id": "job", "adaptive_search_policy": policy})
+    ]
 
 
 def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(monkeypatch):
     from subtitles.wanted import movies as wanted_movies
-    from subtitles.wanted import utils as wanted_utils
 
+    policy = object()
     rows = [
         SimpleNamespace(
             radarrId=10,
@@ -360,9 +985,10 @@ def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(mon
             audio_language="eng",
             sceneName="Scene",
             profileId=1,
-            subtitles="[]",
             missing_subtitles='["en"]',
             failedAttempts="[]",
+            has_indexed_subtitles=True,
+            has_incomplete_embedded_subtitles=False,
         ),
         SimpleNamespace(
             radarrId=20,
@@ -371,118 +997,48 @@ def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(mon
             audio_language="eng",
             sceneName="Scene",
             profileId=1,
-            subtitles="[]",
             missing_subtitles='["fr"]',
             failedAttempts='[["fr", 1.0], ["fr", 2.0]]',
+            has_indexed_subtitles=True,
+            has_incomplete_embedded_subtitles=False,
         ),
     ]
+    provider_calls = []
+    wanted_calls = []
 
     class _Database:
         def execute(self, statement):
             return _Result(all_value=rows)
 
-    provider_calls = []
-    downloads = []
     monkeypatch.setattr(wanted_movies, "database", _Database())
     monkeypatch.setattr(wanted_movies, "jobs_queue", _job_queue())
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_providers", lambda: provider_calls.append(True) or ["provider"])
+    monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: policy)
     monkeypatch.setattr(
-        wanted_utils,
-        "get_active_search_languages",
-        lambda desired_languages, attempt_string, adaptive_search_policy=None: [
-            language for language in desired_languages if language == "en"
-        ],
+        wanted_movies,
+        "get_due_missing_languages",
+        lambda missing_subtitles, failed_attempts, adaptive_search_policy=None: ["en"]
+        if missing_subtitles == '["en"]'
+        else [],
+    )
+    monkeypatch.setattr(
+        wanted_movies,
+        "_wanted_movie",
+        lambda movie, providers_list, **kwargs: wanted_calls.append((movie.radarrId, providers_list, kwargs)),
     )
     monkeypatch.setattr(
         wanted_movies,
         "wanted_download_subtitles_movie",
-        lambda radarr_id, **kwargs: downloads.append((radarr_id, kwargs["movie"], kwargs["due_languages"])),
+        lambda *args, **kwargs: pytest.fail("complete rows should use _wanted_movie directly"),
     )
 
     wanted_movies.wanted_search_missing_subtitles_movies(job_id="job")
 
     assert provider_calls == [True]
-    assert downloads == [(10, rows[0], ["en"])]
-
-
-def test_movie_wanted_search_builds_adaptive_policy_once(monkeypatch):
-    from subtitles.wanted import movies as wanted_movies
-
-    rows = [
-        SimpleNamespace(
-            radarrId=10,
-            path="/movies/due-a.mkv",
-            title="Due A",
-            audio_language="eng",
-            sceneName="Scene",
-            profileId=1,
-            subtitles="[]",
-            missing_subtitles='["en"]',
-            failedAttempts="[]",
-        ),
-        SimpleNamespace(
-            radarrId=20,
-            path="/movies/due-b.mkv",
-            title="Due B",
-            audio_language="eng",
-            sceneName="Scene",
-            profileId=1,
-            subtitles="[]",
-            missing_subtitles='["fr"]',
-            failedAttempts="[]",
-        ),
+    assert wanted_calls == [
+        (10, ["provider"], {"due_languages": ["en"], "job_id": "job", "adaptive_search_policy": policy})
     ]
-
-    class _Database:
-        def execute(self, statement):
-            return _Result(all_value=rows)
-
-    policy = object()
-    due_policy_calls = []
-
-    monkeypatch.setattr(wanted_movies, "database", _Database())
-    monkeypatch.setattr(wanted_movies, "jobs_queue", _job_queue())
-    monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
-    monkeypatch.setattr(wanted_movies, "get_providers", lambda: ["provider"])
-    monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: policy)
-    monkeypatch.setattr(
-        wanted_movies,
-        "get_due_missing_languages",
-        lambda missing_subtitles, failed_attempts, adaptive_search_policy=None: (
-            due_policy_calls.append(adaptive_search_policy) or ["en"]
-        ),
-    )
-    monkeypatch.setattr(wanted_movies, "wanted_download_subtitles_movie", lambda *args, **kwargs: None)
-
-    wanted_movies.wanted_search_missing_subtitles_movies(job_id="job")
-
-    assert due_policy_calls == [policy, policy]
-
-
-def test_adaptive_search_throttle_skip_is_not_logged_per_item(monkeypatch, caplog):
-    from subtitles.wanted import movies as wanted_movies
-
-    movie = SimpleNamespace(
-        audio_language="eng",
-        missing_subtitles='["en", "fr"]',
-        failedAttempts='[["en", 1.0], ["fr", 1.0]]',
-        path="/movies/movie.mkv",
-        sceneName="Scene",
-        title="Movie",
-        profileId=1,
-        radarrId=10,
-    )
-
-    monkeypatch.setattr(wanted_movies, "get_audio_profile_languages", lambda audio_language: [])
-    monkeypatch.setattr(wanted_movies, "get_due_missing_languages", lambda missing_subtitles, failed_attempts: [])
-    monkeypatch.setattr(wanted_movies.path_mappings, "path_replace_movie", lambda path: path)
-    monkeypatch.setattr(wanted_movies, "generate_subtitles", lambda *args, **kwargs: iter(()))
-
-    with caplog.at_level("DEBUG"):
-        wanted_movies._wanted_movie(movie, providers_list=["provider"], job_id="job")
-
-    assert "Search is throttled by adaptive search" not in caplog.text
 
 
 def test_wanted_download_movie_reuses_prefetched_row_and_due_languages(monkeypatch):
@@ -497,7 +1053,8 @@ def test_wanted_download_movie_reuses_prefetched_row_and_due_languages(monkeypat
         failedAttempts="[]",
         title="Movie",
         profileId=1,
-        subtitles="[]",
+        has_indexed_subtitles=True,
+        has_incomplete_embedded_subtitles=False,
     )
     wanted_calls = []
 
@@ -509,9 +1066,7 @@ def test_wanted_download_movie_reuses_prefetched_row_and_due_languages(monkeypat
     monkeypatch.setattr(
         wanted_movies,
         "_wanted_movie",
-        lambda movie_arg, providers_list, due_languages=None, **kwargs: wanted_calls.append(
-            (movie_arg, providers_list, due_languages)
-        ),
+        lambda movie_arg, providers_list, **kwargs: wanted_calls.append((movie_arg, providers_list, kwargs)),
     )
 
     wanted_movies.wanted_download_subtitles_movie(
@@ -520,36 +1075,12 @@ def test_wanted_download_movie_reuses_prefetched_row_and_due_languages(monkeypat
         providers_list=["provider"],
         movie=movie,
         due_languages=["en"],
+        adaptive_search_policy="policy",
     )
 
-    assert wanted_calls == [(movie, ["provider"], ["en"])]
-
-
-def test_wanted_download_movie_skips_select_build_for_prefetched_row(monkeypatch):
-    from subtitles.wanted import movies as wanted_movies
-
-    movie = SimpleNamespace(
-        path="/movies/movie.mkv",
-        missing_subtitles='["en"]',
-        radarrId=10,
-        audio_language="eng",
-        sceneName="Scene",
-        failedAttempts="[]",
-        title="Movie",
-        profileId=1,
-        subtitles="[]",
-    )
-
-    monkeypatch.setattr(wanted_movies, "select", lambda *args, **kwargs: pytest.fail("select should not be built"))
-    monkeypatch.setattr(wanted_movies, "_wanted_movie", lambda *args, **kwargs: None)
-
-    wanted_movies.wanted_download_subtitles_movie(
-        movie.radarrId,
-        job_id="job",
-        providers_list=["provider"],
-        movie=movie,
-        due_languages=["en"],
-    )
+    assert wanted_calls == [
+        (movie, ["provider"], {"due_languages": ["en"], "job_id": "job", "adaptive_search_policy": "policy"})
+    ]
 
 
 def test_wanted_download_series_reuses_prefetched_row_and_due_languages(monkeypatch):
@@ -565,7 +1096,8 @@ def test_wanted_download_series_reuses_prefetched_row_and_due_languages(monkeypa
         failedAttempts="[]",
         title="Series",
         profileId=1,
-        subtitles="[]",
+        has_indexed_subtitles=True,
+        has_incomplete_embedded_subtitles=False,
     )
     wanted_calls = []
 
@@ -577,9 +1109,7 @@ def test_wanted_download_series_reuses_prefetched_row_and_due_languages(monkeypa
     monkeypatch.setattr(
         wanted_series,
         "_wanted_episode",
-        lambda episode_arg, providers_list, due_languages=None, **kwargs: wanted_calls.append(
-            (episode_arg, providers_list, due_languages)
-        ),
+        lambda episode_arg, providers_list, **kwargs: wanted_calls.append((episode_arg, providers_list, kwargs)),
     )
 
     wanted_series.wanted_download_subtitles(
@@ -588,339 +1118,40 @@ def test_wanted_download_series_reuses_prefetched_row_and_due_languages(monkeypa
         providers_list=["provider"],
         episode_details=episode,
         due_languages=["en"],
+        adaptive_search_policy="policy",
     )
 
-    assert wanted_calls == [(episode, ["provider"], ["en"])]
+    assert wanted_calls == [
+        (episode, ["provider"], {"due_languages": ["en"], "job_id": "job", "adaptive_search_policy": "policy"})
+    ]
 
 
-def test_wanted_download_series_skips_select_build_for_prefetched_row(monkeypatch):
-    from subtitles.wanted import series as wanted_series
+def test_copy_config_tree_creates_missing_subtitle_tables(tmp_path):
+    from tests.benchmarks.helpers import copy_config_tree
 
-    episode = SimpleNamespace(
-        path="/series/episode.mkv",
-        missing_subtitles='["en"]',
-        sonarrEpisodeId=10,
-        sonarrSeriesId=20,
-        audio_language="eng",
-        sceneName="Scene",
-        failedAttempts="[]",
-        title="Series",
-        profileId=1,
-        subtitles="[]",
-    )
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    (source / "db").mkdir(parents=True)
+    (source / "config").mkdir(parents=True)
+    (source / "config" / "config.yaml").write_text("general: {}\n", encoding="utf-8")
 
-    monkeypatch.setattr(wanted_series, "select", lambda *args, **kwargs: pytest.fail("select should not be built"))
-    monkeypatch.setattr(wanted_series, "_wanted_episode", lambda *args, **kwargs: None)
-
-    wanted_series.wanted_download_subtitles(
-        episode.sonarrEpisodeId,
-        job_id="job",
-        providers_list=["provider"],
-        episode_details=episode,
-        due_languages=["en"],
-    )
-
-
-def test_serialized_subtitle_helpers_accept_json_and_legacy_literals():
-    from subtitles.serialization import dump_text_list, parse_missing_subtitles
-
-    assert parse_missing_subtitles('["en", "fr:hi"]') == ["en", "fr:hi"]
-    assert parse_missing_subtitles("['en', 'fr:hi']") == ["en", "fr:hi"]
-    assert dump_text_list(["en"]) == '["en"]'
-
-
-def test_update_failed_attempts_writes_json(monkeypatch):
-    from subtitles import adaptive_searching
-
-    fake_now = datetime.datetime(2026, 5, 23, 14, 0, 0)
-    monkeypatch.setattr(
-        adaptive_searching,
-        "datetime",
-        SimpleNamespace(now=lambda: fake_now, timestamp=datetime.datetime.timestamp),
-    )
-
-    updated = adaptive_searching.updateFailedAttempts("en", "[['fr', 1.0]]")
-
-    assert json.loads(updated) == [["en", fake_now.timestamp()], ["fr", 1.0]]
-
-
-def test_get_active_search_languages_evaluates_attempts_once(monkeypatch):
-    from subtitles import adaptive_searching
-
-    fake_now = datetime.datetime(2026, 5, 23, 14, 0, 0)
-    monkeypatch.setattr(
-        adaptive_searching,
-        "settings",
-        SimpleNamespace(
-            general=SimpleNamespace(
-                adaptive_searching=True,
-                adaptive_searching_delay="3w",
-                adaptive_searching_delta="1w",
-            )
-        ),
-    )
-    monkeypatch.setattr(adaptive_searching, "datetime", SimpleNamespace(now=lambda: fake_now, fromtimestamp=datetime.datetime.fromtimestamp))
-
-    due_languages = adaptive_searching.get_active_search_languages(
-        ["en", "fr", "de"],
-        json.dumps([
-            ["en", fake_now.timestamp() - (8 * 24 * 60 * 60)],
-            ["en", fake_now.timestamp() - (2 * 24 * 60 * 60)],
-            ["fr", fake_now.timestamp() - (40 * 24 * 60 * 60)],
-            ["fr", fake_now.timestamp() - (2 * 24 * 60 * 60)],
-        ]),
-    )
-
-    assert due_languages == ["en", "de"]
-
-
-def test_get_active_search_languages_uses_supplied_policy_without_reading_settings(monkeypatch):
-    from subtitles import adaptive_searching
-
-    fake_now = datetime.datetime(2026, 5, 23, 14, 0, 0)
-    monkeypatch.setattr(
-        adaptive_searching,
-        "settings",
-        SimpleNamespace(general=SimpleNamespace(__getattr__=lambda *args, **kwargs: pytest.fail("settings should not be read"))),
-    )
-    monkeypatch.setattr(
-        adaptive_searching,
-        "datetime",
-        SimpleNamespace(now=lambda: fake_now, fromtimestamp=datetime.datetime.fromtimestamp),
-    )
-
-    policy = adaptive_searching.AdaptiveSearchPolicy(
-        enabled=True,
-        delay_setting="3w",
-        delta_setting="1w",
-        extended_search_delay=datetime.timedelta(weeks=3),
-        extended_search_delta=datetime.timedelta(weeks=1),
-    )
-
-    due_languages = adaptive_searching.get_active_search_languages(
-        ["en", "fr"],
-        json.dumps([
-            ["en", fake_now.timestamp() - (40 * 24 * 60 * 60)],
-            ["en", fake_now.timestamp() - (10 * 24 * 60 * 60)],
-            ["fr", fake_now.timestamp() - (8 * 24 * 60 * 60)],
-            ["fr", fake_now.timestamp() - (2 * 24 * 60 * 60)],
-        ]),
-        adaptive_search_policy=policy,
-    )
-
-    assert due_languages == ["en", "fr"]
-
-
-def test_generate_subtitles_rechecks_missing_languages_only_after_save(monkeypatch):
-    from subtitles import download
-    from subtitles import pool as subtitles_pool
-
-    class _Language:
-        def __init__(self, basename):
-            self.hi = False
-            self.forced = False
-            self.basename = basename
-
-    class _Subtitle:
-        def __init__(self):
-            self.format = "srt"
-            self.matches = {"hash"}
-            self.storage_path = "/tmp/subtitle.srt"
-            self.provider_name = "provider"
-            self.uploader = "uploader"
-            self.release_info = "release"
-            self.score = 100
-            self.id = "subtitle-id"
-            self.language = SimpleNamespace(hi=False, forced=False)
-
-    class _Pool:
-        providers = ["provider"]
-
-    class _Video:
-        def __init__(self):
-            self.original_path = "/video.mkv"
-
-    check_calls = []
-    processed = SimpleNamespace(message="ok", matches={"hash"})
-    en_language = _Language("en")
-    fr_language = _Language("fr")
-    video = _Video()
-
-    monkeypatch.setattr(download, "_get_pool", lambda media_type, profile_id: _Pool())
-    monkeypatch.setattr(subtitles_pool, "_update_pool", lambda media_type, profile_id: False)
-    monkeypatch.setattr(download, "_get_language_obj", lambda languages: [en_language, fr_language])
-    monkeypatch.setattr(download, "_set_forced_providers", lambda **kwargs: None)
-    monkeypatch.setattr(download, "get_profiles_list", lambda profile_id: {"originalFormat": False})
-    monkeypatch.setattr(download, "get_video", lambda *args, **kwargs: video)
-    monkeypatch.setattr(download, "_get_scores", lambda *args, **kwargs: (0, 100, {}))
-    monkeypatch.setattr(download, "get_array_from", lambda value: [])
-    monkeypatch.setattr(download, "download_best_subtitles", lambda **kwargs: {video: [_Subtitle()]})
-    monkeypatch.setattr(download, "get_target_folder", lambda path: None)
-    monkeypatch.setattr(download, "save_subtitles", lambda *args, **kwargs: [_Subtitle()])
-    monkeypatch.setattr(download, "process_subtitle", lambda **kwargs: processed)
-    monkeypatch.setattr(download.subliminal, "region", SimpleNamespace(backend=SimpleNamespace(sync=lambda: None)))
-    monkeypatch.setattr(
-        download,
-        "check_missing_languages",
-        lambda path, media_type: check_calls.append((path, media_type)) or {en_language},
-    )
-
-    results = list(
-        download.generate_subtitles(
-            "/video.mkv",
-            [("en", "False", "False"), ("fr", "False", "False")],
-            "None",
-            "Scene",
-            "Title",
-            "movie",
-            1,
-            check_if_still_required=True,
-            job_id="job",
+    with sqlite3.connect(source / "db" / "bazarr.db") as conn:
+        conn.executescript(
+            """
+            CREATE TABLE table_movies (radarrId INTEGER PRIMARY KEY);
+            CREATE TABLE table_shows (sonarrSeriesId INTEGER PRIMARY KEY);
+            CREATE TABLE table_episodes (sonarrEpisodeId INTEGER PRIMARY KEY, sonarrSeriesId INTEGER);
+            """
         )
-    )
+        conn.commit()
 
-    assert results == [processed]
-    assert check_calls == [("/video.mkv", "movie"), ("/video.mkv", "movie")]
+    copy_config_tree(source, target)
 
+    with sqlite3.connect(target / "db" / "bazarr.db") as conn:
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
 
-def test_wanted_movie_search_emits_one_progress_update_per_item(monkeypatch):
-    from subtitles.wanted import movies as wanted_movies
-
-    rows = [
-        SimpleNamespace(
-            radarrId=10,
-            path="/movies/due.mkv",
-            title="Due Movie",
-            audio_language="eng",
-            sceneName="Scene",
-            profileId=1,
-            subtitles="[]",
-            missing_subtitles='["en"]',
-            failedAttempts="[]",
-        ),
-    ]
-
-    progress_updates = []
-
-    class _Database:
-        def execute(self, statement):
-            return _Result(all_value=rows)
-
-    monkeypatch.setattr(wanted_movies, "database", _Database())
-    monkeypatch.setattr(
-        wanted_movies,
-        "jobs_queue",
-        SimpleNamespace(
-            add_job_from_function=lambda *args, **kwargs: None,
-            update_job_progress=lambda *args, **kwargs: progress_updates.append(kwargs),
-            update_job_name=lambda *args, **kwargs: None,
-        ),
-    )
-    monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
-    monkeypatch.setattr(wanted_movies, "get_providers", lambda: ["provider"])
-    monkeypatch.setattr(
-        wanted_movies,
-        "get_due_missing_languages",
-        lambda missing_subtitles, failed_attempts, adaptive_search_policy=None: ["en"],
-    )
-    monkeypatch.setattr(wanted_movies, "wanted_download_subtitles_movie", lambda *args, **kwargs: None)
-
-    wanted_movies.wanted_search_missing_subtitles_movies(job_id="job")
-
-    per_item_updates = [
-        update for update in progress_updates
-        if update.get("progress_value") == 1 and update.get("progress_message") == "Due Movie"
-    ]
-    assert len(per_item_updates) == 1
-
-
-def test_wanted_series_search_emits_one_progress_update_per_item(monkeypatch):
-    from subtitles.wanted import series as wanted_series
-
-    rows = [
-        SimpleNamespace(
-            path="/series/episode.mkv",
-            sonarrSeriesId=1,
-            sonarrEpisodeId=10,
-            audio_language="eng",
-            sceneName="Scene",
-            failedAttempts="[]",
-            title="Series",
-            profileId=1,
-            season=1,
-            episode=2,
-            episodeTitle="Episode",
-            missing_subtitles='["en"]',
-            subtitles="[]",
-        ),
-    ]
-
-    progress_updates = []
-
-    class _Database:
-        def execute(self, statement):
-            return _Result(all_value=rows)
-
-    monkeypatch.setattr(wanted_series, "database", _Database())
-    monkeypatch.setattr(
-        wanted_series,
-        "jobs_queue",
-        SimpleNamespace(
-            add_job_from_function=lambda *args, **kwargs: None,
-            update_job_progress=lambda *args, **kwargs: progress_updates.append(kwargs),
-            update_job_name=lambda *args, **kwargs: None,
-        ),
-    )
-    monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
-    monkeypatch.setattr(wanted_series, "get_providers", lambda: ["provider"])
-    monkeypatch.setattr(
-        wanted_series,
-        "get_due_missing_languages",
-        lambda missing_subtitles, failed_attempts, adaptive_search_policy=None: ["en"],
-    )
-    monkeypatch.setattr(wanted_series, "wanted_download_subtitles", lambda *args, **kwargs: None)
-
-    wanted_series.wanted_search_missing_subtitles_series(job_id="job")
-
-    per_item_updates = [
-        update for update in progress_updates
-        if update.get("progress_value") == 1 and update.get("progress_message") == "Series - S01E02 - Episode"
-    ]
-    assert len(per_item_updates) == 1
-
-
-def test_get_providers_expired_throttle_cleanup_is_idempotent(monkeypatch):
-    from app import get_providers as providers
-
-    provider = "opensubtitlescom"
-    providers.tp.clear()
-    providers.tp[provider] = ("TooManyRequests", datetime.datetime.now(), "1 minute")
-
-    removed_once = {"done": False}
-
-    class _RacingThrottle(dict):
-        def __delitem__(self, key):
-            if not removed_once["done"]:
-                removed_once["done"] = True
-                super().__delitem__(key)
-                raise KeyError(key)
-            super().__delitem__(key)
-
-    racing_tp = _RacingThrottle(providers.tp)
-    monkeypatch.setattr(providers, "tp", racing_tp)
-    monkeypatch.setattr(providers.provider_registry, "names", lambda: [provider])
-    monkeypatch.setattr(providers, "settings", SimpleNamespace(general=SimpleNamespace(enabled_providers=[provider])))
-    monkeypatch.setattr(providers, "set_throttled_providers", lambda data: None)
-
-    assert providers.get_providers() == [provider]
-
-
-def test_wanted_search_indexes_are_declared_on_models():
-    from app.database import TableEpisodes, TableMovies
-
-    episode_indexes = {index.name for index in TableEpisodes.__table__.indexes}
-    movie_indexes = {index.name for index in TableMovies.__table__.indexes}
-
-    assert "idx_table_episodes_sonarrSeriesId" in episode_indexes
-    assert "idx_table_episodes_missing_subtitles" in episode_indexes
-    assert "idx_table_movies_missing_subtitles" in movie_indexes
+    assert "table_episodes_subtitles" in tables
+    assert "table_movies_subtitles" in tables
