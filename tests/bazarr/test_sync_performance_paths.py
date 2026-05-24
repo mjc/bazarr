@@ -264,3 +264,176 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     movies_sync.update_movies(job_id="job")
 
     assert updated_movies == [{"radarrId": 2, "title": "New Movie 2", "path": "/movies/two.mkv"}]
+
+
+def test_series_full_scan_skips_clean_unchanged_episode(monkeypatch):
+    from subtitles.indexer import series as series_indexer
+
+    signature = 'sig'
+    episodes = [
+        SimpleNamespace(
+            path='/series/episode.mkv',
+            episode_file_id=123,
+            file_size=456,
+            missing_subtitles='[]',
+            subtitles_last_indexed_episode_file_id=123,
+            subtitles_last_indexed_external_signature=signature,
+            subtitles_last_indexed_file_size=456,
+            subtitles_last_indexed_path='/series/episode.mkv',
+            title='Series',
+            season=1,
+            episode=1,
+            episodeTitle='Pilot',
+            sonarrEpisodeId=101,
+            has_indexed_subtitles=True,
+        ),
+        SimpleNamespace(
+            path='/series/missing.mkv',
+            episode_file_id=124,
+            file_size=457,
+            missing_subtitles='["en"]',
+            subtitles_last_indexed_episode_file_id=124,
+            subtitles_last_indexed_external_signature=signature,
+            subtitles_last_indexed_file_size=457,
+            subtitles_last_indexed_path='/series/missing.mkv',
+            title='Series',
+            season=1,
+            episode=2,
+            episodeTitle='Episode 2',
+            sonarrEpisodeId=102,
+            has_indexed_subtitles=True,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=episodes)
+
+    monkeypatch.setattr(series_indexer, "database", _Database())
+    monkeypatch.setattr(
+        series_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda paths: signature)
+    monkeypatch.setattr(
+        series_indexer,
+        "store_subtitles",
+        lambda episode_id, **kwargs: store_calls.append((episode_id, kwargs)),
+    )
+    monkeypatch.setattr(series_indexer.gc, "collect", lambda: None)
+
+    series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(102, {"use_cache": True, "item": episodes[1]})]
+
+
+def test_series_full_scan_does_not_skip_when_signature_changes(monkeypatch):
+    from subtitles.indexer import series as series_indexer
+
+    episodes = [
+        SimpleNamespace(
+            path='/series/episode.mkv',
+            episode_file_id=123,
+            file_size=456,
+            missing_subtitles='[]',
+            subtitles_last_indexed_episode_file_id=123,
+            subtitles_last_indexed_external_signature='old-signature',
+            subtitles_last_indexed_file_size=456,
+            subtitles_last_indexed_path='/series/episode.mkv',
+            title='Series',
+            season=1,
+            episode=1,
+            episodeTitle='Pilot',
+            sonarrEpisodeId=101,
+            has_indexed_subtitles=True,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=episodes)
+
+    monkeypatch.setattr(series_indexer, "database", _Database())
+    monkeypatch.setattr(
+        series_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda paths: 'new-signature')
+    monkeypatch.setattr(
+        series_indexer,
+        "store_subtitles",
+        lambda episode_id, **kwargs: store_calls.append((episode_id, kwargs)),
+    )
+    monkeypatch.setattr(series_indexer.gc, "collect", lambda: None)
+
+    series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(101, {"use_cache": True, "item": episodes[0]})]
+
+
+def test_series_full_scan_does_not_skip_without_indexed_subtitles(monkeypatch):
+    from subtitles.indexer import series as series_indexer
+
+    episodes = [
+        SimpleNamespace(
+            path='/series/episode.mkv',
+            episode_file_id=123,
+            file_size=456,
+            missing_subtitles='[]',
+            subtitles_last_indexed_episode_file_id=123,
+            subtitles_last_indexed_external_signature='sig',
+            subtitles_last_indexed_file_size=456,
+            subtitles_last_indexed_path='/series/episode.mkv',
+            title='Series',
+            season=1,
+            episode=1,
+            episodeTitle='Pilot',
+            sonarrEpisodeId=101,
+            has_indexed_subtitles=False,
+        ),
+    ]
+    store_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(all_value=episodes)
+
+    monkeypatch.setattr(series_indexer, "database", _Database())
+    monkeypatch.setattr(
+        series_indexer,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(series_indexer.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(series_indexer.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(series_indexer, "_get_subtitles_scan_signature", lambda paths: 'sig')
+    monkeypatch.setattr(
+        series_indexer,
+        "store_subtitles",
+        lambda episode_id, **kwargs: store_calls.append((episode_id, kwargs)),
+    )
+    monkeypatch.setattr(series_indexer.gc, "collect", lambda: None)
+
+    series_indexer.series_full_scan_subtitles(job_id="job", use_cache=True)
+
+    assert store_calls == [(101, {"use_cache": True, "item": episodes[0]})]

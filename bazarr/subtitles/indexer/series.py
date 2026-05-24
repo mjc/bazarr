@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import gc
+import json
 import os
 import logging
 
@@ -21,14 +22,84 @@ from app.jobs_queue import jobs_queue
 gc.enable()
 
 
-def store_subtitles(sonarr_episode_id, use_cache=True):
-    item = database.execute(
-        select(TableEpisodes.sonarrSeriesId,
-               TableEpisodes.path,
-               TableEpisodes.episode_file_id,
-               TableEpisodes.file_size)
-        .where(TableEpisodes.sonarrEpisodeId == sonarr_episode_id)
-    ).first()
+def _get_subtitles_scan_paths(mapped_path):
+    video_folder = os.path.dirname(mapped_path)
+    dest_folder = get_subtitle_destination_folder()
+    full_dest_folder_path = video_folder
+
+    if dest_folder:
+        if settings.general.subfolder == "absolute":
+            full_dest_folder_path = dest_folder
+        elif settings.general.subfolder == "relative":
+            full_dest_folder_path = os.path.join(video_folder, dest_folder)
+
+    scan_paths = [video_folder]
+    if full_dest_folder_path != video_folder:
+        scan_paths.append(full_dest_folder_path)
+
+    return dest_folder, full_dest_folder_path, tuple(scan_paths)
+
+
+def _get_subtitles_scan_signature(scan_paths):
+    return json.dumps(
+        {
+            "ignore_ass_subs": settings.general.ignore_ass_subs,
+            "ignore_pgs_subs": settings.general.ignore_pgs_subs,
+            "ignore_vobsub_subs": settings.general.ignore_vobsub_subs,
+            "single_language": settings.general.single_language,
+            "subfolder": settings.general.subfolder,
+            "subfolder_custom": settings.general.subfolder_custom,
+            "use_embedded_subs": settings.general.use_embedded_subs,
+            "paths": [
+                [path, os.stat(path).st_mtime_ns if os.path.exists(path) else None]
+                for path in scan_paths
+            ],
+        },
+        separators=(',', ':'),
+        sort_keys=True,
+    )
+
+
+def _should_skip_full_scan_episode(episode, mapped_path, scan_signature_cache):
+    if episode.missing_subtitles != '[]':
+        return False
+
+    if not episode.has_indexed_subtitles:
+        return False
+
+    if episode.path != episode.subtitles_last_indexed_path:
+        return False
+
+    if episode.episode_file_id != episode.subtitles_last_indexed_episode_file_id:
+        return False
+
+    if episode.file_size != episode.subtitles_last_indexed_file_size:
+        return False
+
+    if not episode.subtitles_last_indexed_external_signature:
+        return False
+
+    if not os.path.exists(mapped_path):
+        return False
+
+    _, _, scan_paths = _get_subtitles_scan_paths(mapped_path)
+    scan_signature = scan_signature_cache.get(scan_paths)
+    if scan_signature is None:
+        scan_signature = _get_subtitles_scan_signature(scan_paths)
+        scan_signature_cache[scan_paths] = scan_signature
+
+    return scan_signature == episode.subtitles_last_indexed_external_signature
+
+
+def store_subtitles(sonarr_episode_id, use_cache=True, item=None):
+    if item is None:
+        item = database.execute(
+            select(TableEpisodes.sonarrSeriesId,
+                   TableEpisodes.path,
+                   TableEpisodes.episode_file_id,
+                   TableEpisodes.file_size)
+            .where(TableEpisodes.sonarrEpisodeId == sonarr_episode_id)
+        ).first()
 
     if not item:
         logging.warning(f"BAZARR could not find episode with ID {sonarr_episode_id} in the database.")
@@ -36,6 +107,8 @@ def store_subtitles(sonarr_episode_id, use_cache=True):
     else:
         original_path = item.path
         mapped_path = path_mappings.path_replace(original_path)
+        index_complete = True
+        scan_paths = ()
 
     logging.debug(f'BAZARR started subtitles indexing for this file: {mapped_path}')
     embedded_subtitles = []
@@ -112,12 +185,13 @@ def store_subtitles(sonarr_episode_id, use_cache=True):
                             .where(TableEpisodesSubtitles.embedded_track_id.not_in(embedded_subtitles_id_list))
                         )
             except Exception:
+                index_complete = False
                 logging.exception(f"BAZARR error when trying to analyze this {os.path.splitext(mapped_path)[1]} file: "
                                   f"{mapped_path}")
                 pass
 
         try:
-            dest_folder = get_subtitle_destination_folder()
+            dest_folder, full_dest_folder_path, scan_paths = _get_subtitles_scan_paths(mapped_path)
             core.CUSTOM_PATHS = [dest_folder] if dest_folder else []
 
             # Get previously indexed subtitles that haven't changed:
@@ -141,17 +215,12 @@ def store_subtitles(sonarr_episode_id, use_cache=True):
             # Search for external subtitles:
             subtitles = search_external_subtitles(mapped_path, languages=get_language_set(),
                                                   only_one=settings.general.single_language)
-            full_dest_folder_path = os.path.dirname(mapped_path)
-            if dest_folder:
-                if settings.general.subfolder == "absolute":
-                    full_dest_folder_path = dest_folder
-                elif settings.general.subfolder == "relative":
-                    full_dest_folder_path = os.path.join(os.path.dirname(mapped_path), dest_folder)
 
             # Guess external subtitles language if not specified in the file name:
             subtitles = guess_external_subtitles(full_dest_folder_path, subtitles,
                                                  previously_indexed_subtitles_to_exclude)
         except Exception as e:
+            index_complete = False
             logging.exception(f"BAZARR unable to index external subtitles for this file {mapped_path}: {repr(e)}")
         else:
             # For each external subtitle, store it in the database
@@ -223,6 +292,18 @@ def store_subtitles(sonarr_episode_id, use_cache=True):
 
     # We list missing subtitles for this episode and store them in the database
     list_missing_subtitles(epno=sonarr_episode_id)
+
+    if index_complete:
+        database.execute(
+            update(TableEpisodes)
+            .values(
+                subtitles_last_indexed_episode_file_id=item.episode_file_id,
+                subtitles_last_indexed_external_signature=_get_subtitles_scan_signature(scan_paths),
+                subtitles_last_indexed_file_size=item.file_size,
+                subtitles_last_indexed_path=item.path,
+            )
+            .where(TableEpisodes.sonarrEpisodeId == sonarr_episode_id)
+        )
 
     logging.debug(f'BAZARR ended subtitles indexing for this file: {mapped_path}')
 
@@ -355,21 +436,38 @@ def series_full_scan_subtitles(job_id=None, use_cache=None, wait_for_completion=
 
     episodes = database.execute(
         select(TableEpisodes.path,
+               TableEpisodes.sonarrSeriesId,
+               TableEpisodes.episode_file_id,
+               TableEpisodes.file_size,
+               TableEpisodes.missing_subtitles,
+               TableEpisodes.subtitles_last_indexed_episode_file_id,
+               TableEpisodes.subtitles_last_indexed_external_signature,
+               TableEpisodes.subtitles_last_indexed_file_size,
+               TableEpisodes.subtitles_last_indexed_path,
                TableShows.title,
                TableEpisodes.title.label("episodeTitle"),
                TableEpisodes.season,
                TableEpisodes.episode,
-               TableEpisodes.sonarrEpisodeId)
+               TableEpisodes.sonarrEpisodeId,
+               select(TableEpisodesSubtitles.id)
+               .where(TableEpisodesSubtitles.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId)
+               .limit(1)
+               .exists()
+               .label("has_indexed_subtitles"))
         .select_from(TableEpisodes)
         .join(TableShows)
     ).all()
 
     jobs_queue.update_job_progress(job_id=job_id, progress_max=len(episodes), progress_message='Indexing')
+    scan_signature_cache = {}
     for i, episode in enumerate(episodes, start=1):
         jobs_queue.update_job_progress(
             job_id=job_id, progress_value=i,
             progress_message=f"{episode.title} - S{episode.season:02d}E{episode.episode:02d} - {episode.episodeTitle}")
-        store_subtitles(episode.sonarrEpisodeId, use_cache=use_cache)
+        mapped_path = path_mappings.path_replace(episode.path)
+        if _should_skip_full_scan_episode(episode, mapped_path, scan_signature_cache):
+            continue
+        store_subtitles(episode.sonarrEpisodeId, use_cache=use_cache, item=episode)
 
     logging.info('BAZARR All existing episode subtitles indexed from disk.')
 
