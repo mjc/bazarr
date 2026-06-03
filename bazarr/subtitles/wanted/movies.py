@@ -6,7 +6,7 @@ import operator
 
 from functools import reduce
 
-from sqlalchemy import bindparam
+from sqlalchemy import bindparam, case
 
 from utilities.path_mappings import path_mappings
 from subtitles.indexer.movies import store_subtitles_movie, list_missing_subtitles_movies
@@ -19,9 +19,16 @@ from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue
 from app.config import settings
 
-from ..adaptive_searching import get_adaptive_search_policy, update_failed_attempts
+from ..adaptive_searching import get_adaptive_search_policy
 from ..download import generate_subtitles
-from .utils import get_due_missing_languages, get_language_search_items
+from subtitles.wanted_state import (
+    get_due_missing_languages_map,
+    get_due_missing_languages_for_media,
+    get_missing_languages,
+    record_failed_subtitle_attempts,
+    record_failed_subtitle_attempts_map,
+)
+from .utils import get_language_search_items
 
 
 _WANTED_MOVIE_DETAILS_SELECT = select(TableMovies.path,
@@ -46,6 +53,33 @@ _WANTED_MOVIE_DETAILS_SELECT = select(TableMovies.path,
                                       .label("has_incomplete_embedded_subtitles"))
 _WANTED_MOVIE_DETAILS_STMT = _WANTED_MOVIE_DETAILS_SELECT \
     .where(TableMovies.radarrId == bindparam("wanted_radarr_id"))
+_FAILED_ATTEMPT_UPDATE_BATCH_SIZE = 5000
+_TEMP_FAILED_ATTEMPT_UPDATE_MIN_SIZE = 1000
+_DUE_MOVIE_DETAILS_BATCH_SIZE = 5000
+
+
+_WANTED_MOVIES_SELECT = select(TableMovies.radarrId,
+                              TableMovies.audio_language,
+                              TableMovies.failedAttempts,
+                              TableMovies.missing_subtitles,
+                              TableMovies.path,
+                              TableMovies.profileId,
+                              TableMovies.sceneName,
+                              TableMovies.tags,
+                              TableMovies.monitored,
+                              TableMovies.title,
+                              select(TableMoviesSubtitles.id)
+                              .where(TableMoviesSubtitles.radarrId == TableMovies.radarrId)
+                              .limit(1)
+                              .exists()
+                              .label("has_indexed_subtitles"),
+                              select(TableMoviesSubtitles.id)
+                              .where(TableMoviesSubtitles.radarrId == TableMovies.radarrId)
+                              .where(TableMoviesSubtitles.path.is_(None))
+                              .where(TableMoviesSubtitles.embedded_track_id.is_(None))
+                              .limit(1)
+                              .exists()
+                              .label("has_incomplete_embedded_subtitles"))
 
 
 def _movie_needs_wanted_lookup_refresh(movie):
@@ -57,7 +91,7 @@ def _movie_needs_wanted_lookup_refresh(movie):
 
 
 def _wanted_movie(movie, providers_list, due_languages=None, job_id=None, adaptive_search_policy=None,
-                  fallback_allowed=None):
+                  fallback_allowed=None, defer_failed_attempts=False):
     audio_language_list = get_audio_profile_languages(movie.audio_language)
     if len(audio_language_list) > 0:
         audio_language = audio_language_list[0]['name']
@@ -66,9 +100,9 @@ def _wanted_movie(movie, providers_list, due_languages=None, job_id=None, adapti
 
     due_missing_languages = due_languages
     if due_missing_languages is None:
-        due_missing_languages = get_due_missing_languages(
-            movie.missing_subtitles,
-            movie.failedAttempts,
+        due_missing_languages = get_due_missing_languages_for_media(
+            'movie',
+            movie.radarrId,
             adaptive_search_policy=adaptive_search_policy,
         )
     if not due_missing_languages:
@@ -100,10 +134,32 @@ def _wanted_movie(movie, providers_list, due_languages=None, job_id=None, adapti
             send_notifications_movie(movie.radarrId, result.message)
             event_stream(type='movie-wanted', action='delete', payload=movie.radarrId)
 
-    if not found_any and providers_list:
+    if providers_list:
+        if found_any:
+            refreshed_movie = database.execute(
+                _WANTED_MOVIE_DETAILS_STMT,
+                {"wanted_radarr_id": movie.radarrId},
+            ).first()
+            if not refreshed_movie:
+                return
+
+            current_missing_languages = set(get_missing_languages('movie', movie.radarrId))
+            remaining_due_languages = [
+                language for language in due_missing_languages
+                if language in current_missing_languages
+            ]
+        else:
+            remaining_due_languages = due_missing_languages
+        if not remaining_due_languages:
+            return
+
+        if defer_failed_attempts:
+            return remaining_due_languages
+
+        updated_attempts = record_failed_subtitle_attempts('movie', movie.radarrId, remaining_due_languages)
         database.execute(
             update(TableMovies)
-            .values(failedAttempts=update_failed_attempts(due_missing_languages, movie.failedAttempts))
+            .values(failedAttempts=updated_attempts)
             .where(TableMovies.radarrId == movie.radarrId))
 
 
@@ -115,6 +171,7 @@ def wanted_download_subtitles_movie(
     due_languages=None,
     adaptive_search_policy=None,
     fallback_allowed=None,
+    defer_failed_attempts=False,
 ):
     stmt_params = {"wanted_radarr_id": radarr_id}
 
@@ -124,13 +181,14 @@ def wanted_download_subtitles_movie(
         if adaptive_search_policy is None:
             adaptive_search_policy = get_adaptive_search_policy()
         if providers_list:
-            _wanted_movie(
+            return _wanted_movie(
                 movie,
                 providers_list,
                 due_languages=due_languages,
                 job_id=job_id,
                 adaptive_search_policy=adaptive_search_policy,
                 fallback_allowed=fallback_allowed,
+                defer_failed_attempts=defer_failed_attempts,
             )
         else:
             logging.info("BAZARR All providers are throttled")
@@ -143,6 +201,7 @@ def wanted_download_subtitles_movie(
         logging.debug(f"BAZARR no movie with that radarrId can be found in database: {radarr_id}")
         return
     if _movie_needs_wanted_lookup_refresh(movie):
+        rebuilt_wanted_state = False
         previously_indexed_subtitles = get_subtitles(radarr_id=radarr_id)
         if not len(previously_indexed_subtitles) or \
                 any(not x['embedded_track_id'] for x in previously_indexed_subtitles if not x['path']):
@@ -151,12 +210,17 @@ def wanted_download_subtitles_movie(
             movie = database.execute(_WANTED_MOVIE_DETAILS_STMT, stmt_params).first()
             if not movie:
                 return
+            rebuilt_wanted_state = True
         if movie.missing_subtitles is None:
             # missing subtitles calculation for this movie is incomplete, we'll do it again
             list_missing_subtitles_movies(no=radarr_id)
-        movie = database.execute(_WANTED_MOVIE_DETAILS_STMT, stmt_params).first()
-        due_languages = None
-        providers_list = None
+            rebuilt_wanted_state = True
+        if rebuilt_wanted_state:
+            movie = database.execute(_WANTED_MOVIE_DETAILS_STMT, stmt_params).first()
+            if not movie:
+                return
+            due_languages = None
+            providers_list = None
 
     if providers_list is None:
         providers_list = get_providers()
@@ -164,16 +228,63 @@ def wanted_download_subtitles_movie(
         adaptive_search_policy = get_adaptive_search_policy()
 
     if providers_list:
-        _wanted_movie(
+        return _wanted_movie(
             movie,
             providers_list,
             due_languages=due_languages,
             job_id=job_id,
             adaptive_search_policy=adaptive_search_policy,
             fallback_allowed=fallback_allowed,
+            defer_failed_attempts=defer_failed_attempts,
         )
     else:
         logging.info("BAZARR All providers are throttled")
+
+
+def _record_failed_movie_attempts(failed_attempt_languages):
+    updated_attempts_by_movie = record_failed_subtitle_attempts_map(
+        'movie',
+        failed_attempt_languages,
+    )
+    if not updated_attempts_by_movie:
+        return
+
+    update_items = list(updated_attempts_by_movie.items())
+    if (
+        len(update_items) >= _TEMP_FAILED_ATTEMPT_UPDATE_MIN_SIZE and
+        database.bind.engine.dialect.name == 'sqlite'
+    ):
+        connection = database.connection()
+        connection.exec_driver_sql('DROP TABLE IF EXISTS temp_failed_attempt_updates')
+        connection.exec_driver_sql(
+            'CREATE TEMP TABLE temp_failed_attempt_updates '
+            '(media_id INTEGER PRIMARY KEY, failedAttempts TEXT NOT NULL)'
+        )
+        try:
+            for index in range(0, len(update_items), _FAILED_ATTEMPT_UPDATE_BATCH_SIZE):
+                connection.exec_driver_sql(
+                    'INSERT INTO temp_failed_attempt_updates (media_id, failedAttempts) VALUES (?, ?)',
+                    update_items[index:index + _FAILED_ATTEMPT_UPDATE_BATCH_SIZE],
+                )
+            connection.exec_driver_sql(
+                'UPDATE table_movies '
+                'SET "failedAttempts" = ('
+                'SELECT failedAttempts FROM temp_failed_attempt_updates '
+                'WHERE media_id = table_movies."radarrId") '
+                'WHERE "radarrId" IN (SELECT media_id FROM temp_failed_attempt_updates)'
+            )
+        finally:
+            connection.exec_driver_sql('DROP TABLE IF EXISTS temp_failed_attempt_updates')
+        return
+
+    id_column = TableMovies.__table__.c.radarrId
+    for index in range(0, len(update_items), _FAILED_ATTEMPT_UPDATE_BATCH_SIZE):
+        chunk = dict(update_items[index:index + _FAILED_ATTEMPT_UPDATE_BATCH_SIZE])
+        database.execute(
+            TableMovies.__table__.update()
+            .where(id_column.in_(chunk))
+            .values(failedAttempts=case(chunk, value=id_column))
+        )
 
 
 def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=False):
@@ -182,44 +293,30 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
                                          wait_for_completion=wait_for_completion)
         return
 
-    conditions = [(TableMovies.missing_subtitles.is_not(None)),
-                  (TableMovies.missing_subtitles != '[]')]
-    conditions += get_exclusion_clause('movie')
-    movies = database.execute(
-        select(TableMovies.radarrId,
-               TableMovies.audio_language,
-               TableMovies.failedAttempts,
-               TableMovies.missing_subtitles,
-               TableMovies.path,
-               TableMovies.profileId,
-               TableMovies.sceneName,
-               TableMovies.tags,
-               TableMovies.monitored,
-               TableMovies.title,
-               select(TableMoviesSubtitles.id)
-               .where(TableMoviesSubtitles.radarrId == TableMovies.radarrId)
-               .limit(1)
-               .exists()
-               .label("has_indexed_subtitles"),
-               select(TableMoviesSubtitles.id)
-               .where(TableMoviesSubtitles.radarrId == TableMovies.radarrId)
-               .where(TableMoviesSubtitles.path.is_(None))
-               .where(TableMoviesSubtitles.embedded_track_id.is_(None))
-               .limit(1)
-               .exists()
-               .label("has_incomplete_embedded_subtitles"))
-        .where(reduce(operator.and_, conditions))) \
-        .all()
+    adaptive_search_policy = get_adaptive_search_policy()
+    due_languages_by_movie = get_due_missing_languages_map(
+        'movie',
+        adaptive_search_policy=adaptive_search_policy,
+    )
+    due_movie_ids = list(due_languages_by_movie)
+    movies = []
+    if due_movie_ids:
+        exclusion_clause = get_exclusion_clause('movie')
+        for index in range(0, len(due_movie_ids), _DUE_MOVIE_DETAILS_BATCH_SIZE):
+            due_movie_id_chunk = due_movie_ids[index:index + _DUE_MOVIE_DETAILS_BATCH_SIZE]
+            base_conditions = [TableMovies.radarrId.in_(due_movie_id_chunk)]
+            base_conditions += exclusion_clause
+            movies.extend(
+                database.execute(
+                    _WANTED_MOVIES_SELECT
+                    .where(reduce(operator.and_, base_conditions))
+                ).all()
+            )
 
     movies_to_search = []
-    adaptive_search_policy = get_adaptive_search_policy()
     fallback_allowed = settings.general.use_whisper_fallback
     for movie in movies:
-        due_languages = get_due_missing_languages(
-            movie.missing_subtitles,
-            movie.failedAttempts,
-            adaptive_search_policy=adaptive_search_policy,
-        )
+        due_languages = due_languages_by_movie[movie.radarrId]
         if due_languages:
             movies_to_search.append((movie, due_languages))
 
@@ -232,29 +329,37 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
     else:
         throttled = False
 
+    failed_attempt_languages = {}
     for i, (movie, due_languages) in enumerate(movies_to_search, start=1):
         jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_message=movie.title)
 
         providers = get_providers()
         if providers:
             if _movie_needs_wanted_lookup_refresh(movie):
-                wanted_download_subtitles_movie(
+                remaining_due_languages = wanted_download_subtitles_movie(
                     movie.radarrId,
                     job_id=job_id,
                     providers_list=providers,
                     movie=movie,
+                    due_languages=due_languages,
                     adaptive_search_policy=adaptive_search_policy,
                     fallback_allowed=fallback_allowed,
+                    defer_failed_attempts=True,
                 )
+                if remaining_due_languages:
+                    failed_attempt_languages[movie.radarrId] = remaining_due_languages
             else:
-                _wanted_movie(
+                remaining_due_languages = _wanted_movie(
                     movie,
                     providers,
                     due_languages=due_languages,
                     job_id=job_id,
                     adaptive_search_policy=adaptive_search_policy,
                     fallback_allowed=fallback_allowed,
+                    defer_failed_attempts=True,
                 )
+                if remaining_due_languages:
+                    failed_attempt_languages[movie.radarrId] = remaining_due_languages
 
             # make sure to override the progress value updated by the subtitles synchronization
             jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_max=count_movies)
@@ -262,6 +367,9 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
             logging.info("BAZARR All providers are throttled")
             throttled = True
             break
+
+    if failed_attempt_languages:
+        _record_failed_movie_attempts(failed_attempt_languages)
 
     outcome_msg = ("All providers throttled" if throttled
                    else "Search completed")

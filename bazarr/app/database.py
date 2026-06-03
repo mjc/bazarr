@@ -11,8 +11,8 @@ from dogpile.cache import make_region
 from datetime import datetime
 from typing import List
 
-from sqlalchemy import create_engine, inspect, DateTime, ForeignKey, Integer, LargeBinary, Text, func, text, BigInteger, \
-    Boolean
+from sqlalchemy import create_engine, inspect, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, func, text, \
+    BigInteger, Boolean, Index
 # importing here to be indirectly imported in other modules later
 from sqlalchemy import update, delete, select, func, UniqueConstraint  # noqa W0611
 from sqlalchemy.orm import scoped_session, sessionmaker, mapped_column, close_all_sessions
@@ -299,6 +299,36 @@ class TableMovies(Base):
         return {column.name: getattr(self, column.name) for column in self.__table__.columns}
 
 
+class TableMissingSubtitles(Base):
+    __tablename__ = 'table_missing_subtitles'
+
+    id = mapped_column(Integer, primary_key=True)
+    media_type = mapped_column(Text, nullable=False)
+    media_id = mapped_column(Integer, nullable=False)
+    language = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('media_type', 'media_id', 'language', name='uc_missing_subtitles_language'),
+        Index('ix_missing_subtitles_media', 'media_type', 'media_id'),
+    )
+
+
+class TableFailedSubtitleAttempts(Base):
+    __tablename__ = 'table_failed_subtitle_attempts'
+
+    id = mapped_column(Integer, primary_key=True)
+    media_type = mapped_column(Text, nullable=False)
+    media_id = mapped_column(Integer, nullable=False)
+    language = mapped_column(Text, nullable=False)
+    initial_attempt_at = mapped_column(Float, nullable=False)
+    latest_attempt_at = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('media_type', 'media_id', 'language', name='uc_failed_subtitle_attempts_language'),
+        Index('ix_failed_subtitle_attempts_media', 'media_type', 'media_id'),
+    )
+
+
 class TableMoviesSubtitles(Base):
     __tablename__ = 'table_movies_subtitles'
 
@@ -542,32 +572,93 @@ def get_profile_cutoff(profile_id):
     return cutoff_language
 
 
+def _parse_audio_languages_text(value):
+    if not value:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if not isinstance(value, str):
+        return []
+
+    value = value.strip()
+    if value == '[]':
+        return []
+    if not value.startswith('[') or not value.endswith(']'):
+        return []
+
+    values = []
+    body = value[1:-1].strip()
+    if not body:
+        return []
+
+    index = 0
+    while index < len(body):
+        while index < len(body) and body[index].isspace():
+            index += 1
+
+        if body.startswith('None', index):
+            values.append(None)
+            index += 4
+        elif index < len(body) and body[index] in ("'", '"'):
+            quote = body[index]
+            index += 1
+            chars = []
+            while index < len(body):
+                char = body[index]
+                if char == "\\":
+                    index += 1
+                    if index >= len(body):
+                        return []
+                    chars.append(body[index])
+                    index += 1
+                    continue
+                if char == quote:
+                    index += 1
+                    break
+                chars.append(char)
+                index += 1
+            else:
+                return []
+            values.append("".join(chars))
+        else:
+            return []
+
+        while index < len(body) and body[index].isspace():
+            index += 1
+        if index == len(body):
+            break
+        if body[index] != ',':
+            return []
+        index += 1
+        if index == len(body):
+            return []
+
+    return values
+
+
 def get_audio_profile_languages(audio_languages_list_str):
     from languages.get_languages import alpha2_from_language, alpha3_from_language, language_from_alpha2
     audio_languages = []
 
     und_default_language = language_from_alpha2(settings.general.default_und_audio_lang)
 
-    try:
-        audio_languages_list = ast.literal_eval(audio_languages_list_str or '[]')
-    except ValueError:
-        pass
-    else:
-        for language in audio_languages_list:
-            if language:
+    for language in _parse_audio_languages_text(audio_languages_list_str or '[]'):
+        if language:
+            audio_languages.append(
+                {"name": language,
+                 "code2": alpha2_from_language(language) or None,
+                 "code3": alpha3_from_language(language) or None}
+            )
+        else:
+            if und_default_language:
+                logging.debug(f"Undefined language audio track treated as {und_default_language}")
                 audio_languages.append(
-                    {"name": language,
-                     "code2": alpha2_from_language(language) or None,
-                     "code3": alpha3_from_language(language) or None}
+                    {"name": und_default_language,
+                     "code2": alpha2_from_language(und_default_language) or None,
+                     "code3": alpha3_from_language(und_default_language) or None}
                 )
-            else:
-                if und_default_language:
-                    logging.debug(f"Undefined language audio track treated as {und_default_language}")
-                    audio_languages.append(
-                        {"name": und_default_language,
-                         "code2": alpha2_from_language(und_default_language) or None,
-                         "code3": alpha3_from_language(und_default_language) or None}
-                    )
 
     return audio_languages
 

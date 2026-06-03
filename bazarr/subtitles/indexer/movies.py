@@ -18,6 +18,8 @@ from utilities.video_analyzer import embedded_subs_reader
 from app.event_handler import event_stream
 from subtitles.indexer.utils import guess_external_subtitles, get_external_subtitles_path
 from app.jobs_queue import jobs_queue
+from subtitles.adaptive_searching import get_adaptive_search_policy
+from subtitles.wanted_state import refresh_wanted_search_state
 
 gc.enable()
 
@@ -227,7 +229,8 @@ def store_subtitles_movie(radarr_id, use_cache=True):
 def list_missing_subtitles_movies(no=None):
     stmt = select(TableMovies.radarrId,
                   TableMovies.profileId,
-                  TableMovies.audio_language)
+                  TableMovies.audio_language,
+                  TableMovies.missing_subtitles)
 
     if no:
         movies_subtitles = database.execute(stmt.where(TableMovies.radarrId == no)).all()
@@ -235,6 +238,7 @@ def list_missing_subtitles_movies(no=None):
         movies_subtitles = database.execute(stmt).all()
 
     use_embedded_subs = settings.general.use_embedded_subs
+    adaptive_search_policy = get_adaptive_search_policy()
 
     matches_audio = lambda language: any(x['code2'] == language['language'] for x in get_audio_profile_languages(
                                 movie_subtitles.audio_language))
@@ -324,13 +328,21 @@ def list_missing_subtitles_movies(no=None):
 
                 missing_subtitles_text = str(missing_subtitles_output_list)
 
-        database.execute(
-            update(TableMovies)
-            .values(missing_subtitles=missing_subtitles_text)
-            .where(TableMovies.radarrId == movie_subtitles.radarrId))
+        if movie_subtitles.missing_subtitles != missing_subtitles_text:
+            database.execute(
+                update(TableMovies)
+                .values(missing_subtitles=missing_subtitles_text)
+                .where(TableMovies.radarrId == movie_subtitles.radarrId))
+            refresh_wanted_search_state(
+                'movie',
+                movie_subtitles.radarrId,
+                missing_subtitles_text,
+                adaptive_search_policy=adaptive_search_policy,
+                refresh_failed_attempts=False,
+            )
 
-        event_stream(type='movie', payload=movie_subtitles.radarrId)
-        event_stream(type='movie-wanted', action='update', payload=movie_subtitles.radarrId)
+            event_stream(type='movie', payload=movie_subtitles.radarrId)
+            event_stream(type='movie-wanted', action='update', payload=movie_subtitles.radarrId)
     event_stream(type='badges')
 
 

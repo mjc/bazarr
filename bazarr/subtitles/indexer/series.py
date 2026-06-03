@@ -17,6 +17,8 @@ from utilities.video_analyzer import embedded_subs_reader
 from app.event_handler import event_stream
 from subtitles.indexer.utils import guess_external_subtitles, get_external_subtitles_path
 from app.jobs_queue import jobs_queue
+from subtitles.adaptive_searching import get_adaptive_search_policy
+from subtitles.wanted_state import refresh_wanted_search_state
 
 gc.enable()
 
@@ -231,7 +233,8 @@ def list_missing_subtitles(no=None, epno=None):
     stmt = select(TableShows.sonarrSeriesId,
                   TableEpisodes.sonarrEpisodeId,
                   TableShows.profileId,
-                  TableEpisodes.audio_language) \
+                  TableEpisodes.audio_language,
+                  TableEpisodes.missing_subtitles) \
         .select_from(TableEpisodes) \
         .join(TableShows)
 
@@ -243,6 +246,7 @@ def list_missing_subtitles(no=None, epno=None):
         episodes_subtitles = database.execute(stmt).all()
 
     use_embedded_subs = settings.general.use_embedded_subs
+    adaptive_search_policy = get_adaptive_search_policy()
 
     matches_audio = lambda language: any(x['code2'] == language['language'] for x in get_audio_profile_languages(
                                 episode_subtitles.audio_language))
@@ -334,13 +338,21 @@ def list_missing_subtitles(no=None, epno=None):
 
                 missing_subtitles_text = str(missing_subtitles_output_list)
 
-        database.execute(
-            update(TableEpisodes)
-            .values(missing_subtitles=missing_subtitles_text)
-            .where(TableEpisodes.sonarrEpisodeId == episode_subtitles.sonarrEpisodeId))
+        if episode_subtitles.missing_subtitles != missing_subtitles_text:
+            database.execute(
+                update(TableEpisodes)
+                .values(missing_subtitles=missing_subtitles_text)
+                .where(TableEpisodes.sonarrEpisodeId == episode_subtitles.sonarrEpisodeId))
+            refresh_wanted_search_state(
+                'series',
+                episode_subtitles.sonarrEpisodeId,
+                missing_subtitles_text,
+                adaptive_search_policy=adaptive_search_policy,
+                refresh_failed_attempts=False,
+            )
 
-        event_stream(type='episode', payload=episode_subtitles.sonarrEpisodeId)
-        event_stream(type='episode-wanted', action='update', payload=episode_subtitles.sonarrEpisodeId)
+            event_stream(type='episode', payload=episode_subtitles.sonarrEpisodeId)
+            event_stream(type='episode-wanted', action='update', payload=episode_subtitles.sonarrEpisodeId)
     event_stream(type='badges')
 
 

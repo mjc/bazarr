@@ -1,7 +1,6 @@
 # coding=utf-8
 # fmt: off
 
-import ast
 import logging
 
 from datetime import datetime, timedelta
@@ -15,6 +14,7 @@ from app.config import settings
 _ADAPTIVE_POLICY_CACHE_TTL = 1.0
 _adaptive_policy_cache = {
     "expires_at": 0.0,
+    "settings_key": None,
     "policy_components": None,
 }
 
@@ -43,7 +43,7 @@ def _get_attempts(attempt_string):
     else:
         attempts = _parse_attempts_fast(attempt_string)
         if attempts is None:
-            attempts = ast.literal_eval(attempt_string)
+            raise ValueError
 
     if type(attempts) is not list:
         raise ValueError
@@ -76,6 +76,21 @@ def _get_attempt_windows(attempts):
         attempt_windows[desired_language] = (initial_timestamp, latest_timestamp)
 
     return attempt_windows
+
+
+def get_attempt_windows(attempt_string):
+    try:
+        attempts = _get_attempts(attempt_string)
+    except (SyntaxError, ValueError, TypeError):
+        return {}
+
+    if not attempts:
+        return {}
+
+    try:
+        return _get_attempt_windows(attempts)
+    except ValueError:
+        return {}
 
 
 def _get_adaptive_timedelta(setting_name, setting_value):
@@ -118,14 +133,20 @@ def _get_cached_policy_components(adaptive_searching_enabled, adaptive_searching
 
 
 def get_adaptive_search_policy():
-    if _adaptive_policy_cache["expires_at"] > monotonic():
+    settings_key = (
+        settings.general.adaptive_searching,
+        settings.general.adaptive_searching_delay,
+        settings.general.adaptive_searching_delta,
+    )
+
+    if (
+        _adaptive_policy_cache["expires_at"] > monotonic() and
+        _adaptive_policy_cache["settings_key"] == settings_key
+    ):
         policy_components = _adaptive_policy_cache["policy_components"]
     else:
-        policy_components = _get_cached_policy_components(
-            settings.general.adaptive_searching,
-            settings.general.adaptive_searching_delay,
-            settings.general.adaptive_searching_delta,
-        )
+        policy_components = _get_cached_policy_components(*settings_key)
+        _adaptive_policy_cache["settings_key"] = settings_key
         _adaptive_policy_cache["policy_components"] = policy_components
         _adaptive_policy_cache["expires_at"] = monotonic() + _ADAPTIVE_POLICY_CACHE_TTL
 
@@ -137,12 +158,22 @@ def get_adaptive_search_policy():
     return {
         "delay": policy_components[0],
         "delta": policy_components[1],
-        "delay_label": settings.general.adaptive_searching_delay,
-        "delta_label": settings.general.adaptive_searching_delta,
+        "delay_label": settings_key[1],
+        "delta_label": settings_key[2],
         "now": now,
         "initial_search_cutoff": now.timestamp() - policy_components[0].total_seconds(),
         "latest_search_cutoff": now.timestamp() - policy_components[1].total_seconds(),
     }
+
+
+def get_adaptive_search_policy_key(adaptive_search_policy=None):
+    if adaptive_search_policy is None:
+        adaptive_search_policy = get_adaptive_search_policy()
+
+    if adaptive_search_policy is None:
+        return None
+
+    return f"{adaptive_search_policy['delay_label']}|{adaptive_search_policy['delta_label']}"
 
 
 def get_active_search_languages(desired_languages, attempt_string, adaptive_search_policy=None):
