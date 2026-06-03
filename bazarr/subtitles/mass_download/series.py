@@ -1,7 +1,6 @@
 # coding=utf-8
 # fmt: off
 
-import ast
 import logging
 import operator
 import os
@@ -20,6 +19,7 @@ from app.event_handler import event_stream
 from app.config import settings
 
 from ..download import generate_subtitles
+from ..serialization import parse_missing_subtitles, missing_subtitle_to_language_tuple
 
 
 def series_download_subtitles(no, job_id=None, job_sub_function=False):
@@ -149,11 +149,8 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
                                            progress_message=f'{episode.title} - S{episode.season:02d}E'
                                                             f'{episode.episode:02d} - {episode.episodeTitle}')
 
-        for language in ast.literal_eval(episode.missing_subtitles):
-            if language is not None:
-                hi_ = "True" if language.endswith(':hi') else "False"
-                forced_ = "True" if language.endswith(':forced') else "False"
-                languages.append((language.split(":")[0], hi_, forced_))
+        for language in parse_missing_subtitles(episode.missing_subtitles):
+            languages.append(missing_subtitle_to_language_tuple(language))
 
         if languages:
             for result in generate_subtitles(episodePath,
