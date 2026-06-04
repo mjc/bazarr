@@ -9,6 +9,7 @@ from operator import itemgetter
 from app.config import settings, base_url
 from languages.get_languages import language_from_alpha2, alpha3_from_alpha2
 from app.database import get_audio_profile_languages, get_desired_languages, get_subtitles
+from subtitles.serialization import parse_missing_subtitles
 from utilities.path_mappings import path_mappings
 
 None_Keys = ['null', 'undefined', '', None]
@@ -68,7 +69,7 @@ def postprocess(item):
 
     # Parse missing subtitles
     if item.get('missing_subtitles'):
-        item['missing_subtitles'] = ast.literal_eval(item['missing_subtitles'])
+        item['missing_subtitles'] = parse_missing_subtitles(item['missing_subtitles'])
         for i, subs in enumerate(item['missing_subtitles']):
             language = subs.split(':')
             item['missing_subtitles'][i] = {"name": language_from_alpha2(language[0]),

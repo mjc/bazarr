@@ -10,6 +10,7 @@ from sonarr.sync.series import update_one_series
 from subtitles.indexer.series import list_missing_subtitles, series_scan_subtitles
 from subtitles.mass_download import series_download_subtitles
 from subtitles.wanted import wanted_search_missing_subtitles_series
+from app.wanted_sql import has_wanted_subtitle
 from app.event_handler import event_stream
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
@@ -77,7 +78,8 @@ class Series(Resource):
             .subquery()
 
         episodes_missing_conditions = [(TableEpisodes.missing_subtitles.is_not(None)),
-                                       (TableEpisodes.missing_subtitles != '[]')]
+                                       (TableEpisodes.missing_subtitles != '[]'),
+                                       has_wanted_subtitle(TableEpisodes.missing_subtitles)]
         episodes_missing_conditions += get_exclusion_clause('series')
 
         episodeMissingCount = select(TableShows.sonarrSeriesId,
