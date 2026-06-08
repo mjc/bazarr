@@ -267,7 +267,7 @@ def get_due_missing_languages_for_media(media_type, media_id, adaptive_search_po
     )
 
 
-def _due_missing_languages_statement(media_type, adaptive_search_policy):
+def due_missing_languages_statement(media_type, adaptive_search_policy):
     statement = (
         select(TableMissingSubtitles.media_id, TableMissingSubtitles.language)
         .where(TableMissingSubtitles.media_type == media_type)
@@ -300,7 +300,7 @@ def count_due_missing_media(media_type, adaptive_search_policy=None):
         adaptive_search_policy = get_adaptive_search_policy()
 
     return database.execute(
-        _due_missing_languages_statement(media_type, adaptive_search_policy)
+        due_missing_languages_statement(media_type, adaptive_search_policy)
         .with_only_columns(func.count(func.distinct(TableMissingSubtitles.media_id)))
         .order_by(None)
     ).scalar() or 0
@@ -313,7 +313,7 @@ def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, bat
         adaptive_search_policy = get_adaptive_search_policy()
 
     statement = (
-        _due_missing_languages_statement(media_type, adaptive_search_policy)
+        due_missing_languages_statement(media_type, adaptive_search_policy)
         .order_by(TableMissingSubtitles.media_id, TableMissingSubtitles.id)
     )
     due_languages = {}
@@ -353,7 +353,7 @@ def get_due_missing_languages_map(media_type, media_ids=None, adaptive_search_po
         return due_languages
 
     statement = (
-        _due_missing_languages_statement(media_type, adaptive_search_policy)
+        due_missing_languages_statement(media_type, adaptive_search_policy)
         .order_by(TableMissingSubtitles.id)
     )
     if has_media_filter:

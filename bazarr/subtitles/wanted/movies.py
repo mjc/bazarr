@@ -6,15 +6,17 @@ import operator
 
 from functools import reduce
 
-from sqlalchemy import bindparam, case
+from sqlalchemy import bindparam, case, func
 
 from utilities.path_mappings import path_mappings
 from subtitles.indexer.movies import store_subtitles_movie, list_missing_subtitles_movies
 from radarr.history import history_log_movie
 from app.notifier import send_notifications_movie
 from app.get_providers import get_providers
-from app.database import (get_exclusion_clause, get_audio_profile_languages, TableMovies, TableMoviesSubtitles,
-                          database, update, select, get_subtitles)
+from app.database import (
+    get_exclusion_clause, get_audio_profile_languages, TableMissingSubtitles, TableMovies, TableMoviesSubtitles,
+    database, update, select, get_subtitles,
+)
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue
 from app.config import settings
@@ -22,7 +24,7 @@ from app.config import settings
 from ..adaptive_searching import get_adaptive_search_policy
 from ..download import generate_subtitles
 from subtitles.wanted_state import (
-    count_due_missing_media,
+    due_missing_languages_statement,
     get_due_missing_languages_map,
     get_due_missing_languages_for_media,
     get_missing_languages,
@@ -82,6 +84,17 @@ _WANTED_MOVIES_SELECT = select(TableMovies.radarrId,
                               .limit(1)
                               .exists()
                               .label("has_incomplete_embedded_subtitles"))
+
+
+def _count_searchable_due_movies(adaptive_search_policy, exclusion_clause):
+    statement = (
+        due_missing_languages_statement('movie', adaptive_search_policy)
+        .join(TableMovies, TableMovies.radarrId == TableMissingSubtitles.media_id)
+        .where(*exclusion_clause)
+        .with_only_columns(func.count(func.distinct(TableMissingSubtitles.media_id)))
+        .order_by(None)
+    )
+    return database.execute(statement).scalar() or 0
 
 
 def _movie_needs_wanted_lookup_refresh(movie):
@@ -303,10 +316,8 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
         return
 
     adaptive_search_policy = get_adaptive_search_policy()
-    count_movies = count_due_missing_media(
-        'movie',
-        adaptive_search_policy=adaptive_search_policy,
-    )
+    exclusion_clause = get_exclusion_clause('movie')
+    count_movies = _count_searchable_due_movies(adaptive_search_policy, exclusion_clause)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_movies)
 
     if count_movies == 0:
@@ -319,7 +330,6 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
     pending_failed_attempts = {}
     processed_count = 0
     if count_movies:
-        exclusion_clause = get_exclusion_clause('movie')
         for due_languages_by_chunk in iter_due_missing_languages_maps(
             'movie',
             adaptive_search_policy=adaptive_search_policy,
