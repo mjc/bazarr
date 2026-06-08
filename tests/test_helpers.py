@@ -577,3 +577,41 @@ def load_mass_download_module(name):
         package_names,
         module_overrides,
     )
+
+
+# ===== Test Utility Functions =====
+
+def parse_language_code(lang_str: str) -> tuple:
+    """Parse language string into (code, hi_flag, forced_flag) tuple.
+    
+    Examples:
+        'en' -> ('en', 'False', 'False')
+        'en:hi' -> ('en', 'True', 'False')
+        'fr:forced' -> ('fr', 'False', 'True')
+    """
+    base = lang_str.split(":")[0]
+    hi = "True" if lang_str.endswith(":hi") else "False"
+    forced = "True" if lang_str.endswith(":forced") else "False"
+    return (base, hi, forced)
+
+
+def unwrap_result_tuple(result):
+    """Unwrap single-element tuple if needed."""
+    if isinstance(result, tuple) and len(result):
+        return result[0]
+    return result
+
+
+def get_current_timestamp() -> int:
+    """Get current Unix timestamp."""
+    from datetime import datetime
+    return int(datetime.timestamp(datetime.now()))
+
+
+def set_adaptive_search_settings(monkeypatch, *, enabled: bool = True, 
+                                 delay: str = "3w", delta: str = "1w"):
+    """Configure adaptive search settings via monkeypatch."""
+    monkeypatch.setattr('bazarr.subtitles.adaptive_searching.settings.general.adaptive_searching', enabled)
+    if enabled:
+        monkeypatch.setattr('bazarr.subtitles.adaptive_searching.settings.general.adaptive_searching_delay', delay)
+        monkeypatch.setattr('bazarr.subtitles.adaptive_searching.settings.general.adaptive_searching_delta', delta)
