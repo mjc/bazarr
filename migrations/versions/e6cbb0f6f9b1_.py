@@ -132,7 +132,7 @@ def _parse_attempts(value):
     for attempt in value[2:-2].split('], ['):
         try:
             language, timestamp_text = attempt.split(', ', 1)
-            if language[0] != "'" or language[-1] != "'":
+            if language[0] not in ("'", '"') or language[-1] != language[0]:
                 return []
             timestamp = float(timestamp_text) if "." in timestamp_text else int(timestamp_text)
         except (IndexError, TypeError, ValueError):
@@ -303,6 +303,17 @@ def _backfill_media_state_sqlite(bind, media_type, id_column, table_name):
         _insert_failed_attempts_cursor(write_cursor, attempt_rows)
 
 
+def _clear_backfilled_media_state(bind, media_type):
+    bind.execute(
+        sa.delete(MISSING_SUBTITLES_TABLE)
+        .where(MISSING_SUBTITLES_TABLE.c.media_type == media_type)
+    )
+    bind.execute(
+        sa.delete(FAILED_SUBTITLE_ATTEMPTS_TABLE)
+        .where(FAILED_SUBTITLE_ATTEMPTS_TABLE.c.media_type == media_type)
+    )
+
+
 def _create_wanted_state_indexes(bind):
     if not index_exists(bind, 'table_missing_subtitles', 'ix_missing_subtitles_media'):
         op.create_index(
@@ -346,7 +357,9 @@ def upgrade():
             sa.UniqueConstraint('media_type', 'media_id', 'language', name='uc_failed_subtitle_attempts_language'),
         )
     backfill_media_state = _backfill_media_state_sqlite if bind.dialect.name == 'sqlite' else _backfill_media_state
+    _clear_backfilled_media_state(bind, 'series')
     backfill_media_state(bind, 'series', 'sonarrEpisodeId', 'table_episodes')
+    _clear_backfilled_media_state(bind, 'movie')
     backfill_media_state(bind, 'movie', 'radarrId', 'table_movies')
     _create_wanted_state_indexes(bind)
 

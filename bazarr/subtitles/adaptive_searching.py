@@ -27,7 +27,7 @@ def _parse_attempts_fast(attempt_string):
     for attempt in attempt_string[2:-2].split("], ["):
         try:
             desired_language, timestamp_text = attempt.split(", ", 1)
-            if desired_language[0] != "'" or desired_language[-1] != "'":
+            if desired_language[0] not in ("'", '"') or desired_language[-1] != desired_language[0]:
                 return None
             timestamp = float(timestamp_text) if "." in timestamp_text else int(timestamp_text)
         except (IndexError, TypeError, ValueError):

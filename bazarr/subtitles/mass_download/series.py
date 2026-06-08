@@ -127,10 +127,12 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
             any([not x['embedded_track_id'] for x in previously_indexed_subtitles if not x['path']]):
         # subtitles indexing for this episode might be incomplete, we'll do it again
         store_subtitles(episode.sonarrEpisodeId)
+        missing_languages = None
         episode = database.execute(stmt).first()
     elif episode.missing_subtitles is None:
         # missing subtitles calculation for this episode is incomplete, we'll do it again
         list_missing_subtitles(epno=no)
+        missing_languages = None
         episode = database.execute(stmt).first()
 
     episodePath = path_mappings.path_replace(episode.path)
