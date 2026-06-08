@@ -22,9 +22,11 @@ from app.config import settings
 from ..adaptive_searching import get_adaptive_search_policy
 from ..download import generate_subtitles
 from subtitles.wanted_state import (
+    count_due_missing_media,
     get_due_missing_languages_map,
     get_due_missing_languages_for_media,
     get_missing_languages,
+    iter_due_missing_languages_maps,
     record_failed_subtitle_attempts,
     record_failed_subtitle_attempts_map,
 )
@@ -287,6 +289,13 @@ def _record_failed_movie_attempts(failed_attempt_languages):
         )
 
 
+def _record_pending_failed_movie_attempts(pending_failed_attempts):
+    if not pending_failed_attempts:
+        return
+    _record_failed_movie_attempts(dict(pending_failed_attempts))
+    pending_failed_attempts.clear()
+
+
 def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=False):
     if not job_id:
         jobs_queue.add_job_from_function("Searching for missing movies subtitles", is_progress=True,
@@ -294,33 +303,10 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
         return
 
     adaptive_search_policy = get_adaptive_search_policy()
-    due_languages_by_movie = get_due_missing_languages_map(
+    count_movies = count_due_missing_media(
         'movie',
         adaptive_search_policy=adaptive_search_policy,
     )
-    due_movie_ids = list(due_languages_by_movie)
-    movies = []
-    if due_movie_ids:
-        exclusion_clause = get_exclusion_clause('movie')
-        for index in range(0, len(due_movie_ids), _DUE_MOVIE_DETAILS_BATCH_SIZE):
-            due_movie_id_chunk = due_movie_ids[index:index + _DUE_MOVIE_DETAILS_BATCH_SIZE]
-            base_conditions = [TableMovies.radarrId.in_(due_movie_id_chunk)]
-            base_conditions += exclusion_clause
-            movies.extend(
-                database.execute(
-                    _WANTED_MOVIES_SELECT
-                    .where(reduce(operator.and_, base_conditions))
-                ).all()
-            )
-
-    movies_to_search = []
-    fallback_allowed = settings.general.use_whisper_fallback
-    for movie in movies:
-        due_languages = due_languages_by_movie[movie.radarrId]
-        if due_languages:
-            movies_to_search.append((movie, due_languages))
-
-    count_movies = len(movies_to_search)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_movies)
 
     if count_movies == 0:
@@ -329,47 +315,72 @@ def wanted_search_missing_subtitles_movies(job_id=None, wait_for_completion=Fals
     else:
         throttled = False
 
-    failed_attempt_languages = {}
-    for i, (movie, due_languages) in enumerate(movies_to_search, start=1):
-        jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_message=movie.title)
+    fallback_allowed = settings.general.use_whisper_fallback
+    pending_failed_attempts = {}
+    processed_count = 0
+    if count_movies:
+        exclusion_clause = get_exclusion_clause('movie')
+        for due_languages_by_chunk in iter_due_missing_languages_maps(
+            'movie',
+            adaptive_search_policy=adaptive_search_policy,
+            batch_size=_DUE_MOVIE_DETAILS_BATCH_SIZE,
+        ):
+            due_movie_id_chunk = list(due_languages_by_chunk)
+            base_conditions = [TableMovies.radarrId.in_(due_movie_id_chunk)]
+            base_conditions += exclusion_clause
+            for movie in database.execute(
+                _WANTED_MOVIES_SELECT
+                .where(reduce(operator.and_, base_conditions))
+            ):
+                due_languages = due_languages_by_chunk.get(movie.radarrId)
+                if not due_languages:
+                    continue
 
-        providers = get_providers()
-        if providers:
-            if _movie_needs_wanted_lookup_refresh(movie):
-                remaining_due_languages = wanted_download_subtitles_movie(
-                    movie.radarrId,
-                    job_id=job_id,
-                    providers_list=providers,
-                    movie=movie,
-                    due_languages=due_languages,
-                    adaptive_search_policy=adaptive_search_policy,
-                    fallback_allowed=fallback_allowed,
-                    defer_failed_attempts=True,
-                )
-                if remaining_due_languages:
-                    failed_attempt_languages[movie.radarrId] = remaining_due_languages
-            else:
-                remaining_due_languages = _wanted_movie(
-                    movie,
-                    providers,
-                    due_languages=due_languages,
-                    job_id=job_id,
-                    adaptive_search_policy=adaptive_search_policy,
-                    fallback_allowed=fallback_allowed,
-                    defer_failed_attempts=True,
-                )
-                if remaining_due_languages:
-                    failed_attempt_languages[movie.radarrId] = remaining_due_languages
+                processed_count += 1
+                jobs_queue.update_job_progress(job_id=job_id, progress_value=processed_count,
+                                               progress_message=movie.title)
 
-            # make sure to override the progress value updated by the subtitles synchronization
-            jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_max=count_movies)
-        else:
-            logging.info("BAZARR All providers are throttled")
-            throttled = True
-            break
+                providers = get_providers()
+                if providers:
+                    if _movie_needs_wanted_lookup_refresh(movie):
+                        remaining_due_languages = wanted_download_subtitles_movie(
+                            movie.radarrId,
+                            job_id=job_id,
+                            providers_list=providers,
+                            movie=movie,
+                            due_languages=due_languages,
+                            adaptive_search_policy=adaptive_search_policy,
+                            fallback_allowed=fallback_allowed,
+                            defer_failed_attempts=True,
+                        )
+                        if remaining_due_languages:
+                            pending_failed_attempts[movie.radarrId] = remaining_due_languages
+                    else:
+                        remaining_due_languages = _wanted_movie(
+                            movie,
+                            providers,
+                            due_languages=due_languages,
+                            job_id=job_id,
+                            adaptive_search_policy=adaptive_search_policy,
+                            fallback_allowed=fallback_allowed,
+                            defer_failed_attempts=True,
+                        )
+                        if remaining_due_languages:
+                            pending_failed_attempts[movie.radarrId] = remaining_due_languages
 
-    if failed_attempt_languages:
-        _record_failed_movie_attempts(failed_attempt_languages)
+                    # make sure to override the progress value updated by the subtitles synchronization
+                    jobs_queue.update_job_progress(job_id=job_id, progress_value=processed_count,
+                                                   progress_max=count_movies)
+                else:
+                    logging.info("BAZARR All providers are throttled")
+                    throttled = True
+                    break
+            if not throttled:
+                _record_pending_failed_movie_attempts(pending_failed_attempts)
+            if throttled:
+                break
+
+    _record_pending_failed_movie_attempts(pending_failed_attempts)
 
     outcome_msg = ("All providers throttled" if throttled
                    else "Search completed")

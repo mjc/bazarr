@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from app.database import TableFailedSubtitleAttempts, TableMissingSubtitles, database, delete, insert, select
 from subtitles.adaptive_searching import (
@@ -52,6 +52,16 @@ def get_failed_subtitle_attempt_rows(media_type, media_id, failed_attempts):
     return rows
 
 
+def _serialize_attempt_windows(attempt_windows):
+    attempts = []
+    for language, (initial_attempt_at, latest_attempt_at) in attempt_windows.items():
+        attempts.append([language, initial_attempt_at])
+        if latest_attempt_at != initial_attempt_at:
+            attempts.append([language, latest_attempt_at])
+
+    return str(sorted(attempts, key=lambda attempt: attempt[0]))
+
+
 def refresh_failed_subtitle_attempts(media_type, media_id, failed_attempts):
     database.execute(
         delete(TableFailedSubtitleAttempts)
@@ -65,7 +75,7 @@ def refresh_failed_subtitle_attempts(media_type, media_id, failed_attempts):
 
 
 def serialize_failed_subtitle_attempts(media_type, media_id):
-    attempts = []
+    attempt_windows = {}
     for row in database.execute(
         select(
             TableFailedSubtitleAttempts.language,
@@ -74,12 +84,10 @@ def serialize_failed_subtitle_attempts(media_type, media_id):
         )
         .where(TableFailedSubtitleAttempts.media_type == media_type)
         .where(TableFailedSubtitleAttempts.media_id == media_id)
-    ).all():
-        attempts.append([row.language, row.initial_attempt_at])
-        if row.latest_attempt_at != row.initial_attempt_at:
-            attempts.append([row.language, row.latest_attempt_at])
+    ):
+        attempt_windows[row.language] = (row.initial_attempt_at, row.latest_attempt_at)
 
-    return str(sorted(attempts, key=lambda attempt: attempt[0]))
+    return _serialize_attempt_windows(attempt_windows)
 
 
 def record_failed_subtitle_attempts(media_type, media_id, languages):
@@ -105,8 +113,9 @@ def record_failed_subtitle_attempts_map(media_type, languages_by_media_id):
 
     media_ids = list(languages_by_media_id)
     current_timestamp = datetime.timestamp(datetime.now())
-    existing_attempts = {media_id: {} for media_id in media_ids}
+    serialized_attempts = {}
     for media_id_chunk in _iter_chunks(media_ids):
+        existing_attempts = {media_id: {} for media_id in media_id_chunk}
         for row in database.execute(
             select(
                 TableFailedSubtitleAttempts.media_id,
@@ -116,50 +125,44 @@ def record_failed_subtitle_attempts_map(media_type, languages_by_media_id):
             )
             .where(TableFailedSubtitleAttempts.media_type == media_type)
             .where(TableFailedSubtitleAttempts.media_id.in_(media_id_chunk))
-        ).all():
+        ):
             existing_attempts[row.media_id][row.language] = row
 
-    rows = []
-    updated_attempts = {
-        media_id: {
-            language: (row.initial_attempt_at, row.latest_attempt_at)
-            for language, row in media_attempts.items()
+        rows = []
+        updated_attempts = {
+            media_id: {
+                language: (row.initial_attempt_at, row.latest_attempt_at)
+                for language, row in media_attempts.items()
+            }
+            for media_id, media_attempts in existing_attempts.items()
         }
-        for media_id, media_attempts in existing_attempts.items()
-    }
-    for media_id, languages in languages_by_media_id.items():
-        for language in languages:
-            existing_attempt = existing_attempts[media_id].get(language)
-            initial_attempt_at = (
-                existing_attempt.initial_attempt_at
-                if existing_attempt is not None else current_timestamp
-            )
-            rows.append({
-                "media_type": media_type,
-                "media_id": media_id,
-                "language": language,
-                "initial_attempt_at": initial_attempt_at,
-                "latest_attempt_at": current_timestamp,
-            })
-            updated_attempts[media_id][language] = (initial_attempt_at, current_timestamp)
+        for media_id in media_id_chunk:
+            for language in languages_by_media_id[media_id]:
+                existing_attempt = existing_attempts[media_id].get(language)
+                initial_attempt_at = (
+                    existing_attempt.initial_attempt_at
+                    if existing_attempt is not None else current_timestamp
+                )
+                rows.append({
+                    "media_type": media_type,
+                    "media_id": media_id,
+                    "language": language,
+                    "initial_attempt_at": initial_attempt_at,
+                    "latest_attempt_at": current_timestamp,
+                })
+                updated_attempts[media_id][language] = (initial_attempt_at, current_timestamp)
 
-    for row_chunk in _iter_chunks(rows):
-        statement = insert(TableFailedSubtitleAttempts).values(row_chunk)
-        database.execute(
-            statement.on_conflict_do_update(
-                index_elements=["media_type", "media_id", "language"],
-                set_={"latest_attempt_at": current_timestamp},
+        for row_chunk in _iter_chunks(rows):
+            statement = insert(TableFailedSubtitleAttempts).values(row_chunk)
+            database.execute(
+                statement.on_conflict_do_update(
+                    index_elements=["media_type", "media_id", "language"],
+                    set_={"latest_attempt_at": current_timestamp},
+                )
             )
-        )
 
-    serialized_attempts = {}
-    for media_id, media_attempts in updated_attempts.items():
-        attempts = []
-        for language, (initial_attempt_at, latest_attempt_at) in media_attempts.items():
-            attempts.append([language, initial_attempt_at])
-            if latest_attempt_at != initial_attempt_at:
-                attempts.append([language, latest_attempt_at])
-        serialized_attempts[media_id] = str(sorted(attempts, key=lambda attempt: attempt[0]))
+        for media_id, media_attempts in updated_attempts.items():
+            serialized_attempts[media_id] = _serialize_attempt_windows(media_attempts)
 
     return serialized_attempts
 
@@ -191,7 +194,7 @@ def get_missing_languages(media_type, media_id):
             .where(TableMissingSubtitles.media_type == media_type)
             .where(TableMissingSubtitles.media_id == media_id)
             .order_by(TableMissingSubtitles.id)
-        ).all()
+        )
     ]
 
 
@@ -207,7 +210,7 @@ def get_missing_languages_map(media_type, media_ids):
             .where(TableMissingSubtitles.media_type == media_type)
             .where(TableMissingSubtitles.media_id.in_(media_id_chunk))
             .order_by(TableMissingSubtitles.id)
-        ).all():
+        ):
             missing_languages[row.media_id].append(row.language)
 
     return missing_languages
@@ -245,7 +248,7 @@ def get_failed_attempt_pairs(media_type, media_id):
         )
         .where(TableFailedSubtitleAttempts.media_type == media_type)
         .where(TableFailedSubtitleAttempts.media_id == media_id)
-    ).all():
+    ):
         attempts.append([row.language, row.initial_attempt_at])
         if row.latest_attempt_at != row.initial_attempt_at:
             attempts.append([row.language, row.latest_attempt_at])
@@ -262,6 +265,66 @@ def get_due_missing_languages_for_media(media_type, media_id, adaptive_search_po
         get_failed_attempt_pairs(media_type, media_id),
         adaptive_search_policy=adaptive_search_policy,
     )
+
+
+def _due_missing_languages_statement(media_type, adaptive_search_policy):
+    statement = (
+        select(TableMissingSubtitles.media_id, TableMissingSubtitles.language)
+        .where(TableMissingSubtitles.media_type == media_type)
+    )
+
+    if adaptive_search_policy is None:
+        return statement
+
+    initial_search_cutoff = adaptive_search_policy["initial_search_cutoff"]
+    latest_search_cutoff = adaptive_search_policy["latest_search_cutoff"]
+
+    return (
+        statement
+        .outerjoin(
+            TableFailedSubtitleAttempts,
+            (TableFailedSubtitleAttempts.media_type == TableMissingSubtitles.media_type) &
+            (TableFailedSubtitleAttempts.media_id == TableMissingSubtitles.media_id) &
+            (TableFailedSubtitleAttempts.language == TableMissingSubtitles.language),
+        )
+        .where(or_(
+            TableFailedSubtitleAttempts.id.is_(None),
+            TableFailedSubtitleAttempts.initial_attempt_at > initial_search_cutoff,
+            TableFailedSubtitleAttempts.latest_attempt_at <= latest_search_cutoff,
+        ))
+    )
+
+
+def count_due_missing_media(media_type, adaptive_search_policy=None):
+    if adaptive_search_policy is None:
+        adaptive_search_policy = get_adaptive_search_policy()
+
+    return database.execute(
+        _due_missing_languages_statement(media_type, adaptive_search_policy)
+        .with_only_columns(func.count(func.distinct(TableMissingSubtitles.media_id)))
+        .order_by(None)
+    ).scalar() or 0
+
+
+def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, batch_size=None):
+    if batch_size is None:
+        batch_size = WANTED_STATE_QUERY_BATCH_SIZE
+    if adaptive_search_policy is None:
+        adaptive_search_policy = get_adaptive_search_policy()
+
+    statement = (
+        _due_missing_languages_statement(media_type, adaptive_search_policy)
+        .order_by(TableMissingSubtitles.media_id, TableMissingSubtitles.id)
+    )
+    due_languages = {}
+    for row in database.execute(statement):
+        if row.media_id not in due_languages and len(due_languages) >= batch_size:
+            yield due_languages
+            due_languages = {}
+        due_languages.setdefault(row.media_id, []).append(row.language)
+
+    if due_languages:
+        yield due_languages
 
 
 def get_due_missing_languages_map(media_type, media_ids=None, adaptive_search_policy=None):
@@ -285,37 +348,22 @@ def get_due_missing_languages_map(media_type, media_ids=None, adaptive_search_po
             select(TableMissingSubtitles.media_id, TableMissingSubtitles.language)
             .where(TableMissingSubtitles.media_type == media_type)
             .order_by(TableMissingSubtitles.id)
-        ).all():
+        ):
             due_languages.setdefault(row.media_id, []).append(row.language)
         return due_languages
 
-    initial_search_cutoff = adaptive_search_policy["initial_search_cutoff"]
-    latest_search_cutoff = adaptive_search_policy["latest_search_cutoff"]
-
     statement = (
-        select(TableMissingSubtitles.media_id, TableMissingSubtitles.language)
-        .outerjoin(
-            TableFailedSubtitleAttempts,
-            (TableFailedSubtitleAttempts.media_type == TableMissingSubtitles.media_type) &
-            (TableFailedSubtitleAttempts.media_id == TableMissingSubtitles.media_id) &
-            (TableFailedSubtitleAttempts.language == TableMissingSubtitles.language),
-        )
-        .where(TableMissingSubtitles.media_type == media_type)
-        .where(or_(
-            TableFailedSubtitleAttempts.id.is_(None),
-            TableFailedSubtitleAttempts.initial_attempt_at > initial_search_cutoff,
-            TableFailedSubtitleAttempts.latest_attempt_at <= latest_search_cutoff,
-        ))
+        _due_missing_languages_statement(media_type, adaptive_search_policy)
         .order_by(TableMissingSubtitles.id)
     )
     if has_media_filter:
         for media_id_chunk in _iter_chunks(media_ids):
             for row in database.execute(
                 statement.where(TableMissingSubtitles.media_id.in_(media_id_chunk))
-            ).all():
+            ):
                 due_languages.setdefault(row.media_id, []).append(row.language)
     else:
-        for row in database.execute(statement).all():
+        for row in database.execute(statement):
             due_languages.setdefault(row.media_id, []).append(row.language)
 
     return due_languages

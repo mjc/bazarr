@@ -23,9 +23,11 @@ from app.config import settings
 from ..adaptive_searching import get_adaptive_search_policy
 from ..download import generate_subtitles
 from subtitles.wanted_state import (
+    count_due_missing_media,
     get_due_missing_languages_map,
     get_due_missing_languages_for_media,
     get_missing_languages,
+    iter_due_missing_languages_maps,
     record_failed_subtitle_attempts,
     record_failed_subtitle_attempts_map,
 )
@@ -270,6 +272,13 @@ def _record_failed_episode_attempts(failed_attempt_languages):
         )
 
 
+def _record_pending_failed_episode_attempts(pending_failed_attempts):
+    if not pending_failed_attempts:
+        return
+    _record_failed_episode_attempts(dict(pending_failed_attempts))
+    pending_failed_attempts.clear()
+
+
 def wanted_search_missing_subtitles_series(job_id=None, wait_for_completion=False):
     if not job_id:
         jobs_queue.add_job_from_function("Searching for missing series subtitles", is_progress=True,
@@ -277,33 +286,10 @@ def wanted_search_missing_subtitles_series(job_id=None, wait_for_completion=Fals
         return
 
     adaptive_search_policy = get_adaptive_search_policy()
-    due_languages_by_episode = get_due_missing_languages_map(
+    count_episodes = count_due_missing_media(
         'series',
         adaptive_search_policy=adaptive_search_policy,
     )
-    due_episode_ids = list(due_languages_by_episode)
-    episodes = []
-    if due_episode_ids:
-        exclusion_clause = get_exclusion_clause('series')
-        for index in range(0, len(due_episode_ids), _DUE_EPISODE_DETAILS_BATCH_SIZE):
-            due_episode_id_chunk = due_episode_ids[index:index + _DUE_EPISODE_DETAILS_BATCH_SIZE]
-            base_conditions = [TableEpisodes.sonarrEpisodeId.in_(due_episode_id_chunk)]
-            base_conditions += exclusion_clause
-            episodes.extend(
-                database.execute(
-                    _WANTED_EPISODE_DETAILS_SELECT
-                    .where(reduce(operator.and_, base_conditions))
-                ).all()
-            )
-
-    episodes_to_search = []
-    fallback_allowed = settings.general.use_whisper_fallback
-    for episode in episodes:
-        due_languages = due_languages_by_episode[episode.sonarrEpisodeId]
-        if due_languages:
-            episodes_to_search.append((episode, due_languages))
-
-    count_episodes = len(episodes_to_search)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_episodes)
 
     if count_episodes == 0:
@@ -312,49 +298,76 @@ def wanted_search_missing_subtitles_series(job_id=None, wait_for_completion=Fals
     else:
         throttled = False
 
-    failed_attempt_languages = {}
-    for i, (episode, due_languages) in enumerate(episodes_to_search, start=1):
-        jobs_queue.update_job_progress(job_id=job_id, progress_value=i,
-                                       progress_message=f'{episode.title} - S{episode.season:02d}E{episode.episode:02d}'
-                                                         f' - {episode.episodeTitle}')
+    fallback_allowed = settings.general.use_whisper_fallback
+    pending_failed_attempts = {}
+    processed_count = 0
+    if count_episodes:
+        exclusion_clause = get_exclusion_clause('series')
+        for due_languages_by_chunk in iter_due_missing_languages_maps(
+            'series',
+            adaptive_search_policy=adaptive_search_policy,
+            batch_size=_DUE_EPISODE_DETAILS_BATCH_SIZE,
+        ):
+            due_episode_id_chunk = list(due_languages_by_chunk)
+            base_conditions = [TableEpisodes.sonarrEpisodeId.in_(due_episode_id_chunk)]
+            base_conditions += exclusion_clause
+            for episode in database.execute(
+                _WANTED_EPISODE_DETAILS_SELECT
+                .where(reduce(operator.and_, base_conditions))
+            ):
+                due_languages = due_languages_by_chunk.get(episode.sonarrEpisodeId)
+                if not due_languages:
+                    continue
 
-        providers = get_providers()
-        if providers:
-            if _episode_needs_wanted_lookup_refresh(episode):
-                remaining_due_languages = wanted_download_subtitles(
-                    episode.sonarrEpisodeId,
+                processed_count += 1
+                jobs_queue.update_job_progress(
                     job_id=job_id,
-                    providers_list=providers,
-                    episode_details=episode,
-                    due_languages=due_languages,
-                    adaptive_search_policy=adaptive_search_policy,
-                    fallback_allowed=fallback_allowed,
-                    defer_failed_attempts=True,
+                    progress_value=processed_count,
+                    progress_message=f'{episode.title} - S{episode.season:02d}E{episode.episode:02d}'
+                                     f' - {episode.episodeTitle}',
                 )
-                if remaining_due_languages:
-                    failed_attempt_languages[episode.sonarrEpisodeId] = remaining_due_languages
-            else:
-                remaining_due_languages = _wanted_episode(
-                    episode,
-                    providers,
-                    due_languages=due_languages,
-                    job_id=job_id,
-                    adaptive_search_policy=adaptive_search_policy,
-                    fallback_allowed=fallback_allowed,
-                    defer_failed_attempts=True,
-                )
-                if remaining_due_languages:
-                    failed_attempt_languages[episode.sonarrEpisodeId] = remaining_due_languages
 
-            # make sure to override the progress value updated by the subtitles synchronization
-            jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_max=count_episodes)
-        else:
-            logging.info("BAZARR All providers are throttled")
-            throttled = True
-            break
+                providers = get_providers()
+                if providers:
+                    if _episode_needs_wanted_lookup_refresh(episode):
+                        remaining_due_languages = wanted_download_subtitles(
+                            episode.sonarrEpisodeId,
+                            job_id=job_id,
+                            providers_list=providers,
+                            episode_details=episode,
+                            due_languages=due_languages,
+                            adaptive_search_policy=adaptive_search_policy,
+                            fallback_allowed=fallback_allowed,
+                            defer_failed_attempts=True,
+                        )
+                        if remaining_due_languages:
+                            pending_failed_attempts[episode.sonarrEpisodeId] = remaining_due_languages
+                    else:
+                        remaining_due_languages = _wanted_episode(
+                            episode,
+                            providers,
+                            due_languages=due_languages,
+                            job_id=job_id,
+                            adaptive_search_policy=adaptive_search_policy,
+                            fallback_allowed=fallback_allowed,
+                            defer_failed_attempts=True,
+                        )
+                        if remaining_due_languages:
+                            pending_failed_attempts[episode.sonarrEpisodeId] = remaining_due_languages
 
-    if failed_attempt_languages:
-        _record_failed_episode_attempts(failed_attempt_languages)
+                    # make sure to override the progress value updated by the subtitles synchronization
+                    jobs_queue.update_job_progress(job_id=job_id, progress_value=processed_count,
+                                                   progress_max=count_episodes)
+                else:
+                    logging.info("BAZARR All providers are throttled")
+                    throttled = True
+                    break
+            if not throttled:
+                _record_pending_failed_episode_attempts(pending_failed_attempts)
+            if throttled:
+                break
+
+    _record_pending_failed_episode_attempts(pending_failed_attempts)
 
     outcome_msg = ("All providers throttled" if throttled
                    else "Search completed")

@@ -3,7 +3,6 @@
 import gc
 import os
 import logging
-import ast
 
 from subliminal_patch import core, search_external_subtitles
 
@@ -233,19 +232,22 @@ def list_missing_subtitles_movies(no=None):
                   TableMovies.missing_subtitles)
 
     if no:
-        movies_subtitles = database.execute(stmt.where(TableMovies.radarrId == no)).all()
+        movies_subtitles = database.execute(stmt.where(TableMovies.radarrId == no))
     else:
-        movies_subtitles = database.execute(stmt).all()
+        movies_subtitles = database.execute(stmt)
 
     use_embedded_subs = settings.general.use_embedded_subs
     adaptive_search_policy = get_adaptive_search_policy()
 
-    matches_audio = lambda language: any(x['code2'] == language['language'] for x in get_audio_profile_languages(
-                                movie_subtitles.audio_language))
-
     for movie_subtitles in movies_subtitles:
         missing_subtitles_text = '[]'
         if movie_subtitles.profileId:
+            audio_language_codes = {
+                x['code2']
+                for x in get_audio_profile_languages(movie_subtitles.audio_language)
+            }
+            matches_audio = lambda language: language['language'] in audio_language_codes
+
             # get desired subtitles
             desired_subtitles_temp = get_profiles_list(profile_id=movie_subtitles.profileId)
             desired_subtitles_list = []
