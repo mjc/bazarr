@@ -18,8 +18,13 @@ _POLICY = {
 class _Result:
     def __init__(self, all_value=None):
         self._all_value = [] if all_value is None else all_value
+        self.all_called = False
+
+    def __iter__(self):
+        return iter(self._all_value)
 
     def all(self):
+        self.all_called = True
         return self._all_value
 
 
@@ -53,6 +58,24 @@ def _capture_update(monkeypatch, module):
 
     monkeypatch.setattr(module, "update", update)
     return updates
+
+
+def _patch_due_stream(monkeypatch, module, due_languages):
+    due_languages = dict(due_languages)
+
+    def iter_due_chunks(*args, batch_size=None, **kwargs):
+        items = list(due_languages.items())
+        if batch_size is None:
+            batch_size = len(items) or 1
+        for index in range(0, len(items), batch_size):
+            yield dict(items[index:index + batch_size])
+
+    monkeypatch.setattr(module, "count_due_missing_media", lambda *args, **kwargs: len(due_languages), raising=False)
+    if hasattr(module, "_count_due_episodes"):
+        monkeypatch.setattr(module, "_count_due_episodes", lambda *args, **kwargs: len(due_languages))
+    if hasattr(module, "_count_due_movies"):
+        monkeypatch.setattr(module, "_count_due_movies", lambda *args, **kwargs: len(due_languages))
+    monkeypatch.setattr(module, "iter_due_missing_languages_maps", iter_due_chunks)
 
 
 def _adaptive_policy(now_timestamp):
@@ -120,11 +143,7 @@ def test_series_wanted_search_prefilters_adaptive_search_and_reuses_providers(mo
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_series, "get_providers", lambda: provider_calls.append(True) or ["provider"])
-    monkeypatch.setattr(
-        wanted_series,
-        "get_due_missing_languages_map",
-        lambda media_type, media_ids=None, adaptive_search_policy=None: {10: ["en"], 20: []},
-    )
+    _patch_due_stream(monkeypatch, wanted_series, {10: ["en"], 20: []})
     monkeypatch.setattr(
         wanted_series,
         "_wanted_episode",
@@ -170,11 +189,7 @@ def test_movie_wanted_search_prefilters_adaptive_search_and_reuses_providers(mon
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_movies, "get_providers", lambda: provider_calls.append(True) or ["provider"])
-    monkeypatch.setattr(
-        wanted_movies,
-        "get_due_missing_languages_map",
-        lambda media_type, media_ids=None, adaptive_search_policy=None: {10: ["en"], 20: []},
-    )
+    _patch_due_stream(monkeypatch, wanted_movies, {10: ["en"], 20: []})
     monkeypatch.setattr(
         wanted_movies,
         "_wanted_movie",
@@ -220,7 +235,7 @@ def test_movie_wanted_search_refreshes_provider_availability(monkeypatch):
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_movies, "get_providers", lambda: next(provider_results))
-    monkeypatch.setattr(wanted_movies, "get_due_missing_languages_map", lambda *args, **kwargs: {10: ["en"], 20: ["en"]})
+    _patch_due_stream(monkeypatch, wanted_movies, {10: ["en"], 20: ["en"]})
     monkeypatch.setattr(
         wanted_movies,
         "_wanted_movie",
@@ -265,7 +280,7 @@ def test_movie_wanted_search_does_not_stamp_rows_after_providers_throttle(monkey
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_movies, "get_providers", lambda: next(provider_results))
-    monkeypatch.setattr(wanted_movies, "get_due_missing_languages_map", lambda *args, **kwargs: {10: ["en"], 20: ["en"]})
+    _patch_due_stream(monkeypatch, wanted_movies, {10: ["en"], 20: ["en"]})
     monkeypatch.setattr(
         wanted_movies,
         "_wanted_movie",
@@ -320,7 +335,7 @@ def test_movie_wanted_search_batches_failed_attempt_updates(monkeypatch):
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_movies, "get_providers", lambda: ["provider"])
-    monkeypatch.setattr(wanted_movies, "get_due_missing_languages_map", lambda *args, **kwargs: {
+    _patch_due_stream(monkeypatch, wanted_movies, {
         10: ["en"],
         20: ["fr"],
     })
@@ -424,7 +439,7 @@ def test_series_wanted_search_refreshes_provider_availability(monkeypatch):
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_series, "get_providers", lambda: next(provider_results))
-    monkeypatch.setattr(wanted_series, "get_due_missing_languages_map", lambda *args, **kwargs: {10: ["en"], 20: ["en"]})
+    _patch_due_stream(monkeypatch, wanted_series, {10: ["en"], 20: ["en"]})
     monkeypatch.setattr(
         wanted_series,
         "_wanted_episode",
@@ -477,7 +492,7 @@ def test_series_wanted_search_does_not_stamp_rows_after_providers_throttle(monke
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_series, "get_providers", lambda: next(provider_results))
-    monkeypatch.setattr(wanted_series, "get_due_missing_languages_map", lambda *args, **kwargs: {10: ["en"], 20: ["en"]})
+    _patch_due_stream(monkeypatch, wanted_series, {10: ["en"], 20: ["en"]})
     monkeypatch.setattr(
         wanted_series,
         "_wanted_episode",
@@ -540,7 +555,7 @@ def test_series_wanted_search_batches_failed_attempt_updates(monkeypatch):
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_series, "get_providers", lambda: ["provider"])
-    monkeypatch.setattr(wanted_series, "get_due_missing_languages_map", lambda *args, **kwargs: {
+    _patch_due_stream(monkeypatch, wanted_series, {
         10: ["en"],
         20: ["fr"],
     })
@@ -640,11 +655,7 @@ def test_movie_wanted_search_uses_due_language_prefilter(monkeypatch):
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_movies, "get_providers", lambda: provider_calls.append(True) or ["provider"])
-    monkeypatch.setattr(
-        wanted_movies,
-        "get_due_missing_languages_map",
-        lambda media_type, media_ids=None, adaptive_search_policy=None: {10: ["en"], 20: []},
-    )
+    _patch_due_stream(monkeypatch, wanted_movies, {10: ["en"], 20: []})
     monkeypatch.setattr(
         wanted_movies,
         "_wanted_movie",
@@ -703,11 +714,7 @@ def test_series_wanted_search_uses_due_language_prefilter(monkeypatch):
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_adaptive_search_policy", lambda: _POLICY)
     monkeypatch.setattr(wanted_series, "get_providers", lambda: provider_calls.append(True) or ["provider"])
-    monkeypatch.setattr(
-        wanted_series,
-        "get_due_missing_languages_map",
-        lambda media_type, media_ids=None, adaptive_search_policy=None: {10: ["en"], 20: []},
-    )
+    _patch_due_stream(monkeypatch, wanted_series, {10: ["en"], 20: []})
     monkeypatch.setattr(
         wanted_series,
         "_wanted_episode",
@@ -951,23 +958,32 @@ def test_movie_missing_subtitle_indexer_reuses_one_adaptive_policy_snapshot(monk
         def __init__(self):
             self.selected = False
             self.statements = []
+            self.select_result = _Result(all_value=rows)
 
         def execute(self, statement):
             self.statements.append(statement)
             if not self.selected:
                 self.selected = True
-                return _Result(all_value=rows)
+                return self.select_result
             return _Result()
 
     policy = {"policy": "snapshot"}
+    audio_calls = []
     refresh_calls = []
     database = _Database()
     monkeypatch.setattr(movie_indexer, "database", database)
     monkeypatch.setattr(movie_indexer, "settings", SimpleNamespace(general=SimpleNamespace(use_embedded_subs=True)))
     monkeypatch.setattr(movie_indexer, "get_adaptive_search_policy", lambda: policy)
-    monkeypatch.setattr(movie_indexer, "get_audio_profile_languages", lambda audio_language: [])
+    monkeypatch.setattr(
+        movie_indexer,
+        "get_audio_profile_languages",
+        lambda audio_language: audio_calls.append(audio_language) or [{"code2": "en"}],
+    )
     monkeypatch.setattr(movie_indexer, "get_profiles_list", lambda profile_id: {
-        "items": [{"language": "en", "forced": "False", "hi": "False", "audio_exclude": "False", "audio_only_include": "False"}],
+        "items": [
+            {"language": "en", "forced": "False", "hi": "False", "audio_exclude": "True", "audio_only_include": "False"},
+            {"language": "fr", "forced": "False", "hi": "False", "audio_exclude": "False", "audio_only_include": "False"},
+        ],
     })
     monkeypatch.setattr(movie_indexer, "get_subtitles", lambda **kwargs: [])
     monkeypatch.setattr(movie_indexer, "get_profile_cutoff", lambda profile_id: [])
@@ -981,10 +997,12 @@ def test_movie_missing_subtitle_indexer_reuses_one_adaptive_policy_snapshot(monk
 
     movie_indexer.list_missing_subtitles_movies()
 
+    assert database.select_result.all_called is False
+    assert audio_calls == ["eng", "eng"]
     assert len(database.statements) == 3
     assert refresh_calls == [
-        ("movie", 10, "['en']", {"adaptive_search_policy": policy, "refresh_failed_attempts": False}),
-        ("movie", 20, "['en']", {"adaptive_search_policy": policy, "refresh_failed_attempts": False}),
+        ("movie", 10, "['fr']", {"adaptive_search_policy": policy, "refresh_failed_attempts": False}),
+        ("movie", 20, "['fr']", {"adaptive_search_policy": policy, "refresh_failed_attempts": False}),
     ]
 
 
@@ -1000,23 +1018,32 @@ def test_series_missing_subtitle_indexer_reuses_one_adaptive_policy_snapshot(mon
         def __init__(self):
             self.selected = False
             self.statements = []
+            self.select_result = _Result(all_value=rows)
 
         def execute(self, statement):
             self.statements.append(statement)
             if not self.selected:
                 self.selected = True
-                return _Result(all_value=rows)
+                return self.select_result
             return _Result()
 
     policy = {"policy": "snapshot"}
+    audio_calls = []
     refresh_calls = []
     database = _Database()
     monkeypatch.setattr(series_indexer, "database", database)
     monkeypatch.setattr(series_indexer, "settings", SimpleNamespace(general=SimpleNamespace(use_embedded_subs=True)))
     monkeypatch.setattr(series_indexer, "get_adaptive_search_policy", lambda: policy)
-    monkeypatch.setattr(series_indexer, "get_audio_profile_languages", lambda audio_language: [])
+    monkeypatch.setattr(
+        series_indexer,
+        "get_audio_profile_languages",
+        lambda audio_language: audio_calls.append(audio_language) or [{"code2": "en"}],
+    )
     monkeypatch.setattr(series_indexer, "get_profiles_list", lambda profile_id: {
-        "items": [{"language": "en", "forced": "False", "hi": "False", "audio_exclude": "False", "audio_only_include": "False"}],
+        "items": [
+            {"language": "en", "forced": "False", "hi": "False", "audio_exclude": "True", "audio_only_include": "False"},
+            {"language": "fr", "forced": "False", "hi": "False", "audio_exclude": "False", "audio_only_include": "False"},
+        ],
     })
     monkeypatch.setattr(series_indexer, "get_subtitles", lambda **kwargs: [])
     monkeypatch.setattr(series_indexer, "get_profile_cutoff", lambda profile_id: [])
@@ -1030,10 +1057,12 @@ def test_series_missing_subtitle_indexer_reuses_one_adaptive_policy_snapshot(mon
 
     series_indexer.list_missing_subtitles()
 
+    assert database.select_result.all_called is False
+    assert audio_calls == ["eng", "eng"]
     assert len(database.statements) == 3
     assert refresh_calls == [
-        ("series", 10, "['en']", {"adaptive_search_policy": policy, "refresh_failed_attempts": False}),
-        ("series", 20, "['en']", {"adaptive_search_policy": policy, "refresh_failed_attempts": False}),
+        ("series", 10, "['fr']", {"adaptive_search_policy": policy, "refresh_failed_attempts": False}),
+        ("series", 20, "['fr']", {"adaptive_search_policy": policy, "refresh_failed_attempts": False}),
     ]
 
 
@@ -1776,14 +1805,12 @@ def test_scheduled_series_detail_lookup_batches_due_episode_ids(monkeypatch):
             return _Result([rows[len(detail_queries) - 1]])
 
     monkeypatch.setattr(wanted_series, "_DUE_EPISODE_DETAILS_BATCH_SIZE", 1)
-    monkeypatch.setattr(
-        wanted_series,
-        "get_due_missing_languages_map",
-        lambda media_type, adaptive_search_policy=None: {10: ["en"], 20: ["fr"]},
-    )
+    _patch_due_stream(monkeypatch, wanted_series, {10: ["en"], 20: ["fr"]})
     monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_series, "get_adaptive_search_policy", lambda: _POLICY)
-    monkeypatch.setattr(wanted_series, "get_providers", lambda: [])
+    monkeypatch.setattr(wanted_series, "get_providers", lambda: ["provider"])
+    monkeypatch.setattr(wanted_series, "_episode_needs_wanted_lookup_refresh", lambda episode: False)
+    monkeypatch.setattr(wanted_series, "_wanted_episode", lambda *args, **kwargs: None)
     monkeypatch.setattr(wanted_series, "database", _Database())
     monkeypatch.setattr(wanted_series, "jobs_queue", _job_queue())
     monkeypatch.setattr(wanted_series, "settings", SimpleNamespace(general=SimpleNamespace(use_whisper_fallback=False)))
@@ -1808,14 +1835,12 @@ def test_scheduled_movie_detail_lookup_batches_due_movie_ids(monkeypatch):
             return _Result([rows[len(detail_queries) - 1]])
 
     monkeypatch.setattr(wanted_movies, "_DUE_MOVIE_DETAILS_BATCH_SIZE", 1)
-    monkeypatch.setattr(
-        wanted_movies,
-        "get_due_missing_languages_map",
-        lambda media_type, adaptive_search_policy=None: {10: ["en"], 20: ["fr"]},
-    )
+    _patch_due_stream(monkeypatch, wanted_movies, {10: ["en"], 20: ["fr"]})
     monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: _POLICY)
-    monkeypatch.setattr(wanted_movies, "get_providers", lambda: [])
+    monkeypatch.setattr(wanted_movies, "get_providers", lambda: ["provider"])
+    monkeypatch.setattr(wanted_movies, "_movie_needs_wanted_lookup_refresh", lambda movie: False)
+    monkeypatch.setattr(wanted_movies, "_wanted_movie", lambda *args, **kwargs: None)
     monkeypatch.setattr(wanted_movies, "database", _Database())
     monkeypatch.setattr(wanted_movies, "jobs_queue", _job_queue())
     monkeypatch.setattr(wanted_movies, "settings", SimpleNamespace(general=SimpleNamespace(use_whisper_fallback=False)))

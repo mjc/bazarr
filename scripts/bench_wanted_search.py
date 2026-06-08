@@ -10,9 +10,11 @@ import argparse
 import gc
 import importlib.util
 import os
+import resource
 import shutil
 import statistics
 import sys
+import threading
 import time
 
 
@@ -100,6 +102,39 @@ class JobsQueue:
 
     def update_job_name(self, *args, **kwargs):
         return None
+
+
+def current_rss_kib():
+    if os.path.exists("/proc/self/status"):
+        with open("/proc/self/status") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1])
+    max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        return max_rss // 1024
+    return max_rss
+
+
+class MemorySampler:
+    def __init__(self, interval):
+        self.interval = interval
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._sample, name="bench-memory-sampler")
+        self.peak_rss_kib = current_rss_kib()
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc_info):
+        self._stop.set()
+        self._thread.join()
+        self.peak_rss_kib = max(self.peak_rss_kib, current_rss_kib())
+
+    def _sample(self):
+        while not self._stop.wait(self.interval):
+            self.peak_rss_kib = max(self.peak_rss_kib, current_rss_kib())
 
 
 def install_repo(repo_dir, config_dir):
@@ -319,29 +354,48 @@ def import_and_patch(media_type, counters, mode):
     return entrypoint, jobs_queue
 
 
-def run_once(repo_dir, config_dir, media_type, mode):
+def run_once(repo_dir, config_dir, media_type, mode, measure_memory=False, memory_sample_interval=0.05):
     counters = {"candidates": 0, "ids": [], "active_languages": 0}
     install_repo(repo_dir, config_dir)
     entrypoint, jobs_queue = import_and_patch(media_type, counters, mode)
     gc.collect()
+    rss_before_scan_kib = current_rss_kib() if measure_memory else 0
     start = time.perf_counter()
-    entrypoint(job_id=f"bench-{media_type}")
+    if measure_memory:
+        with MemorySampler(memory_sample_interval) as sampler:
+            entrypoint(job_id=f"bench-{media_type}")
+        peak_rss_kib = sampler.peak_rss_kib
+    else:
+        entrypoint(job_id=f"bench-{media_type}")
+        peak_rss_kib = 0
     elapsed_ms = (time.perf_counter() - start) * 1000
+    rss_after_scan_kib = current_rss_kib() if measure_memory else 0
     from app.database import close_database
 
     close_database()
+    rss_after_close_kib = current_rss_kib() if measure_memory else 0
+    if measure_memory:
+        gc.collect()
+    rss_after_gc_kib = current_rss_kib() if measure_memory else 0
     return {
         "elapsed_ms": elapsed_ms,
         "candidates": counters["candidates"],
         "unique_candidates": len(set(counters["ids"])),
         "active_languages": counters["active_languages"],
         "progress_updates": jobs_queue.progress_updates,
+        "rss_before_scan_kib": rss_before_scan_kib,
+        "peak_rss_kib": peak_rss_kib,
+        "rss_after_scan_kib": rss_after_scan_kib,
+        "rss_after_close_kib": rss_after_close_kib,
+        "rss_after_gc_kib": rss_after_gc_kib,
+        "scan_peak_delta_kib": max(0, peak_rss_kib - rss_before_scan_kib),
+        "retained_after_gc_delta_kib": rss_after_gc_kib - rss_before_scan_kib,
     }
 
 
 def summarize(samples):
     elapsed = [sample["elapsed_ms"] for sample in samples]
-    return {
+    summary = {
         "median_ms": statistics.median(elapsed),
         "min_ms": min(elapsed),
         "max_ms": max(elapsed),
@@ -350,6 +404,22 @@ def summarize(samples):
         "active_languages": samples[-1]["active_languages"],
         "progress_updates": samples[-1]["progress_updates"],
     }
+    if samples and samples[-1]["peak_rss_kib"]:
+        for key in (
+            "rss_before_scan_kib",
+            "peak_rss_kib",
+            "rss_after_scan_kib",
+            "rss_after_close_kib",
+            "rss_after_gc_kib",
+            "scan_peak_delta_kib",
+            "retained_after_gc_delta_kib",
+        ):
+            summary[key] = statistics.median(sample[key] for sample in samples)
+    return summary
+
+
+def kib_to_mib(value):
+    return value / 1024
 
 
 def parse_variant(value):
@@ -381,6 +451,17 @@ def main():
         ),
     )
     parser.add_argument("--fresh-each-run", action="store_true")
+    parser.add_argument(
+        "--measure-memory",
+        action="store_true",
+        help="Sample process RSS during each wanted-search run and print memory deltas.",
+    )
+    parser.add_argument(
+        "--memory-sample-interval",
+        type=float,
+        default=0.05,
+        help="Seconds between RSS samples when --measure-memory is enabled.",
+    )
     args = parser.parse_args()
 
     for name, repo_dir, needs_migration in args.variant:
@@ -403,7 +484,14 @@ def main():
             for _ in range(args.warmups):
                 if args.fresh_each_run:
                     reset_config()
-                run_once(repo_dir, config_dir, media_type, args.mode)
+                run_once(
+                    repo_dir,
+                    config_dir,
+                    media_type,
+                    args.mode,
+                    measure_memory=args.measure_memory,
+                    memory_sample_interval=args.memory_sample_interval,
+                )
             samples = []
             migration_samples = []
             for _ in range(args.runs):
@@ -411,17 +499,35 @@ def main():
                     sample_migration_ms = reset_config()
                     if sample_migration_ms is not None:
                         migration_samples.append(sample_migration_ms)
-                samples.append(run_once(repo_dir, config_dir, media_type, args.mode))
+                samples.append(
+                    run_once(
+                        repo_dir,
+                        config_dir,
+                        media_type,
+                        args.mode,
+                        measure_memory=args.measure_memory,
+                        memory_sample_interval=args.memory_sample_interval,
+                    )
+                )
             summary = summarize(samples)
             migration_suffix = ""
             if migration_samples:
                 migration_suffix = f" migration_median={statistics.median(migration_samples):.3f}ms"
+            memory_suffix = ""
+            if args.measure_memory:
+                memory_suffix = (
+                    f" rss_before={kib_to_mib(summary['rss_before_scan_kib']):.1f}MiB"
+                    f" peak_rss={kib_to_mib(summary['peak_rss_kib']):.1f}MiB"
+                    f" peak_delta={kib_to_mib(summary['scan_peak_delta_kib']):.1f}MiB"
+                    f" retained_after_gc={kib_to_mib(summary['retained_after_gc_delta_kib']):.1f}MiB"
+                )
             print(
                 f"{media_type}: median={summary['median_ms']:.3f}ms "
                 f"min={summary['min_ms']:.3f}ms max={summary['max_ms']:.3f}ms "
                 f"candidates={summary['candidates']} unique={summary['unique_candidates']} "
                 f"active_languages={summary['active_languages']} "
                 f"progress_updates={summary['progress_updates']}"
+                f"{memory_suffix}"
                 f"{migration_suffix}"
             )
 
