@@ -70,11 +70,10 @@ def _patch_due_stream(monkeypatch, module, due_languages):
         for index in range(0, len(items), batch_size):
             yield dict(items[index:index + batch_size])
 
-    monkeypatch.setattr(module, "count_due_missing_media", lambda *args, **kwargs: len(due_languages), raising=False)
-    if hasattr(module, "_count_due_episodes"):
-        monkeypatch.setattr(module, "_count_due_episodes", lambda *args, **kwargs: len(due_languages))
-    if hasattr(module, "_count_due_movies"):
-        monkeypatch.setattr(module, "_count_due_movies", lambda *args, **kwargs: len(due_languages))
+    if hasattr(module, "_count_searchable_due_episodes"):
+        monkeypatch.setattr(module, "_count_searchable_due_episodes", lambda *args, **kwargs: len(due_languages))
+    if hasattr(module, "_count_searchable_due_movies"):
+        monkeypatch.setattr(module, "_count_searchable_due_movies", lambda *args, **kwargs: len(due_languages))
     monkeypatch.setattr(module, "iter_due_missing_languages_maps", iter_due_chunks)
 
 
@@ -1997,6 +1996,42 @@ def test_delete_wanted_search_state_removes_normalized_rows(monkeypatch):
         connection.close()
 
 
+def test_movie_searchable_due_count_applies_media_join_and_exclusions(monkeypatch):
+    import sqlalchemy as sa
+
+    from app.database import TableLanguagesProfiles, TableMissingSubtitles, TableMovies
+    from subtitles.wanted import movies as wanted_movies
+
+    engine = sa.create_engine("sqlite://")
+    connection = engine.connect()
+    TableLanguagesProfiles.__table__.create(connection)
+    TableMovies.__table__.create(connection)
+    TableMissingSubtitles.__table__.create(connection)
+    connection.execute(
+        sa.insert(TableMovies),
+        [
+            {"radarrId": 10, "path": "/movies/10.mkv", "title": "Due", "tmdbId": "10", "monitored": "True"},
+            {"radarrId": 20, "path": "/movies/20.mkv", "title": "Excluded", "tmdbId": "20", "monitored": "False"},
+        ],
+    )
+    connection.execute(
+        sa.insert(TableMissingSubtitles),
+        [
+            {"media_type": "movie", "media_id": 10, "language": "en"},
+            {"media_type": "movie", "media_id": 20, "language": "fr"},
+            {"media_type": "movie", "media_id": 20, "language": "de"},
+            {"media_type": "movie", "media_id": 30, "language": "es"},
+        ],
+    )
+
+    monkeypatch.setattr(wanted_movies, "database", connection)
+
+    try:
+        assert wanted_movies._count_searchable_due_movies(None, [TableMovies.monitored == "True"]) == 1
+    finally:
+        connection.close()
+
+
 def test_update_one_series_delete_branch_cleans_wanted_state(monkeypatch):
     import sqlalchemy as sa
 
@@ -2138,6 +2173,36 @@ def test_refresh_wanted_search_state_replaces_missing_rows_and_optionally_failed
         ).all() == [("fr", 3.0, 5.0)]
     finally:
         connection.close()
+
+
+def test_movie_wanted_search_counts_only_searchable_rows(monkeypatch):
+    from subtitles.wanted import movies as wanted_movies
+
+    captured = []
+
+    monkeypatch.setattr(wanted_movies, "get_adaptive_search_policy", lambda: None)
+    monkeypatch.setattr(wanted_movies, "get_exclusion_clause", lambda media_type: ["movie-filter"])
+    monkeypatch.setattr(wanted_movies, "_count_searchable_due_movies", lambda adaptive_search_policy, exclusion_clause: captured.append(exclusion_clause) or 0)
+    monkeypatch.setattr(wanted_movies, "jobs_queue", _job_queue())
+
+    wanted_movies.wanted_search_missing_subtitles_movies(job_id="job")
+
+    assert captured == [["movie-filter"]]
+
+
+def test_series_wanted_search_counts_only_searchable_rows(monkeypatch):
+    from subtitles.wanted import series as wanted_series
+
+    captured = []
+
+    monkeypatch.setattr(wanted_series, "get_adaptive_search_policy", lambda: None)
+    monkeypatch.setattr(wanted_series, "get_exclusion_clause", lambda media_type: ["series-filter"])
+    monkeypatch.setattr(wanted_series, "_count_searchable_due_episodes", lambda adaptive_search_policy, exclusion_clause: captured.append(exclusion_clause) or 0)
+    monkeypatch.setattr(wanted_series, "jobs_queue", _job_queue())
+
+    wanted_series.wanted_search_missing_subtitles_series(job_id="job")
+
+    assert captured == [["series-filter"]]
 
 
 def test_adaptive_search_handles_fast_repr_attempt_format():
