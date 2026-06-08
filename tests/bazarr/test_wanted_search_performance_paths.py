@@ -1763,6 +1763,7 @@ def test_series_mass_download_passes_batched_missing_languages_to_episode_downlo
     monkeypatch.setattr(mass_series, "jobs_queue", _job_queue())
     monkeypatch.setattr(mass_series, "get_exclusion_clause", lambda media_type: [])
     monkeypatch.setattr(mass_series, "get_providers", lambda: ["provider"])
+    monkeypatch.setattr(mass_series, "get_audio_profile_languages", lambda audio_language: [])
     monkeypatch.setattr(mass_series.os.path, "exists", lambda path: True)
     monkeypatch.setattr(
         mass_series,
@@ -1788,6 +1789,64 @@ def test_series_mass_download_passes_batched_missing_languages_to_episode_downlo
     mass_series.series_download_subtitles(1, job_id="job")
 
     assert download_calls == [(10, ["en"]), (20, ["fr"])]
+
+
+def test_episode_mass_download_refreshes_missing_languages_after_reindex(monkeypatch):
+    from subtitles.mass_download import series as mass_series
+
+    episode_row = SimpleNamespace(
+        path="/shows/series/episode.mkv",
+        missing_subtitles=None,
+        monitored="True",
+        sonarrEpisodeId=10,
+        sceneName="Scene",
+        title="Series",
+        sonarrSeriesId=1,
+        audio_language="eng",
+        seriesType="standard",
+        episodeTitle="One",
+        season=1,
+        episode=1,
+        profileId=1,
+    )
+    subtitle_rows = []
+    generate_calls = []
+    missing_language_calls = []
+
+    class _Database:
+        def execute(self, statement):
+            return SimpleNamespace(first=lambda: episode_row)
+
+    monkeypatch.setattr(mass_series, "database", _Database())
+    monkeypatch.setattr(mass_series, "jobs_queue", _job_queue())
+    monkeypatch.setattr(mass_series, "get_exclusion_clause", lambda media_type: [])
+    monkeypatch.setattr(mass_series, "get_providers", lambda: ["provider"])
+    monkeypatch.setattr(mass_series, "get_audio_profile_languages", lambda audio_language: [])
+    monkeypatch.setattr(mass_series.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(
+        mass_series,
+        "settings",
+        SimpleNamespace(general=SimpleNamespace(use_whisper_fallback=False, use_whisper_fallback_series=False)),
+    )
+    monkeypatch.setattr(mass_series, "get_subtitles", lambda *args, **kwargs: [])
+    monkeypatch.setattr(mass_series, "store_subtitles", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mass_series, "list_missing_subtitles", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        mass_series,
+        "get_missing_languages",
+        lambda *args, **kwargs: missing_language_calls.append(args) or ["fresh"],
+    )
+    monkeypatch.setattr(mass_series, "missing_subtitle_to_language_tuple", lambda language: ("lang", language))
+    monkeypatch.setattr(
+        mass_series,
+        "generate_subtitles",
+        lambda *args, **kwargs: generate_calls.append(args[1]) or subtitle_rows,
+    )
+
+    mass_series.episode_download_subtitles(10, job_id="job", missing_languages=["stale"])
+
+    assert missing_language_calls == [("series", 10)]
+    assert generate_calls == [[("lang", "fresh")]]
 
 
 def test_scheduled_series_detail_lookup_batches_due_episode_ids(monkeypatch):
@@ -1938,6 +1997,87 @@ def test_delete_wanted_search_state_removes_normalized_rows(monkeypatch):
         connection.close()
 
 
+def test_update_one_series_delete_branch_cleans_wanted_state(monkeypatch):
+    import sqlalchemy as sa
+
+    from app.database import (
+        TableEpisodes,
+        TableFailedSubtitleAttempts,
+        TableLanguagesProfiles,
+        TableMissingSubtitles,
+        TableShows,
+    )
+    from sonarr.sync import series as series_sync
+    from subtitles import wanted_state
+
+    engine = sa.create_engine("sqlite://")
+    connection = engine.connect()
+    connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+    TableLanguagesProfiles.__table__.create(connection)
+    TableShows.__table__.create(connection)
+    TableEpisodes.__table__.create(connection)
+    TableMissingSubtitles.__table__.create(connection)
+    TableFailedSubtitleAttempts.__table__.create(connection)
+    connection.execute(
+        sa.insert(TableShows),
+        [
+            {"sonarrSeriesId": 10, "path": "/series/10", "title": "Series 10"},
+        ],
+    )
+    connection.execute(
+        sa.insert(TableEpisodes),
+        [
+            {"sonarrEpisodeId": 101, "sonarrSeriesId": 10, "episode": 1, "season": 1, "path": "/episode/101", "title": "Ep 101"},
+            {"sonarrEpisodeId": 102, "sonarrSeriesId": 10, "episode": 2, "season": 1, "path": "/episode/102", "title": "Ep 102"},
+        ],
+    )
+    connection.execute(
+        sa.insert(TableMissingSubtitles),
+        [
+            {"media_type": "series", "media_id": 101, "language": "en"},
+            {"media_type": "series", "media_id": 102, "language": "fr"},
+        ],
+    )
+    connection.execute(
+        sa.insert(TableFailedSubtitleAttempts),
+        [
+            {
+                "media_type": "series",
+                "media_id": 101,
+                "language": "en",
+                "initial_attempt_at": 1.0,
+                "latest_attempt_at": 2.0,
+            },
+            {
+                "media_type": "series",
+                "media_id": 102,
+                "language": "fr",
+                "initial_attempt_at": 1.0,
+                "latest_attempt_at": 2.0,
+            },
+        ],
+    )
+
+    monkeypatch.setattr(series_sync, "database", connection)
+    monkeypatch.setattr(series_sync, "event_stream", lambda *args, **kwargs: None)
+    monkeypatch.setattr(wanted_state, "database", connection)
+
+    try:
+        series_sync.update_one_series(10, action="deleted")
+
+        assert connection.execute(
+            sa.text("SELECT sonarrSeriesId FROM table_shows")
+        ).all() == []
+        assert connection.execute(
+            sa.text("SELECT media_id FROM table_missing_subtitles ORDER BY media_id")
+        ).all() == []
+        assert connection.execute(
+            sa.text("SELECT media_id FROM table_failed_subtitle_attempts ORDER BY media_id")
+        ).all() == []
+    finally:
+        connection.close()
+
+
 def test_refresh_wanted_search_state_replaces_missing_rows_and_optionally_failed_attempts(monkeypatch):
     import sqlalchemy as sa
 
@@ -2021,6 +2161,31 @@ def test_adaptive_search_handles_fast_repr_attempt_format():
     assert get_active_search_languages(
         ["en", "fr", "de"],
         f"[['en', {old_attempt}], ['en', {latest_attempt}], ['fr', {old_attempt}]]",
+        adaptive_search_policy=policy,
+    ) == ["fr", "de"]
+
+
+def test_adaptive_search_handles_double_quoted_attempt_format():
+    from datetime import datetime, timedelta
+
+    from subtitles.adaptive_searching import get_active_search_languages
+
+    now = datetime.now()
+    latest_attempt = now.timestamp() - 3600
+    old_attempt = now.timestamp() - timedelta(weeks=4).total_seconds()
+    policy = {
+        "delay": timedelta(weeks=3),
+        "delta": timedelta(weeks=1),
+        "delay_label": "3w",
+        "delta_label": "1w",
+        "now": now,
+        "initial_search_cutoff": now.timestamp() - timedelta(weeks=3).total_seconds(),
+        "latest_search_cutoff": now.timestamp() - timedelta(weeks=1).total_seconds(),
+    }
+
+    assert get_active_search_languages(
+        ["en", "fr", "de"],
+        f'[["en", {old_attempt}], ["en", {latest_attempt}], ["fr", {old_attempt}]]',
         adaptive_search_policy=policy,
     ) == ["fr", "de"]
 
@@ -2305,6 +2470,52 @@ def test_wanted_state_migration_backfills_and_downgrades_sqlite(monkeypatch):
         sa.Column("failedAttempts", sa.Text),
     )
     metadata.create_all(connection)
+    normalized_missing = sa.Table(
+        "table_missing_subtitles",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("media_type", sa.Text),
+        sa.Column("media_id", sa.Integer),
+        sa.Column("language", sa.Text),
+    )
+    normalized_failed = sa.Table(
+        "table_failed_subtitle_attempts",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("media_type", sa.Text),
+        sa.Column("media_id", sa.Integer),
+        sa.Column("language", sa.Text),
+        sa.Column("initial_attempt_at", sa.Float),
+        sa.Column("latest_attempt_at", sa.Float),
+    )
+    normalized_missing.create(connection)
+    normalized_failed.create(connection)
+    connection.execute(
+        normalized_missing.insert(),
+        [
+            {"media_type": "series", "media_id": 10, "language": "old"},
+            {"media_type": "movie", "media_id": 30, "language": "old"},
+        ],
+    )
+    connection.execute(
+        normalized_failed.insert(),
+        [
+            {
+                "media_type": "series",
+                "media_id": 10,
+                "language": "old",
+                "initial_attempt_at": 0.0,
+                "latest_attempt_at": 0.0,
+            },
+            {
+                "media_type": "movie",
+                "media_id": 30,
+                "language": "old",
+                "initial_attempt_at": 0.0,
+                "latest_attempt_at": 0.0,
+            },
+        ],
+    )
     connection.execute(
         metadata.tables["table_episodes"].insert(),
         [
@@ -2318,12 +2529,12 @@ def test_wanted_state_migration_backfills_and_downgrades_sqlite(monkeypatch):
                 "missing_subtitles": "[]",
                 "failedAttempts": "[]",
             },
-            {
-                "sonarrEpisodeId": 21,
-                "missing_subtitles": '["es"]',
-                "failedAttempts": "[['es', 7.0]]",
-            },
-        ],
+        {
+            "sonarrEpisodeId": 21,
+            "missing_subtitles": '["es"]',
+            "failedAttempts": '[["es", 7.0]]',
+        },
+    ],
     )
     connection.execute(
         metadata.tables["table_movies"].insert(),
