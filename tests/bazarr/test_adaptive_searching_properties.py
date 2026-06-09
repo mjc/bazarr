@@ -121,3 +121,36 @@ def test_update_failed_attempts_never_raises_for_malformed_attempt_strings():
         parsed = ast.literal_eval(updated)
         assert isinstance(parsed, list)
         assert any(item[0] == "en" for item in parsed)
+
+
+def test_is_search_active_respects_multi_digit_delay_weeks():
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    now_ts = datetime.timestamp(datetime.now())
+    two_weeks_ago = now_ts - (14 * 24 * 3600)
+    attempts = f"[['en', {two_weeks_ago}], ['en', {now_ts}]]"
+
+    # For delays >= 10 weeks, initial attempt is still within delay window.
+    # Search should run regardless of latest timestamp.
+    for weeks in range(10, 21):
+        module.settings.general.adaptive_searching_delay = f"{weeks}w"
+        assert module.is_search_active("en", attempts) is True
+
+
+def test_is_search_active_respects_multi_digit_delta_weeks():
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+
+    now_ts = datetime.timestamp(datetime.now())
+    four_weeks_ago = now_ts - (28 * 24 * 3600)
+    two_weeks_ago = now_ts - (14 * 24 * 3600)
+    attempts = f"[['en', {four_weeks_ago}], ['en', {two_weeks_ago}]]"
+
+    # Initial attempt is outside 1w delay, so delta controls decision.
+    # For delta >= 10 weeks and latest at 2 weeks ago, search should still be blocked.
+    for weeks in range(10, 21):
+        module.settings.general.adaptive_searching_delta = f"{weeks}w"
+        assert module.is_search_active("en", attempts) is False
