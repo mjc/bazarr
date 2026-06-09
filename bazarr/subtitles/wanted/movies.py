@@ -97,10 +97,16 @@ def wanted_download_subtitles_movie(radarr_id, job_id=None):
         # subtitles indexing for this movie might be incomplete, we'll do it again
         store_subtitles_movie(radarr_id)
         movie = database.execute(stmt).first()
+        if not movie:
+            logging.debug(f"BAZARR no movie with that radarrId can be found in database after subtitles refresh: {radarr_id}")
+            return
     elif movie.missing_subtitles is None:
         # missing subtitles calculation for this movie is incomplete, we'll do it again
         list_missing_subtitles_movies(no=radarr_id)
         movie = database.execute(stmt).first()
+        if not movie:
+            logging.debug(f"BAZARR no movie with that radarrId can be found in database after missing-subtitles refresh: {radarr_id}")
+            return
 
     providers_list = get_providers()
 

@@ -119,10 +119,18 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
         # subtitles indexing for this episode might be incomplete, we'll do it again
         store_subtitles(episode.sonarrEpisodeId)
         episode = database.execute(stmt).first()
+        if not episode:
+            logging.debug("BAZARR no episode with that sonarrEpisodeId can be found in database after subtitles refresh:", str(no))
+            jobs_queue.update_job_progress(job_id=job_id, progress_message="Episode not found in database.")
+            return
     elif episode.missing_subtitles is None:
         # missing subtitles calculation for this episode is incomplete, we'll do it again
         list_missing_subtitles(epno=no)
         episode = database.execute(stmt).first()
+        if not episode:
+            logging.debug("BAZARR no episode with that sonarrEpisodeId can be found in database after missing-subtitles refresh:", str(no))
+            jobs_queue.update_job_progress(job_id=job_id, progress_message="Episode not found in database.")
+            return
 
     episodePath = path_mappings.path_replace(episode.path)
 

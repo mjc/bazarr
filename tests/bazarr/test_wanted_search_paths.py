@@ -922,3 +922,28 @@ def test_wanted_episode_filters_out_inactive_languages_entirely(monkeypatch):
     module._wanted_episode(episode, ["provider"])
 
     assert captured_languages == [[]], "generate_subtitles is called with an empty language list"
+
+
+def test_wanted_movie_wrapper_handles_missing_row_after_missing_refresh(monkeypatch):
+    """If refresh returns no movie row, wrapper should exit without crashing."""
+    module = load_wanted_module("movies")
+    movie = _movie_row()
+    movie.missing_subtitles = None
+
+    class _Database:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, statement, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return _Result(first_value=movie)
+            return _Result(first_value=None)
+
+    monkeypatch.setattr(module, "database", _Database())
+    monkeypatch.setattr(module, "get_subtitles", lambda **kwargs: [{"path": "/movies/sub.srt", "embedded_track_id": 1}])
+    monkeypatch.setattr(module, "list_missing_subtitles_movies", lambda **kwargs: None)
+    monkeypatch.setattr(module, "get_providers", lambda: ["provider"])
+
+    result = module.wanted_download_subtitles_movie(7, job_id="job")
+    assert result is None

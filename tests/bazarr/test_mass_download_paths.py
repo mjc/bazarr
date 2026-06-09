@@ -1254,3 +1254,104 @@ def test_episode_download_subtitles_updates_job_name_on_completion(monkeypatch):
     module.episode_download_subtitles(11, job_id="job", job_sub_function=False, providers_list=["provider"])
 
     assert any("Series" in n or "Downloaded" in n for n in names), f"Expected series name in job names: {names}"
+
+
+def test_movies_download_subtitles_handles_missing_row_after_reindex_refresh(monkeypatch):
+    """If reindex refresh returns no movie row, wrapper should exit without crashing."""
+    module = load_mass_download_module("movies")
+    initial_movie = SimpleNamespace(
+        path="/movies/movie.mkv",
+        missing_subtitles="['en']",
+        audio_language="['eng']",
+        radarrId=7,
+        sceneName="Scene",
+        title="Movie",
+        year=2024,
+        tags=[],
+        monitored=True,
+        profileId=44,
+    )
+
+    class _Database:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, statement):
+            self.calls += 1
+            if self.calls == 1:
+                return _Result(first_value=initial_movie)
+            return _Result(first_value=None)
+
+    monkeypatch.setattr(module, "database", _Database())
+    monkeypatch.setattr(module, "get_subtitles", lambda **kwargs: [])
+    monkeypatch.setattr(module, "store_subtitles_movie", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.path_mappings, "path_replace_movie", lambda path: path)
+    monkeypatch.setattr(module.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "get_providers", lambda: [])
+    monkeypatch.setattr(
+        module,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+
+    result = module.movies_download_subtitles(7, job_id="job")
+    assert result is None
+
+
+def test_episode_download_subtitles_handles_missing_row_after_reindex_refresh(monkeypatch):
+    """If reindex refresh returns no episode row, wrapper should exit without crashing."""
+    module = load_mass_download_module("series")
+    initial_episode = SimpleNamespace(
+        path="/series/e01.mkv",
+        missing_subtitles="['en']",
+        monitored=True,
+        sonarrEpisodeId=11,
+        sceneName="Scene",
+        tags=[],
+        title="Series",
+        sonarrSeriesId=5,
+        audio_language="['eng']",
+        seriesType="standard",
+        episodeTitle="Pilot",
+        season=1,
+        episode=1,
+        profileId=44,
+    )
+
+    class _Database:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, statement):
+            self.calls += 1
+            if self.calls == 1:
+                return _Result(first_value=initial_episode)
+            return _Result(first_value=None)
+
+    monkeypatch.setattr(module, "database", _Database())
+    monkeypatch.setattr(module, "get_subtitles", lambda **kwargs: [])
+    monkeypatch.setattr(module, "store_subtitles", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(module.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(
+        module,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+
+    result = module.episode_download_subtitles(
+        11,
+        job_id="job",
+        job_sub_function=True,
+        providers_list=["provider"],
+    )
+    assert result is None

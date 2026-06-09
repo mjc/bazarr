@@ -103,10 +103,16 @@ def wanted_download_subtitles(sonarr_episode_id, job_id=None):
         # subtitles indexing for this episode might be incomplete, we'll do it again
         store_subtitles(sonarr_episode_id)
         episode_details = database.execute(stmt).first()
+        if not episode_details:
+            logging.debug(f"BAZARR no episode with that sonarrId can be found in database after subtitles refresh: {sonarr_episode_id}")
+            return
     elif episode_details.missing_subtitles is None:
         # missing subtitles calculation for this episode is incomplete, we'll do it again
         list_missing_subtitles(epno=sonarr_episode_id)
         episode_details = database.execute(stmt).first()
+        if not episode_details:
+            logging.debug(f"BAZARR no episode with that sonarrId can be found in database after missing-subtitles refresh: {sonarr_episode_id}")
+            return
 
     providers_list = get_providers()
 
