@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -238,6 +239,79 @@ def load_wanted_module(name):
         select=lambda *args, **kwargs: _Query(),
         get_subtitles=lambda **kwargs: [],
     )
+
+    def _parse_language_token_for_tests(language):
+        if not isinstance(language, str):
+            return None
+        parts = [part.strip().lower() for part in language.split(":")]
+        base_language = parts[0]
+        if not base_language:
+            return None
+        flags = {part for part in parts[1:] if part}
+        hi = "True" if "hi" in flags else "False"
+        forced = "True" if "forced" in flags else "False"
+        canonical_parts = [base_language]
+        if forced == "True":
+            canonical_parts.append("forced")
+        if hi == "True":
+            canonical_parts.append("hi")
+        return ":".join(canonical_parts), (base_language, hi, forced)
+
+    def _safe_missing_languages_for_tests(missing_subtitles, context):
+        del context
+        try:
+            missing = ast.literal_eval(missing_subtitles)
+        except (ValueError, SyntaxError, TypeError):
+            return []
+        if not isinstance(missing, list):
+            return []
+        safe = []
+        for language in missing:
+            parsed = _parse_language_token_for_tests(language)
+            if parsed:
+                safe.append(parsed[0])
+        return safe
+
+    def _resolve_audio_language_for_tests(audio_languages, fallback=None):
+        if not isinstance(audio_languages, list) or not audio_languages:
+            return fallback
+        for item in audio_languages:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        return fallback
+
+    def _build_search_payload_for_tests(missing_subtitles, context, include_predicate=None):
+        requests = []
+        stamps = []
+        seen_requests = set()
+        seen_stamps = set()
+        for canonical in _safe_missing_languages_for_tests(missing_subtitles, context):
+            if include_predicate and not include_predicate(canonical):
+                continue
+            parsed = _parse_language_token_for_tests(canonical)
+            if not parsed:
+                continue
+            canonical_token, language_request = parsed
+            if language_request not in seen_requests:
+                seen_requests.add(language_request)
+                requests.append(language_request)
+            if canonical_token not in seen_stamps:
+                seen_stamps.add(canonical_token)
+                stamps.append(canonical_token)
+        return requests, stamps
+
+    def _stamp_failed_attempts_for_tests(stamp_languages, initial_attempt_string, update_fn, persist_fn):
+        current_attempts = initial_attempt_string
+        for language in stamp_languages:
+            updated = update_fn(desired_language=language, attempt_string=current_attempts)
+            if not updated:
+                continue
+            current_attempts = updated
+            persist_fn(updated)
+        return current_attempts
     module_overrides = {
         "utilities.path_mappings": SimpleNamespace(path_mappings=path_mappings),
         "subtitles.indexer.movies": SimpleNamespace(
@@ -278,6 +352,13 @@ def load_wanted_module(name):
             get_adaptive_search_policy=lambda: {"policy": "adaptive"},
         ),
         "subtitles.download": SimpleNamespace(generate_subtitles=lambda *args, **kwargs: iter(())),
+        "subtitles.language_utils": SimpleNamespace(
+            parse_language_token=_parse_language_token_for_tests,
+            resolve_audio_language=_resolve_audio_language_for_tests,
+            safe_missing_languages=_safe_missing_languages_for_tests,
+            build_search_payload=_build_search_payload_for_tests,
+            stamp_failed_attempts=_stamp_failed_attempts_for_tests,
+        ),
         "subtitles.wanted_state": SimpleNamespace(
             due_missing_languages_statement=lambda *args, **kwargs: _Query(),
             get_due_missing_languages_map=lambda *args, **kwargs: {},
@@ -534,6 +615,79 @@ def load_mass_download_module(name):
         send_notifications_movie=lambda *args, **kwargs: None,
         send_notifications=lambda *args, **kwargs: None,
     )
+
+    def _parse_language_token_for_tests(language):
+        if not isinstance(language, str):
+            return None
+        parts = [part.strip().lower() for part in language.split(":")]
+        base_language = parts[0]
+        if not base_language:
+            return None
+        flags = {part for part in parts[1:] if part}
+        hi = "True" if "hi" in flags else "False"
+        forced = "True" if "forced" in flags else "False"
+        canonical_parts = [base_language]
+        if forced == "True":
+            canonical_parts.append("forced")
+        if hi == "True":
+            canonical_parts.append("hi")
+        return ":".join(canonical_parts), (base_language, hi, forced)
+
+    def _safe_missing_languages_for_tests(missing_subtitles, context):
+        del context
+        try:
+            missing = ast.literal_eval(missing_subtitles)
+        except (ValueError, SyntaxError, TypeError):
+            return []
+        if not isinstance(missing, list):
+            return []
+        safe = []
+        for language in missing:
+            parsed = _parse_language_token_for_tests(language)
+            if parsed:
+                safe.append(parsed[0])
+        return safe
+
+    def _resolve_audio_language_for_tests(audio_languages, fallback=None):
+        if not isinstance(audio_languages, list) or not audio_languages:
+            return fallback
+        for item in audio_languages:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        return fallback
+
+    def _build_search_payload_for_tests(missing_subtitles, context, include_predicate=None):
+        requests = []
+        stamps = []
+        seen_requests = set()
+        seen_stamps = set()
+        for canonical in _safe_missing_languages_for_tests(missing_subtitles, context):
+            if include_predicate and not include_predicate(canonical):
+                continue
+            parsed = _parse_language_token_for_tests(canonical)
+            if not parsed:
+                continue
+            canonical_token, language_request = parsed
+            if language_request not in seen_requests:
+                seen_requests.add(language_request)
+                requests.append(language_request)
+            if canonical_token not in seen_stamps:
+                seen_stamps.add(canonical_token)
+                stamps.append(canonical_token)
+        return requests, stamps
+
+    def _stamp_failed_attempts_for_tests(stamp_languages, initial_attempt_string, update_fn, persist_fn):
+        current_attempts = initial_attempt_string
+        for language in stamp_languages:
+            updated = update_fn(desired_language=language, attempt_string=current_attempts)
+            if not updated:
+                continue
+            current_attempts = updated
+            persist_fn(updated)
+        return current_attempts
     module_overrides = {
         "utilities.path_mappings": SimpleNamespace(path_mappings=path_mappings),
         "app.database": database_module,
@@ -556,6 +710,13 @@ def load_mass_download_module(name):
             )
         ),
         "subtitles.download": SimpleNamespace(generate_subtitles=lambda *args, **kwargs: iter(())),
+        "subtitles.language_utils": SimpleNamespace(
+            parse_language_token=_parse_language_token_for_tests,
+            resolve_audio_language=_resolve_audio_language_for_tests,
+            safe_missing_languages=_safe_missing_languages_for_tests,
+            build_search_payload=_build_search_payload_for_tests,
+            stamp_failed_attempts=_stamp_failed_attempts_for_tests,
+        ),
         "subtitles.serialization": SimpleNamespace(
             missing_subtitle_to_language_tuple=lambda language: (
                 language.split(":")[0],
