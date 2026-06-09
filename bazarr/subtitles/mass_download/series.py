@@ -29,6 +29,18 @@ def _format_episode_part(value):
         return str(value) if value is not None else "??"
 
 
+def _resolve_audio_language(audio_languages, fallback='None'):
+    if not isinstance(audio_languages, list) or not audio_languages:
+        return fallback
+
+    first_language = audio_languages[0]
+    if not isinstance(first_language, dict):
+        return fallback
+
+    name = first_language.get('name')
+    return name if isinstance(name, str) and name else fallback
+
+
 def _safe_missing_languages(missing_subtitles):
     try:
         missing = ast.literal_eval(missing_subtitles)
@@ -176,10 +188,7 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
     downloaded_count = 0
     if providers_list:
         audio_language_list = get_audio_profile_languages(episode.audio_language)
-        if len(audio_language_list) > 0:
-            audio_language = audio_language_list[0]['name']
-        else:
-            audio_language = 'None'
+        audio_language = _resolve_audio_language(audio_language_list)
 
         languages = []
 
@@ -270,10 +279,7 @@ def episode_download_specific_subtitles(sonarr_series_id, sonarr_episode_id, lan
                                new_job_name=f"Searching {language_str.upper()} for {episode_long_title}")
 
     audio_language_list = get_audio_profile_languages(episodeInfo.audio_language)
-    if len(audio_language_list) > 0:
-        audio_language = audio_language_list[0]['name']
-    else:
-        audio_language = None
+    audio_language = _resolve_audio_language(audio_language_list, fallback=None)
 
     try:
         result = list(generate_subtitles(episodePath, [(language, hi, forced)], audio_language, sceneName,

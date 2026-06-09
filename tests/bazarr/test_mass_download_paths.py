@@ -631,6 +631,95 @@ def test_episode_download_subtitles_uses_missing_languages_and_records_downloads
     assert notifications == [(5, 11, "done")]
 
 
+def test_movies_download_subtitles_handles_malformed_audio_profile_languages(monkeypatch):
+    module = load_mass_download_module("movies")
+
+    movie = SimpleNamespace(
+        path="/movies/movie.mkv",
+        missing_subtitles="['en']",
+        audio_language="['eng']",
+        radarrId=7,
+        sceneName="Scene",
+        title="Movie",
+        year=2024,
+        tags=[],
+        monitored=True,
+        profileId=44,
+    )
+    captured_audio = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(first_value=movie)
+
+    monkeypatch.setattr(module, "database", _Database())
+    monkeypatch.setattr(module, "get_subtitles", lambda **kwargs: [{"path": "/movies/sub.srt", "embedded_track_id": 1}])
+    monkeypatch.setattr(module.path_mappings, "path_replace_movie", lambda path: path)
+    monkeypatch.setattr(module.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [None, {"bad": "shape"}])
+    monkeypatch.setattr(module, "get_providers", lambda: ["provider"])
+    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured_audio.append(args[2]) or iter(()))
+    monkeypatch.setattr(
+        module,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+
+    module.movies_download_subtitles(7, job_id="job")
+
+    assert captured_audio == ["None"]
+
+
+def test_episode_download_subtitles_handles_malformed_audio_profile_languages(monkeypatch):
+    module = load_mass_download_module("series")
+
+    episode = SimpleNamespace(
+        path="/series/episode.mkv",
+        missing_subtitles="['en']",
+        monitored=True,
+        sonarrEpisodeId=11,
+        sceneName="Scene",
+        tags=[],
+        title="Series",
+        sonarrSeriesId=5,
+        audio_language="['eng']",
+        seriesType="standard",
+        episodeTitle="Pilot",
+        season=1,
+        episode=1,
+        profileId=44,
+    )
+    captured_audio = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(first_value=episode)
+
+    monkeypatch.setattr(module, "database", _Database())
+    monkeypatch.setattr(module, "get_subtitles", lambda **kwargs: [{"path": "/series/sub.srt", "embedded_track_id": 1}])
+    monkeypatch.setattr(module.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(module.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [None, {"bad": "shape"}])
+    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured_audio.append(args[2]) or iter(()))
+    monkeypatch.setattr(
+        module,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+
+    module.episode_download_subtitles(11, job_id="job", job_sub_function=True, providers_list=["provider"])
+
+    assert captured_audio == ["None"]
+
+
 def test_episode_download_subtitles_handles_noninteger_episode_numbers(monkeypatch):
     module = load_mass_download_module("series")
 

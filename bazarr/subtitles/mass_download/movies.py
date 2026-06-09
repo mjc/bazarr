@@ -43,6 +43,18 @@ def _safe_missing_languages(missing_subtitles):
     return safe
 
 
+def _resolve_audio_language(audio_languages, fallback='None'):
+    if not isinstance(audio_languages, list) or not audio_languages:
+        return fallback
+
+    first_language = audio_languages[0]
+    if not isinstance(first_language, dict):
+        return fallback
+
+    name = first_language.get('name')
+    return name if isinstance(name, str) and name else fallback
+
+
 def movies_download_subtitles(no, job_id=None, job_sub_function=False):
     if not job_sub_function and not job_id:
         jobs_queue.add_job_from_function(f"""Downloading missing subtitles for """
@@ -103,10 +115,7 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
     count_movie = len(missing_languages)
 
     audio_language_list = get_audio_profile_languages(movie.audio_language)
-    if len(audio_language_list) > 0:
-        audio_language = audio_language_list[0]['name']
-    else:
-        audio_language = 'None'
+    audio_language = _resolve_audio_language(audio_language_list)
 
     languages = []
 
@@ -185,10 +194,7 @@ def movie_download_specific_subtitles(radarr_id, language, hi, forced, job_id=No
     jobs_queue.update_job_name(job_id=job_id, new_job_name=f"Searching {language_str.upper()} for {title}")
 
     audio_language_list = get_audio_profile_languages(movieInfo.audio_language)
-    if len(audio_language_list) > 0:
-        audio_language = audio_language_list[0]['name']
-    else:
-        audio_language = None
+    audio_language = _resolve_audio_language(audio_language_list, fallback=None)
 
     try:
         result = list(generate_subtitles(moviePath, [(language, hi, forced)], audio_language,
