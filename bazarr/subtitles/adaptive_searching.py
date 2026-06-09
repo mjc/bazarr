@@ -9,6 +9,24 @@ from datetime import datetime, timedelta
 from app.config import settings
 
 
+def _safe_attempt_items(attempts):
+    safe = []
+    for item in attempts:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        if not isinstance(item[0], str):
+            continue
+        safe.append([item[0], item[1]])
+    return safe
+
+
+def _safe_timestamp(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def is_search_active(desired_language, attempt_string):
     """
     Function to test if it's time to search again after a previous attempt matching the desired language. For 3 weeks,
@@ -31,16 +49,18 @@ def is_search_active(desired_language, attempt_string):
             if type(attempts) is not list:
                 # attempts should be a list if not, it's malformed or None
                 raise ValueError
-        except ValueError:
+        except (ValueError, SyntaxError):
             logging.debug("Adaptive searching: attempts is malformed. As a failsafe, search will run.")
             return True
+
+        attempts = _safe_attempt_items(attempts)
 
         if not len(attempts):
             logging.debug("Adaptive searching: attempts list is empty, search will run.")
             return True
 
         # get attempts matching the desired language and sort them by timestamp ascending
-        matching_attempts = sorted([x for x in attempts if x[0] == desired_language], key=lambda x: x[1])
+        matching_attempts = sorted([x for x in attempts if x[0] == desired_language], key=lambda x: _safe_timestamp(x[1]))
 
         if not len(matching_attempts):
             logging.debug("Adaptive searching: there's no attempts matching desired language, search will run.")
@@ -54,8 +74,8 @@ def is_search_active(desired_language, attempt_string):
 
         # try to parse the timestamps for those attempts
         try:
-            initial_search_timestamp = datetime.fromtimestamp(initial_search_attempt[1])
-            latest_search_timestamp = datetime.fromtimestamp(latest_search_attempt[1])
+            initial_search_timestamp = datetime.fromtimestamp(float(initial_search_attempt[1]))
+            latest_search_timestamp = datetime.fromtimestamp(float(latest_search_attempt[1]))
         except (OverflowError, ValueError, OSError):
             logging.debug("Adaptive searching: unable to parse initial and latest search timestamps, search will run.")
             return True
@@ -128,14 +148,16 @@ def updateFailedAttempts(desired_language, attempt_string):
         if type(attempts) is not list:
             # attempts should be a list if not, it's malformed or None
             raise ValueError
-    except ValueError:
+    except (ValueError, SyntaxError):
         logging.debug("Adaptive searching: failed to parse attempts value, we'll use an empty list.")
         attempts = []
 
-    matching_attempts = sorted([x for x in attempts if x[0] == desired_language], key=lambda x: x[1])
+    attempts = _safe_attempt_items(attempts)
+
+    matching_attempts = sorted([x for x in attempts if x[0] == desired_language], key=lambda x: _safe_timestamp(x[1]))
     logging.debug(f"Adaptive searching: attempts matching language {desired_language}: {matching_attempts}")
 
-    filtered_attempts = sorted([x for x in attempts if x[0] != desired_language], key=lambda x: x[1])
+    filtered_attempts = sorted([x for x in attempts if x[0] != desired_language], key=lambda x: _safe_timestamp(x[1]))
     logging.debug(f"Adaptive searching: attempts not matching language {desired_language}: {filtered_attempts}")
 
     # get the initial search from attempts if there's one
