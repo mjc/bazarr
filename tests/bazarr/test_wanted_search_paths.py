@@ -984,3 +984,45 @@ def test_wanted_episode_ignores_empty_base_language_tokens(monkeypatch):
     module._wanted_episode(episode, ["provider"])
 
     assert captured == [[("en", "True", "False"), ("fr", "False", "False")]]
+
+
+def test_wanted_series_scheduled_search_handles_noninteger_episode_numbers(monkeypatch):
+    module = load_wanted_module("series")
+    searched = []
+    progress = []
+    bad_values = [None, "1", "x", 1.5, object()]
+
+    monkeypatch.setattr(
+        module,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda **kwargs: progress.append(kwargs),
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(module, "get_exclusion_clause", lambda media_type: [])
+    monkeypatch.setattr(module, "get_providers", lambda: ["provider"])
+    monkeypatch.setattr(module, "wanted_download_subtitles", lambda episode_id, **kwargs: searched.append(episode_id))
+
+    for idx, bad in enumerate(bad_values, start=1):
+        row = SimpleNamespace(
+            sonarrEpisodeId=100 + idx,
+            sonarrSeriesId=3,
+            title="Series",
+            season=bad,
+            episode=bad,
+            episodeTitle="Pilot",
+            seriesType="standard",
+            monitored=True,
+            tags=[],
+        )
+        monkeypatch.setattr(
+            module,
+            "database",
+            SimpleNamespace(execute=lambda statement, _row=row: _Result(all_value=[_row])),
+        )
+        module.wanted_search_missing_subtitles_series(job_id="job")
+
+    assert searched == [101, 102, 103, 104, 105]
+    assert any("progress_message" in update for update in progress)

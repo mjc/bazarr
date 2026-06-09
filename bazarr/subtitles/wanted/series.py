@@ -24,6 +24,13 @@ from ..adaptive_searching import is_search_active, updateFailedAttempts
 from ..download import generate_subtitles
 
 
+def _format_episode_part(value):
+    try:
+        return f"{int(value):02d}"
+    except (TypeError, ValueError):
+        return str(value) if value is not None else "??"
+
+
 def _safe_missing_languages(missing_subtitles):
     try:
         missing = ast.literal_eval(missing_subtitles)
@@ -176,8 +183,10 @@ def wanted_search_missing_subtitles_series(job_id=None, wait_for_completion=Fals
 
     throttled = False
     for i, episode in enumerate(episodes, start=1):
+        season_part = _format_episode_part(episode.season)
+        episode_part = _format_episode_part(episode.episode)
         jobs_queue.update_job_progress(job_id=job_id, progress_value=i,
-                                       progress_message=f'{episode.title} - S{episode.season:02d}E{episode.episode:02d}'
+                                       progress_message=f'{episode.title} - S{season_part}E{episode_part}'
                                                         f' - {episode.episodeTitle}')
 
         providers = get_providers()
