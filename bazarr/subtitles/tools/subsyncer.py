@@ -17,6 +17,12 @@ from app.database import TableMovies, TableShows, database, select
 from app.get_args import args
 
 
+def _load_ffsubsync():
+    from ffsubsync.ffsubsync import make_parser, run
+
+    return make_parser, run
+
+
 class SubSyncer:
     def __init__(self):
         self.reference = None
