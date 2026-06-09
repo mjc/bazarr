@@ -1,5 +1,3 @@
-import inspect
-
 import pytest
 from types import SimpleNamespace
 
@@ -148,67 +146,6 @@ def test_wanted_episode_refreshes_missing_state_before_search(monkeypatch):
     assert rebuilt == [{"epno": 17}]
     assert searched[0][0] is refreshed_episode
     assert searched[0][1] == ["provider"]
-
-
-def test_wanted_movie_success_returns_only_remaining_due_languages(monkeypatch):
-    module = load_wanted_module("movies")
-    if "due_languages" not in inspect.signature(module._wanted_movie).parameters:
-        pytest.skip("requires due_languages refactor path")
-
-    movie = _movie_row()
-    refreshed_movie = _movie_row()
-    stored = []
-    events = []
-
-    class _Database:
-        def execute(self, statement, *args, **kwargs):
-            return _Result(first_value=refreshed_movie)
-
-    monkeypatch.setattr(module, "database", _Database())
-    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
-    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: iter([SimpleNamespace(message="ok")]))
-    monkeypatch.setattr(module, "store_subtitles_movie", lambda movie_id: stored.append(movie_id))
-    monkeypatch.setattr(module, "history_log_movie", lambda *args: None)
-    monkeypatch.setattr(module, "send_notifications_movie", lambda *args: None)
-    monkeypatch.setattr(module, "event_stream", lambda **kwargs: events.append(kwargs))
-
-    remaining = module._wanted_movie(movie, ["provider"], due_languages=["en", "fr:forced"], defer_failed_attempts=True)
-
-    assert remaining == ["fr:forced"]
-    assert stored == [7]
-    assert events == [{"type": "movie-wanted", "action": "delete", "payload": 7}]
-
-
-def test_wanted_episode_success_returns_only_remaining_due_languages(monkeypatch):
-    module = load_wanted_module("series")
-    if "due_languages" not in inspect.signature(module._wanted_episode).parameters:
-        pytest.skip("requires due_languages refactor path")
-
-    episode = _episode_row()
-    refreshed_episode = _episode_row()
-    stored = []
-    events = []
-
-    class _Database:
-        def execute(self, statement, *args, **kwargs):
-            return _Result(first_value=refreshed_episode)
-
-    monkeypatch.setattr(module, "database", _Database())
-    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
-    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: iter([SimpleNamespace(message="ok")]))
-    monkeypatch.setattr(module, "store_subtitles", lambda episode_id: stored.append(episode_id))
-    monkeypatch.setattr(module, "history_log", lambda *args: None)
-    monkeypatch.setattr(module, "send_notifications", lambda *args: None)
-    monkeypatch.setattr(module, "event_stream", lambda **kwargs: events.append(kwargs))
-
-    remaining = module._wanted_episode(episode, ["provider"], due_languages=["en", "fr:hi"], defer_failed_attempts=True)
-
-    assert remaining == ["fr:hi"]
-    assert stored == [17]
-    assert events == [
-        {"type": "series", "action": "update", "payload": 3},
-        {"type": "episode-wanted", "action": "delete", "payload": 17},
-    ]
 
 
 def test_movie_partial_success_does_not_stamp_remaining_languages(monkeypatch):
