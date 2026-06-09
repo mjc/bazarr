@@ -1,7 +1,6 @@
 # coding=utf-8
 # fmt: off
 
-import ast
 import logging
 import operator
 import os
@@ -20,6 +19,7 @@ from app.event_handler import event_stream
 from app.config import settings
 
 from ..download import generate_subtitles
+from ..language_utils import build_search_payload, resolve_audio_language
 
 
 def _format_episode_part(value):
@@ -27,40 +27,6 @@ def _format_episode_part(value):
         return f"{int(value):02d}"
     except (TypeError, ValueError):
         return str(value) if value is not None else "??"
-
-
-def _resolve_audio_language(audio_languages, fallback='None'):
-    if not isinstance(audio_languages, list) or not audio_languages:
-        return fallback
-
-    first_language = audio_languages[0]
-    if not isinstance(first_language, dict):
-        return fallback
-
-    name = first_language.get('name')
-    return name if isinstance(name, str) and name else fallback
-
-
-def _safe_missing_languages(missing_subtitles):
-    try:
-        missing = ast.literal_eval(missing_subtitles)
-    except (ValueError, SyntaxError, TypeError):
-        logging.debug("BAZARR malformed missing_subtitles value for mass episode download: %r", missing_subtitles)
-        return []
-
-    if not isinstance(missing, list):
-        logging.debug("BAZARR invalid missing_subtitles value for mass episode download: %r", missing_subtitles)
-        return []
-
-    safe = []
-    for language in missing:
-        if not isinstance(language, str):
-            continue
-        base_language = language.split(":", 1)[0].strip()
-        if not base_language:
-            continue
-        safe.append(language)
-    return safe
 
 
 def series_download_subtitles(no, job_id=None, job_sub_function=False):
@@ -155,10 +121,10 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
         logging.debug("BAZARR no episode with that sonarrEpisodeId can be found in database:", str(no))
         jobs_queue.update_job_progress(job_id=job_id, progress_message="Episode not found in database.")
         return
-    previously_indexed_subtitles = get_subtitles(sonarr_episode_id=episode.sonarrEpisodeId)
+    previously_indexed_subtitles = get_subtitles(sonarr_episode_id=episode.sonarrEpisodeId) or []
 
     if not len(previously_indexed_subtitles) or \
-            any([not x['embedded_track_id'] for x in previously_indexed_subtitles if not x['path']]):
+            any([not x.get('embedded_track_id') for x in previously_indexed_subtitles if x and not x.get('path', True)]):
         # subtitles indexing for this episode might be incomplete, we'll do it again
         store_subtitles(episode.sonarrEpisodeId)
         episode = database.execute(stmt).first()
@@ -188,9 +154,9 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
     downloaded_count = 0
     if providers_list:
         audio_language_list = get_audio_profile_languages(episode.audio_language)
-        audio_language = _resolve_audio_language(audio_language_list)
+        audio_language = resolve_audio_language(audio_language_list)
 
-        languages = []
+        languages, _ = build_search_payload(episode.missing_subtitles, "mass episode download")
 
         if not job_sub_function and job_id:
             season_part = _format_episode_part(episode.season)
@@ -198,12 +164,6 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
             jobs_queue.update_job_progress(job_id=job_id, progress_max=1,
                                            progress_message=f'{episode.title} - S{season_part}E'
                                                             f'{episode_part} - {episode.episodeTitle}')
-
-        for raw_language in _safe_missing_languages(episode.missing_subtitles):
-            language = raw_language.strip()
-            hi_ = "True" if language.endswith(':hi') else "False"
-            forced_ = "True" if language.endswith(':forced') else "False"
-            languages.append((language.split(":", 1)[0], hi_, forced_))
 
         if languages:
             for result in generate_subtitles(episodePath,
@@ -221,7 +181,8 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
                         result = result[0]
                     store_subtitles(episode.sonarrEpisodeId)
                     history_log(1, episode.sonarrSeriesId, episode.sonarrEpisodeId, result)
-                    send_notifications(episode.sonarrSeriesId, episode.sonarrEpisodeId, result.message)
+                    if hasattr(result, 'message'):
+                        send_notifications(episode.sonarrSeriesId, episode.sonarrEpisodeId, result.message)
                     downloaded_count += 1
         outcome_msg = (f"{downloaded_count} subtitle(s) downloaded"
                        if downloaded_count else "No subtitles found")
@@ -260,7 +221,7 @@ def episode_download_specific_subtitles(sonarr_series_id, sonarr_episode_id, lan
     if not os.path.exists(episodePath):
         return 'Episode file not found. Path mapping issue?', 500
 
-    sceneName = episodeInfo.sceneName or "None"
+    sceneName = episodeInfo.sceneName or None
 
     title = episodeInfo.title
 
@@ -279,7 +240,7 @@ def episode_download_specific_subtitles(sonarr_series_id, sonarr_episode_id, lan
                                new_job_name=f"Searching {language_str.upper()} for {episode_long_title}")
 
     audio_language_list = get_audio_profile_languages(episodeInfo.audio_language)
-    audio_language = _resolve_audio_language(audio_language_list, fallback=None)
+    audio_language = resolve_audio_language(audio_language_list, fallback=None)
 
     try:
         result = list(generate_subtitles(episodePath, [(language, hi, forced)], audio_language, sceneName,
@@ -291,7 +252,8 @@ def episode_download_specific_subtitles(sonarr_series_id, sonarr_episode_id, lan
                 result = result[0]
             store_subtitles(sonarr_episode_id)
             history_log(1, sonarr_series_id, sonarr_episode_id, result)
-            send_notifications(sonarr_series_id, sonarr_episode_id, result.message)
+            if hasattr(result, 'message'):
+                send_notifications(sonarr_series_id, sonarr_episode_id, result.message)
         else:
             event_stream(type='episode', payload=sonarr_episode_id)
             return '', 204

@@ -1,7 +1,6 @@
 # coding=utf-8
 # fmt: off
 
-import ast
 import logging
 import operator
 import os
@@ -19,40 +18,7 @@ from app.jobs_queue import jobs_queue
 from app.event_handler import event_stream
 
 from ..download import generate_subtitles
-
-
-def _safe_missing_languages(missing_subtitles):
-    try:
-        missing = ast.literal_eval(missing_subtitles)
-    except (ValueError, SyntaxError, TypeError):
-        logging.debug("BAZARR malformed missing_subtitles value for mass movie download: %r", missing_subtitles)
-        return []
-
-    if not isinstance(missing, list):
-        logging.debug("BAZARR invalid missing_subtitles value for mass movie download: %r", missing_subtitles)
-        return []
-
-    safe = []
-    for language in missing:
-        if not isinstance(language, str):
-            continue
-        base_language = language.split(":", 1)[0].strip()
-        if not base_language:
-            continue
-        safe.append(language)
-    return safe
-
-
-def _resolve_audio_language(audio_languages, fallback='None'):
-    if not isinstance(audio_languages, list) or not audio_languages:
-        return fallback
-
-    first_language = audio_languages[0]
-    if not isinstance(first_language, dict):
-        return fallback
-
-    name = first_language.get('name')
-    return name if isinstance(name, str) and name else fallback
+from ..language_utils import build_search_payload, resolve_audio_language
 
 
 def movies_download_subtitles(no, job_id=None, job_sub_function=False):
@@ -84,10 +50,10 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
         logging.debug(f"BAZARR no movie with that radarrId can be found in database: {no}")
         jobs_queue.update_job_progress(job_id=job_id, progress_message="Movie not found in database.")
         return
-    previously_indexed_subtitles = get_subtitles(radarr_id=movie.radarrId)
+    previously_indexed_subtitles = get_subtitles(radarr_id=movie.radarrId) or []
 
     if not len(previously_indexed_subtitles) or \
-            any([not x['embedded_track_id'] for x in previously_indexed_subtitles if not x['path']]):
+            any([not x.get('embedded_track_id') for x in previously_indexed_subtitles if x and not x.get('path', True)]):
         # subtitles indexing for this movie might be incomplete, we'll do it again
         store_subtitles_movie(no)
         movie = database.execute(stmt).first()
@@ -111,13 +77,11 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
         jobs_queue.update_job_progress(job_id=job_id, progress_message=f"Movie path doesn't exists: {moviePath}")
         raise OSError
 
-    missing_languages = _safe_missing_languages(movie.missing_subtitles)
-    count_movie = len(missing_languages)
+    languages, _ = build_search_payload(movie.missing_subtitles, "mass movie download")
+    count_movie = len(languages)
 
     audio_language_list = get_audio_profile_languages(movie.audio_language)
-    audio_language = _resolve_audio_language(audio_language_list)
-
-    languages = []
+    audio_language = resolve_audio_language(audio_language_list)
 
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_movie, progress_message=movie.title)
 
@@ -125,12 +89,6 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
 
     downloaded_count = 0
     if providers_list:
-        for raw_language in missing_languages:
-            language = raw_language.strip()
-            hi_ = "True" if language.endswith(':hi') else "False"
-            forced_ = "True" if language.endswith(':forced') else "False"
-            languages.append((language.split(":", 1)[0], hi_, forced_))
-
         if languages:
             for result in generate_subtitles(moviePath,
                                              languages,
@@ -146,7 +104,8 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
                         result = result[0]
                     store_subtitles_movie(no)
                     history_log_movie(1, no, result)
-                    send_notifications_movie(no, result.message)
+                    if hasattr(result, 'message'):
+                        send_notifications_movie(no, result.message)
                     downloaded_count += 1
         outcome_msg = (f"{downloaded_count} subtitle(s) downloaded"
                        if downloaded_count else "No subtitles found")
@@ -180,7 +139,7 @@ def movie_download_specific_subtitles(radarr_id, language, hi, forced, job_id=No
     if not os.path.exists(moviePath):
         return 'Movie file not found. Path mapping issue?', 500
 
-    sceneName = movieInfo.sceneName or 'None'
+    sceneName = movieInfo.sceneName or None
 
     title = movieInfo.title
 
@@ -194,7 +153,7 @@ def movie_download_specific_subtitles(radarr_id, language, hi, forced, job_id=No
     jobs_queue.update_job_name(job_id=job_id, new_job_name=f"Searching {language_str.upper()} for {title}")
 
     audio_language_list = get_audio_profile_languages(movieInfo.audio_language)
-    audio_language = _resolve_audio_language(audio_language_list, fallback=None)
+    audio_language = resolve_audio_language(audio_language_list, fallback=None)
 
     try:
         result = list(generate_subtitles(moviePath, [(language, hi, forced)], audio_language,
@@ -206,7 +165,8 @@ def movie_download_specific_subtitles(radarr_id, language, hi, forced, job_id=No
                 result = result[0]
             store_subtitles_movie(radarr_id)
             history_log_movie(1, radarr_id, result)
-            send_notifications_movie(radarr_id, result.message)
+            if hasattr(result, 'message'):
+                send_notifications_movie(radarr_id, result.message)
         else:
             event_stream(type='movie', payload=radarr_id)
             return '', 204
