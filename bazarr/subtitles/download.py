@@ -178,6 +178,20 @@ def parse_language_object(language):
         return language
 
 
+def _safe_missing_languages(missing_subtitles):
+    try:
+        missing = ast.literal_eval(missing_subtitles)
+    except (ValueError, SyntaxError, TypeError):
+        logging.debug("BAZARR malformed missing_subtitles value while checking missing languages: %r", missing_subtitles)
+        return []
+
+    if not isinstance(missing, list):
+        logging.debug("BAZARR invalid missing_subtitles value while checking missing languages: %r", missing_subtitles)
+        return []
+
+    return [language for language in missing if isinstance(language, str)]
+
+
 def check_missing_languages(path, media_type):
     # confirm if language is still missing or if cutoff has been reached
     if media_type == 'series':
@@ -198,10 +212,12 @@ def check_missing_languages(path, media_type):
         return []
 
     languages = []
-    for language in ast.literal_eval(confirmed_missing_subs.missing_subtitles):
-        if language is not None:
-            hi_ = "True" if language.endswith(':hi') else "False"
-            forced_ = "True" if language.endswith(':forced') else "False"
-            languages.append((language.split(":")[0], hi_, forced_))
+    for language in _safe_missing_languages(confirmed_missing_subs.missing_subtitles):
+        hi_ = "True" if language.endswith(':hi') else "False"
+        forced_ = "True" if language.endswith(':forced') else "False"
+        languages.append((language.split(":")[0], hi_, forced_))
+
+    if not languages:
+        return []
 
     return _get_language_obj(languages=languages)
