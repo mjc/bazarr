@@ -90,6 +90,36 @@ def test_wanted_series_only_requests_due_languages(monkeypatch):
     assert captured == [[("fr", "True", "False")]]
 
 
+def test_wanted_movie_handles_malformed_audio_profile_languages(monkeypatch):
+    module = load_wanted_module("movies")
+    movie = _movie_row()
+    captured_audio = []
+
+    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured_audio.append(args[2]) or iter(()))
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [None, {"bad": "shape"}])
+    monkeypatch.setattr(module, "is_search_active", lambda desired_language, attempt_string: True)
+    monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda *args, **kwargs: None))
+
+    module._wanted_movie(movie, ["provider"])
+
+    assert captured_audio == ["None"]
+
+
+def test_wanted_series_handles_malformed_audio_profile_languages(monkeypatch):
+    module = load_wanted_module("series")
+    episode = _episode_row()
+    captured_audio = []
+
+    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured_audio.append(args[2]) or iter(()))
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [None, {"bad": "shape"}])
+    monkeypatch.setattr(module, "is_search_active", lambda desired_language, attempt_string: True)
+    monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda *args, **kwargs: None))
+
+    module._wanted_episode(episode, ["provider"])
+
+    assert captured_audio == ["None"]
+
+
 def test_wanted_movie_refreshes_missing_state_before_search(monkeypatch):
     module = load_wanted_module("movies")
     initial_movie = _movie_row()

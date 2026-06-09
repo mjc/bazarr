@@ -44,12 +44,21 @@ def _safe_missing_languages(missing_subtitles):
     return safe
 
 
+def _resolve_audio_language(audio_languages):
+    if not isinstance(audio_languages, list) or not audio_languages:
+        return 'None'
+
+    first_language = audio_languages[0]
+    if not isinstance(first_language, dict):
+        return 'None'
+
+    name = first_language.get('name')
+    return name if isinstance(name, str) and name else 'None'
+
+
 def _wanted_movie(movie, providers_list, job_id=None):
     audio_language_list = get_audio_profile_languages(movie.audio_language)
-    if len(audio_language_list) > 0:
-        audio_language = audio_language_list[0]['name']
-    else:
-        audio_language = 'None'
+    audio_language = _resolve_audio_language(audio_language_list)
 
     languages = []
     languages_to_stamp = []
