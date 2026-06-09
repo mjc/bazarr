@@ -22,6 +22,13 @@ from app.config import settings
 from ..download import generate_subtitles
 
 
+def _format_episode_part(value):
+    try:
+        return f"{int(value):02d}"
+    except (TypeError, ValueError):
+        return str(value) if value is not None else "??"
+
+
 def _safe_missing_languages(missing_subtitles):
     try:
         missing = ast.literal_eval(missing_subtitles)
@@ -82,9 +89,11 @@ def series_download_subtitles(no, job_id=None, job_sub_function=False):
 
         jobs_queue.update_job_progress(job_id=job_id, progress_max=count_episodes_details)
         for i, episode in enumerate(episodes_details, start=1):
+            season_part = _format_episode_part(episode.season)
+            episode_part = _format_episode_part(episode.episode)
             jobs_queue.update_job_progress(job_id=job_id, progress_value=i,
-                                           progress_message=f'{episode.title} - S{episode.season:02d}E'
-                                                            f'{episode.episode:02d} - {episode.episodeTitle}')
+                                           progress_message=f'{episode.title} - S{season_part}E'
+                                                            f'{episode_part} - {episode.episodeTitle}')
 
             providers_list = get_providers()
             fallback_allowed = settings.general.use_whisper_fallback and settings.general.use_whisper_fallback_series
@@ -175,9 +184,11 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
         languages = []
 
         if not job_sub_function and job_id:
+            season_part = _format_episode_part(episode.season)
+            episode_part = _format_episode_part(episode.episode)
             jobs_queue.update_job_progress(job_id=job_id, progress_max=1,
-                                           progress_message=f'{episode.title} - S{episode.season:02d}E'
-                                                            f'{episode.episode:02d} - {episode.episodeTitle}')
+                                           progress_message=f'{episode.title} - S{season_part}E'
+                                                            f'{episode_part} - {episode.episodeTitle}')
 
         for raw_language in _safe_missing_languages(episode.missing_subtitles):
             language = raw_language.strip()
@@ -244,7 +255,9 @@ def episode_download_specific_subtitles(sonarr_series_id, sonarr_episode_id, lan
 
     title = episodeInfo.title
 
-    episode_long_title = f'{title} - S{episodeInfo.season:02d}E{episodeInfo.episode:02d} - {episodeInfo.episodeTitle}'
+    season_part = _format_episode_part(episodeInfo.season)
+    episode_part = _format_episode_part(episodeInfo.episode)
+    episode_long_title = f'{title} - S{season_part}E{episode_part} - {episodeInfo.episodeTitle}'
 
     if hi == 'True':
         language_str = f'{language}:hi'

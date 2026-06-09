@@ -363,6 +363,61 @@ def test_series_download_subtitles_dispatches_each_episode(monkeypatch):
     assert progress[-1]["progress_message"] == "Search completed"
 
 
+def test_series_download_subtitles_handles_noninteger_episode_numbers(monkeypatch):
+    module = load_mass_download_module("series")
+
+    series_row = SimpleNamespace(path="/series", title="Series")
+    episodes = [
+        SimpleNamespace(sonarrEpisodeId=11, title="Series", season=None, episode="x", episodeTitle="One"),
+    ]
+    progress = []
+    episode_calls = []
+
+    class _Database:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, statement):
+            self.calls += 1
+            if self.calls == 1:
+                return _Result(first_value=series_row)
+            return _Result(all_value=episodes)
+
+    monkeypatch.setattr(module, "database", _Database())
+    monkeypatch.setattr(module.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(module.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(module, "get_providers", lambda: ["provider"])
+    monkeypatch.setattr(
+        module,
+        "settings",
+        SimpleNamespace(
+            general=SimpleNamespace(
+                use_whisper_fallback=True,
+                use_whisper_fallback_series=True,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda **kwargs: progress.append(kwargs),
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "episode_download_subtitles",
+        lambda *args, **kwargs: episode_calls.append((args, kwargs)),
+    )
+
+    module.series_download_subtitles(5, job_id="job")
+
+    assert episode_calls and episode_calls[0][1]["no"] == 11
+    assert any("progress_message" in item for item in progress)
+
+
 def test_series_download_subtitles_falls_back_when_batched_missing_languages_are_empty(monkeypatch):
     module = load_mass_download_module("series")
 
@@ -574,6 +629,52 @@ def test_episode_download_subtitles_uses_missing_languages_and_records_downloads
     assert stored == [11]
     assert len(history) == 1
     assert notifications == [(5, 11, "done")]
+
+
+def test_episode_download_subtitles_handles_noninteger_episode_numbers(monkeypatch):
+    module = load_mass_download_module("series")
+
+    episode = SimpleNamespace(
+        path="/series/episode.mkv",
+        missing_subtitles="['en']",
+        monitored=True,
+        sonarrEpisodeId=11,
+        sceneName="Scene",
+        tags=[],
+        title="Series",
+        sonarrSeriesId=5,
+        audio_language="['eng']",
+        seriesType="standard",
+        episodeTitle="Pilot",
+        season="x",
+        episode=None,
+        profileId=44,
+    )
+    progress = []
+
+    class _Database:
+        def execute(self, statement):
+            return _Result(first_value=episode)
+
+    monkeypatch.setattr(module, "database", _Database())
+    monkeypatch.setattr(module, "get_subtitles", lambda **kwargs: [{"path": "/series/sub.srt", "embedded_track_id": 1}])
+    monkeypatch.setattr(module.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(module.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: iter(()))
+    monkeypatch.setattr(
+        module,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda **kwargs: progress.append(kwargs),
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+
+    module.episode_download_subtitles(11, job_id="job", job_sub_function=False, providers_list=["provider"])
+
+    assert any("progress_message" in item for item in progress)
 
 
 def test_episode_download_subtitles_falls_back_to_legacy_missing_text(monkeypatch):
