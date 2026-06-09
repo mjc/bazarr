@@ -57,10 +57,13 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
     audio_language_code3 = alpha3_from_language(audio_language)
     downloaded_path = subtitle.storage_path
     subtitle_id = subtitle.id
-    if subtitle.language.hi:
-        modifier_string = " HI"
-    elif subtitle.language.forced:
-        modifier_string = " forced"
+    if subtitle.language:
+        if subtitle.language.hi:
+            modifier_string = " HI"
+        elif subtitle.language.forced:
+            modifier_string = " forced"
+        else:
+            modifier_string = ""
     else:
         modifier_string = ""
     logging.debug(f'BAZARR Subtitles file saved to disk: {downloaded_path}')
@@ -71,12 +74,22 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
     else:
         action = "downloaded"
 
-    percent_score = round(subtitle.score * 100 / max_score, 2)
+    if max_score and max_score > 0:
+        percent_score = round(subtitle.score * 100 / max_score, 2)
+    else:
+        percent_score = 0
     message = (f"{downloaded_language}{modifier_string} subtitles {action} from {downloaded_provider} with a score of "
                f"{percent_score}%.")
 
     sync_checker = _defaul_sync_checker
     logging.debug("Sync checker: %s", sync_checker)
+    
+    # Helper to safely get language attributes
+    def get_language_forced():
+        return subtitle.language.forced if subtitle.language else False
+    
+    def get_language_hi():
+        return subtitle.language.hi if subtitle.language else False
 
     if media_type == 'series':
         episode_metadata = database.execute(
@@ -93,8 +106,8 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
         if sync_checker(subtitle) is True:
             from .sync import sync_subtitles
             sync_subtitles(video_path=path, srt_path=downloaded_path,
-                           forced=subtitle.language.forced,
-                           hi=subtitle.language.hi,
+                           forced=get_language_forced(),
+                           hi=get_language_hi(),
                            srt_lang=downloaded_language_code2,
                            percent_score=percent_score,
                            sonarr_series_id=episode_metadata.sonarrSeriesId,
@@ -113,8 +126,8 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
         if sync_checker(subtitle) is True:
             from .sync import sync_subtitles
             sync_subtitles(video_path=path, srt_path=downloaded_path,
-                           forced=subtitle.language.forced,
-                           hi=subtitle.language.hi,
+                           forced=get_language_forced(),
+                           hi=get_language_hi(),
                            srt_lang=downloaded_language_code2,
                            percent_score=percent_score,
                            radarr_id=movie_metadata.radarrId,
@@ -192,10 +205,10 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
                                   downloaded_language_code2=downloaded_language_code2,
                                   downloaded_provider=downloaded_provider,
                                   score=subtitle.score,
-                                  forced=subtitle.language.forced,
+                                  forced=get_language_forced(),
                                   subtitle_id=subtitle.id,
                                   reversed_subtitles_path=reversed_subtitles_path,
-                                  hearing_impaired=subtitle.language.hi,
+                                  hearing_impaired=get_language_hi(),
                                   matched=list(subtitle.matches or []),
                                   not_matched=_get_not_matched(subtitle, media_type)),
 

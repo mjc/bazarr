@@ -81,7 +81,11 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
             .first()
 
         if episode_metadata:
-            use_original_format = bool(get_profiles_list(episode_metadata.profileId)["originalFormat"])
+            profile = get_profiles_list(episode_metadata.profileId)
+            if not profile or not isinstance(profile, dict):
+                use_original_format = False
+            else:
+                use_original_format = bool(profile.get("originalFormat", 0))
         else:
             return
     else:
@@ -92,13 +96,22 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
             .first()
 
         if movie_metadata:
-            use_original_format = bool(get_profiles_list(movie_metadata.profileId)["originalFormat"])
+            profile = get_profiles_list(movie_metadata.profileId)
+            if not profile or not isinstance(profile, dict):
+                use_original_format = False
+            else:
+                use_original_format = bool(profile.get("originalFormat", 0))
         else:
             return
 
-    audio_language = get_audio_profile_languages(audio_language)
-    if len(audio_language) and isinstance(audio_language[0], dict):
-        audio_language = audio_language[0]
+    audio_language_list = get_audio_profile_languages(audio_language)
+    if isinstance(audio_language_list, list) and len(audio_language_list) and isinstance(audio_language_list[0], dict):
+        first_audio_language = audio_language_list[0]
+        audio_language = {
+            'name': first_audio_language.get('name') if isinstance(first_audio_language.get('name'), str) else '',
+            'code2': first_audio_language.get('code2') if isinstance(first_audio_language.get('code2'), str) else '',
+            'code3': first_audio_language.get('code3') if isinstance(first_audio_language.get('code3'), str) else '',
+        }
     else:
         audio_language = {'name': '', 'code2': '', 'code3': ''}
 
