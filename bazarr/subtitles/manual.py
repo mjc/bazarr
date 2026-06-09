@@ -24,18 +24,12 @@ from radarr.history import history_log_movie
 from subtitles.indexer.series import store_subtitles
 from subtitles.indexer.movies import store_subtitles_movie
 from subtitles.processing import ProcessSubtitlesResult
+from subtitles.language_utils import format_episode_part
 
 from bazarr.subtitles.cache import subtitle_cache
 from .pool import update_pools, _get_pool
 from .utils import get_video, _get_lang_obj, _get_scores, _set_forced_providers
 from .processing import process_subtitle
-
-
-def _format_episode_part(value):
-    try:
-        return f"{int(value):02d}"
-    except (TypeError, ValueError):
-        return str(value) if value is not None else "??"
 
 
 def _get_first_audio_language_name(audio_languages):
@@ -267,13 +261,13 @@ def episode_manually_download_specific_subtitle(sonarr_series_id, sonarr_episode
         return 'Episode not found', 404
 
     title = episodeInfo.title
-    season_part = _format_episode_part(episodeInfo.season)
-    episode_part = _format_episode_part(episodeInfo.episode)
+    season_part = format_episode_part(episodeInfo.season)
+    episode_part = format_episode_part(episodeInfo.episode)
     jobs_queue.update_job_name(job_id=job_id, new_job_name=f"Manually downloading Subtitles for {title} - "
                                                            f"S{season_part}E{episode_part} - "
                                                            f"{episodeInfo.episodeTitle}")
     episodePath = path_mappings.path_replace(episodeInfo.path)
-    sceneName = episodeInfo.sceneName or None
+    sceneName = episodeInfo.sceneName
 
     audio_language = _get_first_audio_language_name(get_audio_profile_languages(episodeInfo.audio_language))
 
@@ -321,7 +315,7 @@ def movie_manually_download_specific_subtitle(radarr_id, hi, forced, use_origina
     jobs_queue.update_job_name(job_id=job_id, new_job_name=f"Manually downloading Subtitles for {title} "
                                                            f"({movieInfo.year})")
     moviePath = path_mappings.path_replace_movie(movieInfo.path)
-    sceneName = movieInfo.sceneName or None
+    sceneName = movieInfo.sceneName
 
     audio_language = _get_first_audio_language_name(get_audio_profile_languages(movieInfo.audio_language))
 
