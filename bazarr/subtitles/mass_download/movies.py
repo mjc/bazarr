@@ -98,7 +98,7 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
             for result in generate_subtitles(moviePath,
                                              languages,
                                              audio_language,
-                                             str(movie.sceneName),
+                                             movie.sceneName,
                                              movie.title,
                                              'movie',
                                              movie.profileId,
@@ -143,7 +143,7 @@ def movie_download_specific_subtitles(radarr_id, language, hi, forced, job_id=No
     if not os.path.exists(moviePath):
         return 'Movie file not found. Path mapping issue?', 500
 
-    sceneName = movieInfo.sceneName or 'None'
+    sceneName = movieInfo.sceneName
 
     title = movieInfo.title
 
