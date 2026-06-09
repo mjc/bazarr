@@ -156,7 +156,7 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
         if settings.general.use_plex is True:
             if settings.plex.update_series_library is True:
                 # Use specific item refresh instead of full library scan
-                plex_refresh_item(episode_metadata.imdbId, is_movie=False, 
+                plex_refresh_item(episode_metadata.imdbId, is_movie=False,
                                 season=episode_metadata.season, episode=episode_metadata.episode)
             if settings.plex.set_episode_added is True:
                 plex_set_episode_added_date_now(episode_metadata)
