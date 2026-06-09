@@ -22,6 +22,20 @@ from ..adaptive_searching import is_search_active, updateFailedAttempts
 from ..download import generate_subtitles
 
 
+def _safe_missing_languages(missing_subtitles):
+    try:
+        missing = ast.literal_eval(missing_subtitles)
+    except (ValueError, SyntaxError, TypeError):
+        logging.debug("BAZARR malformed missing_subtitles value for wanted movie search: %r", missing_subtitles)
+        return []
+
+    if not isinstance(missing, list):
+        logging.debug("BAZARR invalid missing_subtitles value for wanted movie search: %r", missing_subtitles)
+        return []
+
+    return [language for language in missing if isinstance(language, str)]
+
+
 def _wanted_movie(movie, providers_list, job_id=None):
     audio_language_list = get_audio_profile_languages(movie.audio_language)
     if len(audio_language_list) > 0:
@@ -32,7 +46,7 @@ def _wanted_movie(movie, providers_list, job_id=None):
     languages = []
     languages_to_stamp = []
 
-    for language in ast.literal_eval(movie.missing_subtitles):
+    for language in _safe_missing_languages(movie.missing_subtitles):
         if is_search_active(desired_language=language, attempt_string=movie.failedAttempts):
             hi_ = "True" if language.endswith(':hi') else "False"
             forced_ = "True" if language.endswith(':forced') else "False"

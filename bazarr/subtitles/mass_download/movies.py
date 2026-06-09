@@ -21,6 +21,20 @@ from app.event_handler import event_stream
 from ..download import generate_subtitles
 
 
+def _safe_missing_languages(missing_subtitles):
+    try:
+        missing = ast.literal_eval(missing_subtitles)
+    except (ValueError, SyntaxError, TypeError):
+        logging.debug("BAZARR malformed missing_subtitles value for mass movie download: %r", missing_subtitles)
+        return []
+
+    if not isinstance(missing, list):
+        logging.debug("BAZARR invalid missing_subtitles value for mass movie download: %r", missing_subtitles)
+        return []
+
+    return [language for language in missing if isinstance(language, str)]
+
+
 def movies_download_subtitles(no, job_id=None, job_sub_function=False):
     if not job_sub_function and not job_id:
         jobs_queue.add_job_from_function(f"""Downloading missing subtitles for """
@@ -77,10 +91,8 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
         jobs_queue.update_job_progress(job_id=job_id, progress_message=f"Movie path doesn't exists: {moviePath}")
         raise OSError
 
-    if ast.literal_eval(movie.missing_subtitles):
-        count_movie = len(ast.literal_eval(movie.missing_subtitles))
-    else:
-        count_movie = 0
+    missing_languages = _safe_missing_languages(movie.missing_subtitles)
+    count_movie = len(missing_languages)
 
     audio_language_list = get_audio_profile_languages(movie.audio_language)
     if len(audio_language_list) > 0:
@@ -96,11 +108,10 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
 
     downloaded_count = 0
     if providers_list:
-        for language in ast.literal_eval(movie.missing_subtitles):
-            if language is not None:
-                hi_ = "True" if language.endswith(':hi') else "False"
-                forced_ = "True" if language.endswith(':forced') else "False"
-                languages.append((language.split(":")[0], hi_, forced_))
+        for language in missing_languages:
+            hi_ = "True" if language.endswith(':hi') else "False"
+            forced_ = "True" if language.endswith(':forced') else "False"
+            languages.append((language.split(":")[0], hi_, forced_))
 
         if languages:
             for result in generate_subtitles(moviePath,

@@ -1,3 +1,5 @@
+import random
+
 import pytest
 from types import SimpleNamespace
 
@@ -884,3 +886,69 @@ def test_wanted_movie_wrapper_handles_missing_row_after_missing_refresh(monkeypa
 
     result = module.wanted_download_subtitles_movie(7, job_id="job")
     assert result is None
+
+
+def test_wanted_movie_fuzz_malformed_missing_subtitles_fails_safe(monkeypatch):
+    module = load_wanted_module("movies")
+    rng = random.Random(1338)
+    malformed_values = [
+        "",
+        " ",
+        "[",
+        "not_a_list",
+        "None",
+        "{'en': 1}",
+        "[1, 2, 3]",
+        "[None, 1, {'x': 1}]",
+    ]
+    malformed_values.extend(
+        "".join(rng.choice("[]{}()'\",abc123:-_ ") for _ in range(rng.randint(1, 20)))
+        for _ in range(120)
+    )
+
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "is_search_active", lambda desired_language, attempt_string: True)
+    monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda *args, **kwargs: None))
+
+    for malformed in malformed_values:
+        movie = _movie_row()
+        movie.missing_subtitles = malformed
+        captured = []
+        monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured.append(args[1]) or iter(()))
+
+        module._wanted_movie(movie, ["provider"])
+
+        assert captured == [[]]
+
+
+def test_wanted_episode_fuzz_malformed_missing_subtitles_fails_safe(monkeypatch):
+    module = load_wanted_module("series")
+    rng = random.Random(7331)
+    malformed_values = [
+        "",
+        " ",
+        "[",
+        "not_a_list",
+        "None",
+        "{'en': 1}",
+        "[1, 2, 3]",
+        "[None, 1, {'x': 1}]",
+    ]
+    malformed_values.extend(
+        "".join(rng.choice("[]{}()'\",abc123:-_ ") for _ in range(rng.randint(1, 20)))
+        for _ in range(120)
+    )
+
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "is_search_active", lambda desired_language, attempt_string: True)
+    monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda *args, **kwargs: None))
+
+    for malformed in malformed_values:
+        episode = _episode_row()
+        episode.missing_subtitles = malformed
+        captured = []
+        monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured.append(args[1]) or iter(()))
+
+        module._wanted_episode(episode, ["provider"])
+
+        assert captured == [[]]

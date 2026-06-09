@@ -1,3 +1,4 @@
+import random
 from types import SimpleNamespace
 
 import pytest
@@ -1301,6 +1302,119 @@ def test_movies_download_subtitles_handles_missing_row_after_reindex_refresh(mon
 
     result = module.movies_download_subtitles(7, job_id="job")
     assert result is None
+
+
+def test_movies_download_subtitles_fuzz_malformed_missing_subtitles_fails_safe(monkeypatch):
+    module = load_mass_download_module("movies")
+    rng = random.Random(8844)
+    malformed_values = [
+        "",
+        " ",
+        "[",
+        "not_a_list",
+        "None",
+        "{'en': 1}",
+        "[1, 2, 3]",
+        "[None, 1, {'x': 1}]",
+    ]
+    malformed_values.extend(
+        "".join(rng.choice("[]{}()'\",abc123:-_ ") for _ in range(rng.randint(1, 20)))
+        for _ in range(120)
+    )
+
+    monkeypatch.setattr(module.path_mappings, "path_replace_movie", lambda path: path)
+    monkeypatch.setattr(module.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "get_subtitles", lambda **kwargs: [{"path": "/movies/sub.srt", "embedded_track_id": 1}])
+    monkeypatch.setattr(module, "get_providers", lambda: ["provider"])
+    monkeypatch.setattr(
+        module,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+
+    for malformed in malformed_values:
+        movie = SimpleNamespace(
+            path="/movies/movie.mkv",
+            missing_subtitles=malformed,
+            audio_language="['eng']",
+            radarrId=7,
+            sceneName="Scene",
+            title="Movie",
+            year=2024,
+            tags=[],
+            monitored=True,
+            profileId=44,
+        )
+        generated = []
+        monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda statement: _Result(first_value=movie)))
+        monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: generated.append(args[1]) or iter(()))
+
+        module.movies_download_subtitles(7, job_id="job")
+
+        assert generated == []
+
+
+def test_episode_download_subtitles_fuzz_malformed_missing_subtitles_fails_safe(monkeypatch):
+    module = load_mass_download_module("series")
+    rng = random.Random(4499)
+    malformed_values = [
+        "",
+        " ",
+        "[",
+        "not_a_list",
+        "None",
+        "{'en': 1}",
+        "[1, 2, 3]",
+        "[None, 1, {'x': 1}]",
+    ]
+    malformed_values.extend(
+        "".join(rng.choice("[]{}()'\",abc123:-_ ") for _ in range(rng.randint(1, 20)))
+        for _ in range(120)
+    )
+
+    monkeypatch.setattr(module.path_mappings, "path_replace", lambda path: path)
+    monkeypatch.setattr(module.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "get_subtitles", lambda **kwargs: [{"path": "/series/sub.srt", "embedded_track_id": 1}])
+    monkeypatch.setattr(
+        module,
+        "jobs_queue",
+        SimpleNamespace(
+            add_job_from_function=lambda *args, **kwargs: None,
+            update_job_progress=lambda *args, **kwargs: None,
+            update_job_name=lambda *args, **kwargs: None,
+        ),
+    )
+
+    for malformed in malformed_values:
+        episode = SimpleNamespace(
+            path="/series/episode.mkv",
+            missing_subtitles=malformed,
+            monitored=True,
+            sonarrEpisodeId=11,
+            sceneName="Scene",
+            tags=[],
+            title="Series",
+            sonarrSeriesId=5,
+            audio_language="['eng']",
+            seriesType="standard",
+            episodeTitle="Pilot",
+            season=1,
+            episode=1,
+            profileId=44,
+        )
+        generated = []
+        monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda statement: _Result(first_value=episode)))
+        monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: generated.append(args[1]) or iter(()))
+
+        module.episode_download_subtitles(11, job_id="job", job_sub_function=True, providers_list=["provider"])
+
+        assert generated == []
 
 
 def test_episode_download_subtitles_handles_missing_row_after_reindex_refresh(monkeypatch):

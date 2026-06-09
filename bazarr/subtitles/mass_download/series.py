@@ -22,6 +22,20 @@ from app.config import settings
 from ..download import generate_subtitles
 
 
+def _safe_missing_languages(missing_subtitles):
+    try:
+        missing = ast.literal_eval(missing_subtitles)
+    except (ValueError, SyntaxError, TypeError):
+        logging.debug("BAZARR malformed missing_subtitles value for mass episode download: %r", missing_subtitles)
+        return []
+
+    if not isinstance(missing, list):
+        logging.debug("BAZARR invalid missing_subtitles value for mass episode download: %r", missing_subtitles)
+        return []
+
+    return [language for language in missing if isinstance(language, str)]
+
+
 def series_download_subtitles(no, job_id=None, job_sub_function=False):
     if not job_sub_function and not job_id:
         jobs_queue.add_job_from_function(f"""Downloading missing subtitles for {database.scalar(
@@ -157,11 +171,10 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
                                            progress_message=f'{episode.title} - S{episode.season:02d}E'
                                                             f'{episode.episode:02d} - {episode.episodeTitle}')
 
-        for language in ast.literal_eval(episode.missing_subtitles):
-            if language is not None:
-                hi_ = "True" if language.endswith(':hi') else "False"
-                forced_ = "True" if language.endswith(':forced') else "False"
-                languages.append((language.split(":")[0], hi_, forced_))
+        for language in _safe_missing_languages(episode.missing_subtitles):
+            hi_ = "True" if language.endswith(':hi') else "False"
+            forced_ = "True" if language.endswith(':forced') else "False"
+            languages.append((language.split(":")[0], hi_, forced_))
 
         if languages:
             for result in generate_subtitles(episodePath,
