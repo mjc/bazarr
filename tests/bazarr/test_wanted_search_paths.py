@@ -986,6 +986,46 @@ def test_wanted_episode_ignores_empty_base_language_tokens(monkeypatch):
     assert captured == [[("en", "True", "False"), ("fr", "False", "False")]]
 
 
+def test_wanted_movie_normalizes_whitespace_in_language_tokens(monkeypatch):
+    module = load_wanted_module("movies")
+    movie = _movie_row()
+    movie.missing_subtitles = "[' en ', ' fr:forced ', ' de:hi  ']"
+    captured = []
+
+    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured.append(args[1]) or iter(()))
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "is_search_active", lambda desired_language, attempt_string: True)
+    monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda *args, **kwargs: None))
+
+    module._wanted_movie(movie, ["provider"])
+
+    assert captured == [[
+        ("en", "False", "False"),
+        ("fr", "False", "True"),
+        ("de", "True", "False"),
+    ]]
+
+
+def test_wanted_episode_normalizes_whitespace_in_language_tokens(monkeypatch):
+    module = load_wanted_module("series")
+    episode = _episode_row()
+    episode.missing_subtitles = "[' en:hi ', ' fr ', ' de:forced  ']"
+    captured = []
+
+    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured.append(args[1]) or iter(()))
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "is_search_active", lambda desired_language, attempt_string: True)
+    monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda *args, **kwargs: None))
+
+    module._wanted_episode(episode, ["provider"])
+
+    assert captured == [[
+        ("en", "True", "False"),
+        ("fr", "False", "False"),
+        ("de", "False", "True"),
+    ]]
+
+
 def test_wanted_series_scheduled_search_handles_noninteger_episode_numbers(monkeypatch):
     module = load_wanted_module("series")
     searched = []

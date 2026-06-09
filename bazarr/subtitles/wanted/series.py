@@ -62,11 +62,12 @@ def _wanted_episode(episode, providers_list, job_id=None):
 
     languages = []
     languages_to_stamp = []
-    for language in _safe_missing_languages(episode.missing_subtitles):
+    for raw_language in _safe_missing_languages(episode.missing_subtitles):
+        language = raw_language.strip()
         if is_search_active(desired_language=language, attempt_string=episode.failedAttempts):
             hi_ = "True" if language.endswith(':hi') else "False"
             forced_ = "True" if language.endswith(':forced') else "False"
-            languages.append((language.split(":")[0], hi_, forced_))
+            languages.append((language.split(":", 1)[0], hi_, forced_))
             languages_to_stamp.append(language)
 
         else:
