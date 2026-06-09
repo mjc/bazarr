@@ -6,7 +6,6 @@ import gc
 
 from app.config import settings
 from app.jobs_queue import jobs_queue
-from subtitles.tools.subsyncer import SubSyncer
 
 
 def sync_subtitles(video_path,
@@ -47,15 +46,19 @@ def sync_subtitles(video_path,
             use_subsync_threshold = settings.subsync.use_subsync_movie_threshold
             subsync_threshold = settings.subsync.subsync_movie_threshold
 
-        # Guard threshold conversion
-        try:
-            threshold_float = float(subsync_threshold) if subsync_threshold else 100.0
-        except (TypeError, ValueError):
-            logging.warning(f"BAZARR invalid subsync threshold value: {subsync_threshold}, using default 100.0")
-            threshold_float = 100.0
+        threshold_float = _float_or_default(
+            subsync_threshold,
+            default=100.0,
+            warning_label="subsync threshold",
+        )
+        percent_score_float = _float_or_default(
+            percent_score,
+            default=0.0,
+            warning_label="subtitles score",
+        )
 
-        if not use_subsync_threshold or (use_subsync_threshold and percent_score <= threshold_float):
-            subsync = SubSyncer()
+        if not use_subsync_threshold or percent_score_float <= threshold_float:
+            subsync = _create_subsyncer()
             sync_kwargs = {
                 'video_path': video_path,
                 'srt_path': srt_path,
@@ -92,3 +95,17 @@ def sync_subtitles(video_path,
                           f"threshold value: {subsync_threshold}%")
 
     return False
+
+
+def _float_or_default(value, default, warning_label):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logging.warning(f"BAZARR invalid {warning_label} value: {value}, using default {default}")
+        return default
+
+
+def _create_subsyncer():
+    from subtitles.tools.subsyncer import SubSyncer
+
+    return SubSyncer()
