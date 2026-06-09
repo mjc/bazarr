@@ -153,3 +153,29 @@ def test_postprocess_ignores_empty_base_language_tokens():
         item["language"] = malformed
         processed = module.postprocess(item)
         assert processed["language"] is None
+
+
+def test_postprocess_normalizes_whitespace_in_missing_subtitles_tokens():
+    module = _load_api_utils_module()
+    item = _base_item()
+    item["missing_subtitles"] = "[' en ', ' fr:forced ', ' de:hi  ']"
+
+    processed = module.postprocess(item)
+
+    assert processed["missing_subtitles"] == [
+        {"name": "lang-en", "code2": "en", "code3": "en3", "forced": False, "hi": False},
+        {"name": "lang-fr", "code2": "fr", "code3": "fr3", "forced": True, "hi": False},
+        {"name": "lang-de", "code2": "de", "code3": "de3", "forced": False, "hi": True},
+    ]
+
+
+def test_postprocess_ignores_empty_base_missing_subtitles_tokens():
+    module = _load_api_utils_module()
+    item = _base_item()
+    item["missing_subtitles"] = "[':hi', '', '   :forced', 'en']"
+
+    processed = module.postprocess(item)
+
+    assert processed["missing_subtitles"] == [
+        {"name": "lang-en", "code2": "en", "code3": "en3", "forced": False, "hi": False},
+    ]

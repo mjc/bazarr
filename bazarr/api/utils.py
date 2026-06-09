@@ -29,14 +29,17 @@ def _parse_missing_subtitles(missing_subtitles):
     for subs in _safe_literal_list(missing_subtitles):
         if not isinstance(subs, str):
             continue
-        language = subs.split(':')
+        normalized = subs.strip()
+        base_language = normalized.split(':', 1)[0].strip()
+        if not base_language:
+            continue
         parsed_missing.append(
             {
-                "name": language_from_alpha2(language[0]),
-                "code2": language[0],
-                "code3": alpha3_from_alpha2(language[0]),
-                "forced": len(language) > 1 and language[1] == 'forced',
-                "hi": len(language) > 1 and language[1] == 'hi',
+                "name": language_from_alpha2(base_language),
+                "code2": base_language,
+                "code3": alpha3_from_alpha2(base_language),
+                "forced": normalized.endswith(':forced'),
+                "hi": normalized.endswith(':hi'),
             }
         )
     return parsed_missing
