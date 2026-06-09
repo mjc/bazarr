@@ -4,6 +4,8 @@ Unit tests for adaptive_searching.py
 Tests the CURRENT behavior on develop to catch regressions when perf branch changes land.
 If a test fails after merging perf branch, it means the behavior changed (intentionally or not).
 """
+from datetime import datetime
+
 from bazarr.subtitles.adaptive_searching import is_search_active, updateFailedAttempts
 from tests.test_helpers import set_adaptive_search_settings, get_current_timestamp, parse_language_code
 

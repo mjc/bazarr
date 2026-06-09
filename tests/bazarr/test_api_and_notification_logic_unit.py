@@ -3,6 +3,7 @@ Unit tests for API endpoints and notifications
 
 Tests the CURRENT behavior on develop to catch regressions when perf branch changes land.
 """
+import pytest
 
 
 class TestMovieWantedAPI:
@@ -69,20 +70,11 @@ class TestHistoryLogging:
 
     def test_log_movie_download(self):
         """Log subtitle download for movie"""
-        action = 1  # Download action
-        radarr_id = 123
-        message = "Downloaded subtitle"
-        
-        assert action is not None
-        assert radarr_id is not None
+        pytest.skip("Placeholder test; replaced by path-specific behavior tests in split PR branches")
 
     def test_log_episode_download(self):
         """Log subtitle download for episode"""
-        sonarr_id = 456
-        message = "Downloaded subtitle"
-        
-        assert sonarr_id is not None
-        assert message is not None
+        pytest.skip("Placeholder test; replaced by path-specific behavior tests in split PR branches")
 
 
 class TestNotifications:
@@ -90,19 +82,11 @@ class TestNotifications:
 
     def test_notify_on_movie_download(self):
         """Send notification when movie subtitle downloaded"""
-        radarr_id = 123
-        message = "Downloaded English subtitle"
-        
-        assert radarr_id is not None
-        assert message is not None
+        pytest.skip("Placeholder test; replaced by path-specific behavior tests in split PR branches")
 
     def test_notify_on_episode_download(self):
         """Send notification when episode subtitle downloaded"""
-        sonarr_id = 456
-        message = "Downloaded French subtitle"
-        
-        assert sonarr_id is not None
-        assert message is not None
+        pytest.skip("Placeholder test; replaced by path-specific behavior tests in split PR branches")
 
 
 class TestBadgesStats:

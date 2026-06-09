@@ -3,6 +3,7 @@ Unit tests for database query patterns
 
 Tests the CURRENT behavior on develop to catch regressions when perf branch changes land.
 """
+import pytest
 
 
 class TestSelectPatterns:
@@ -24,8 +25,7 @@ class TestSelectPatterns:
 
     def test_where_clause_by_id(self):
         """WHERE clause filters by ID"""
-        radarr_id = 123
-        assert radarr_id == 123
+        pytest.skip("Placeholder test; replaced by branch-specific query behavior tests")
 
 
 class TestUpdatePatterns:
@@ -33,11 +33,7 @@ class TestUpdatePatterns:
 
     def test_update_failed_attempts(self):
         """Update failedAttempts column"""
-        radarr_id = 123
-        new_attempts = "[[\'en\', 1609459200]]"
-        
-        assert radarr_id is not None
-        assert new_attempts.startswith('[[')
+        pytest.skip("Placeholder test; replaced by branch-specific query behavior tests")
 
     def test_delete_old_subtitles(self):
         """Delete outdated subtitle entries"""
