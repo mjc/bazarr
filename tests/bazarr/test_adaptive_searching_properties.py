@@ -55,18 +55,39 @@ def test_update_failed_attempts_fuzz_invariants():
         langs = [item[0] for item in parsed]
         assert langs == sorted(langs)
 
-        # Non-target entries should be preserved exactly
-        before_non_target = Counter(tuple(item) for item in attempts if item[0] != desired_language)
-        after_non_target = Counter(tuple(item) for item in parsed if item[0] != desired_language)
-        assert before_non_target == after_non_target
+        # Extract base language codes for comparison (updateFailedAttempts normalizes them)
+        base_desired = desired_language.split(":", 1)[0].strip() if desired_language else ''
+        
+        # Non-target entries should be compacted to initial+latest (base language codes).
+        before_non_target_bases = Counter()
+        non_target_grouped = {}
+        for item in attempts:
+            base_lang = item[0].split(":", 1)[0]
+            if base_lang == base_desired:
+                continue
+            non_target_grouped.setdefault(base_lang, []).append(item[1])
 
-        before_target = [item for item in attempts if item[0] == desired_language]
-        after_target = [item for item in parsed if item[0] == desired_language]
+        for lang, timestamps in non_target_grouped.items():
+            ordered = sorted(timestamps)
+            before_non_target_bases[(lang, ordered[0])] += 1
+            if len(ordered) > 1 and ordered[-1] != ordered[0]:
+                before_non_target_bases[(lang, ordered[-1])] += 1
+
+        after_non_target = Counter(tuple(item) for item in parsed if item[0] != base_desired)
+        assert before_non_target_bases == after_non_target
+
+        # Target entries: check they're stored as base codes
+        before_target_bases = [item[0].split(":", 1)[0] for item in attempts if item[0].split(":", 1)[0] == base_desired]
+        after_target = [item for item in parsed if item[0] == base_desired]
 
         # If target existed, keep oldest + new; otherwise add one new.
-        assert len(after_target) == (2 if before_target else 1)
-        if before_target:
-            oldest = min(item[1] for item in before_target)
+        assert len(after_target) == (2 if before_target_bases else 1)
+        if before_target_bases:
+            before_target_timestamps = [
+                item[1] for item in attempts 
+                if item[0].split(":", 1)[0] == base_desired
+            ]
+            oldest = min(before_target_timestamps)
             assert any(item[1] == oldest for item in after_target)
 
         now_ts = datetime.timestamp(datetime.now())
@@ -123,6 +144,22 @@ def test_update_failed_attempts_never_raises_for_malformed_attempt_strings():
         assert any(item[0] == "en" for item in parsed)
 
 
+def test_adaptive_searching_handles_non_string_desired_language():
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "3w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    non_string_values = [None, 0, 1, 3.14, [], {}, object()]
+    for value in non_string_values:
+        # Fails safe: malformed desired_language should not crash either path.
+        assert module.is_search_active(value, "[]") is True
+        updated = module.updateFailedAttempts(value, "[]")
+        parsed = ast.literal_eval(updated)
+        assert isinstance(parsed, list)
+        assert all(item[0] != "" for item in parsed)
+
+
 def test_is_search_active_respects_multi_digit_delay_weeks():
     module = _load_adaptive_module()
     module.settings.general.adaptive_searching = True
@@ -176,3 +213,188 @@ def test_is_search_active_fails_safe_on_nonnumeric_delta_values():
     for bad_delta in ["aw", "xd", "--w", " w", "d", "w"]:
         module.settings.general.adaptive_searching_delta = bad_delta
         assert module.is_search_active("en", attempts) is True
+
+
+def test_is_search_active_handles_epoch_zero_timestamp():
+    """Timestamp 0.0 represents Unix epoch (1970-01-01); should not crash and should allow search"""
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    # Epoch 0 is 1970-01-01, definitely > delay window
+    attempts = "[['en', 0], ['en', 0.0]]"
+    result = module.is_search_active("en", attempts)
+    assert result is True, "Epoch 0 timestamp should allow search (ancient attempt)"
+
+    updated = module.updateFailedAttempts("en", attempts)
+    parsed = ast.literal_eval(updated)
+    assert isinstance(parsed, list)
+    assert any(item[0] == "en" for item in parsed)
+
+
+def test_is_search_active_handles_negative_timestamps():
+    """Negative timestamps (before 1970) should not crash"""
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    # Negative timestamps (before 1970)
+    attempts = "[['en', -1000000], ['en', -1]]"
+    result = module.is_search_active("en", attempts)
+    assert result is True, "Negative timestamps should allow search or fail safe"
+
+    updated = module.updateFailedAttempts("en", attempts)
+    parsed = ast.literal_eval(updated)
+    assert isinstance(parsed, list)
+
+
+def test_is_search_active_handles_very_large_timestamps():
+    """Very large timestamps beyond Unix time range should fail safe"""
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    # Timestamps beyond valid Unix range (year 2262 issue)
+    attempts = "[['en', 9999999999], ['en', 99999999999999]]"
+    result = module.is_search_active("en", attempts)
+    assert result is True, "Overflow timestamps should fail safe to True"
+
+
+def test_is_search_active_handles_multi_colon_language_codes():
+    """Language codes with multiple colons should not crash"""
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "3w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    now_ts = datetime.timestamp(datetime.now())
+    
+    # Multi-colon language codes
+    attempts = f"[['en:hi:forced', {now_ts}], ['en:hi', {now_ts}]]"
+    result = module.is_search_active("en:hi:forced", attempts)
+    assert result is True, "Multi-colon languages should be handled"
+
+    # Also test with colon-only desired language
+    result = module.is_search_active(":", attempts)
+    assert result is True, "Colon-only language should fail safe"
+
+
+def test_is_search_active_handles_only_flag_desired_language():
+    """Desired language that is only a flag (no base language) should fail safe"""
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    now_ts = datetime.timestamp(datetime.now())
+    attempts = f"[['en', {now_ts}], ['fr:hi', {now_ts}]]"
+    
+    # Just flag, no base language
+    for flag_only in [":hi", ":forced", "::hi"]:
+        result = module.is_search_active(flag_only, attempts)
+        assert result is True, f"Flag-only language {flag_only} should fail safe"
+
+
+def test_is_search_active_handles_non_string_desired_language_types():
+    """Non-string types for desired_language should not crash"""
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    attempts = "[['en', 1609459200]]"
+    
+    # Various non-string types
+    for non_string in [None, 0, 1, 42, -1, 3.14, [], {}, object()]:
+        result = module.is_search_active(non_string, attempts)
+        assert result is True, f"Non-string desired_language {type(non_string).__name__} should fail safe"
+        
+        updated = module.updateFailedAttempts(non_string, attempts)
+        parsed = ast.literal_eval(updated)
+        assert isinstance(parsed, list), f"updateFailedAttempts should not crash on {type(non_string).__name__}"
+        assert all(item[0] != "" for item in parsed)
+
+
+def test_update_failed_attempts_does_not_introduce_empty_language_keys():
+    module = _load_adaptive_module()
+    attempts = "[['en', 100], ['fr:hi', 200]]"
+
+    updated = module.updateFailedAttempts(None, attempts)
+    parsed = ast.literal_eval(updated)
+
+    assert all(item[0] != "" for item in parsed)
+    assert any(item[0] == "en" for item in parsed)
+    assert any(item[0] == "fr" for item in parsed)
+
+
+def test_is_search_active_handles_whitespace_only_language():
+    """Desired language with only whitespace should fail safe"""
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    now_ts = datetime.timestamp(datetime.now())
+    attempts = f"[['en', {now_ts}]]"
+    
+    for whitespace_lang in ["", " ", "  ", "\t", "\n"]:
+        result = module.is_search_active(whitespace_lang, attempts)
+        assert result is True, f"Whitespace-only language should fail safe"
+
+
+def test_is_search_active_matches_legacy_suffixed_attempt_rows_by_base_language():
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    now_ts = datetime.timestamp(datetime.now())
+    four_weeks_ago = now_ts - (28 * 24 * 3600)
+    two_days_ago = now_ts - (2 * 24 * 3600)
+
+    # Legacy rows may store suffixed languages directly instead of base-only languages.
+    attempts = f"[['en:forced', {four_weeks_ago}], ['en:hi', {two_days_ago}]]"
+
+    # Initial is outside delay and latest is too recent for delta -> search should be blocked.
+    assert module.is_search_active("en", attempts) is False
+
+
+def test_update_failed_attempts_compacts_non_target_languages_to_initial_and_latest():
+    module = _load_adaptive_module()
+
+    # en is target. fr/de should be compacted to initial+latest only.
+    attempts = str([
+        ["fr", 10],
+        ["fr:hi", 20],
+        ["fr:forced", 30],
+        ["de", 100],
+        ["de", 200],
+        ["en", 1000],
+        ["en:hi", 1100],
+    ])
+    updated = module.updateFailedAttempts("en", attempts)
+    parsed = ast.literal_eval(updated)
+
+    fr_rows = [row for row in parsed if row[0] == "fr"]
+    de_rows = [row for row in parsed if row[0] == "de"]
+
+    assert fr_rows == [["fr", 10], ["fr", 30]]
+    assert de_rows == [["de", 100], ["de", 200]]
+
+
+def test_is_search_active_matches_attempts_case_insensitively():
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    now_ts = datetime.timestamp(datetime.now())
+    four_weeks_ago = now_ts - (28 * 24 * 3600)
+    two_days_ago = now_ts - (2 * 24 * 3600)
+    attempts = f"[['EN', {four_weeks_ago}], ['EN:HI', {two_days_ago}]]"
+
+    # Initial is outside delay and latest is too recent for delta -> search should be blocked.
+    assert module.is_search_active("en", attempts) is False

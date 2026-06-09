@@ -1,7 +1,6 @@
 # coding=utf-8
 # fmt: off
 
-import ast
 import logging
 import operator
 
@@ -20,67 +19,38 @@ from app.config import settings
 
 from ..adaptive_searching import is_search_active, updateFailedAttempts
 from ..download import generate_subtitles
-
-
-def _safe_missing_languages(missing_subtitles):
-    try:
-        missing = ast.literal_eval(missing_subtitles)
-    except (ValueError, SyntaxError, TypeError):
-        logging.debug("BAZARR malformed missing_subtitles value for wanted movie search: %r", missing_subtitles)
-        return []
-
-    if not isinstance(missing, list):
-        logging.debug("BAZARR invalid missing_subtitles value for wanted movie search: %r", missing_subtitles)
-        return []
-
-    safe = []
-    for language in missing:
-        if not isinstance(language, str):
-            continue
-        base_language = language.split(":", 1)[0].strip()
-        if not base_language:
-            continue
-        safe.append(language)
-    return safe
-
-
-def _resolve_audio_language(audio_languages):
-    if not isinstance(audio_languages, list) or not audio_languages:
-        return 'None'
-
-    first_language = audio_languages[0]
-    if not isinstance(first_language, dict):
-        return 'None'
-
-    name = first_language.get('name')
-    return name if isinstance(name, str) and name else 'None'
+from ..language_utils import build_search_payload, resolve_audio_language, stamp_failed_attempts
 
 
 def _wanted_movie(movie, providers_list, job_id=None):
     audio_language_list = get_audio_profile_languages(movie.audio_language)
-    audio_language = _resolve_audio_language(audio_language_list)
+    audio_language = resolve_audio_language(audio_language_list)
 
-    languages = []
-    languages_to_stamp = []
+    def _include_language(canonical_language):
+        active = is_search_active(desired_language=canonical_language, attempt_string=movie.failedAttempts)
+        if not active:
+            logging.info(
+                f"BAZARR Search is throttled by adaptive search for this movie {movie.path or 'Unknown'} and "
+                f"language: {canonical_language}"
+            )
+        return active
 
-    for raw_language in _safe_missing_languages(movie.missing_subtitles):
-        language = raw_language.strip()
-        if is_search_active(desired_language=language, attempt_string=movie.failedAttempts):
-            hi_ = "True" if language.endswith(':hi') else "False"
-            forced_ = "True" if language.endswith(':forced') else "False"
-            languages.append((language.split(":", 1)[0], hi_, forced_))
-            languages_to_stamp.append(language)
+    languages, languages_to_stamp = build_search_payload(
+        movie.missing_subtitles,
+        "wanted movie search",
+        include_predicate=_include_language,
+    )
 
-        else:
-            logging.info(f"BAZARR Search is throttled by adaptive search for this movie {movie.path} and "
-                         f"language: {language}")
+    if not movie.path:
+        logging.debug("BAZARR wanted movie search skipped because movie path is missing: %s", movie.radarrId)
+        return
 
     found_any = False
     for result in generate_subtitles(path_mappings.path_replace_movie(movie.path),
                                      languages,
                                      audio_language,
-                                     str(movie.sceneName),
-                                     movie.title,
+                                     str(movie.sceneName) if movie.sceneName else None,
+                                     movie.title or 'Unknown',
                                      'movie',
                                      movie.profileId,
                                      check_if_still_required=True,
@@ -93,18 +63,21 @@ def _wanted_movie(movie, providers_list, job_id=None):
                 result = result[0]
             store_subtitles_movie(movie.radarrId)
             history_log_movie(1, movie.radarrId, result)
-            send_notifications_movie(movie.radarrId, result.message)
+            if hasattr(result, 'message'):
+                send_notifications_movie(movie.radarrId, result.message)
             event_stream(type='movie-wanted', action='delete', payload=movie.radarrId)
 
     if not found_any and providers_list:
-        for language in languages_to_stamp:
-            updated = updateFailedAttempts(
-                desired_language=language,
-                attempt_string=movie.failedAttempts)
-            database.execute(
+        stamp_failed_attempts(
+            languages_to_stamp,
+            movie.failedAttempts or '[]',
+            update_fn=updateFailedAttempts,
+            persist_fn=lambda updated: database.execute(
                 update(TableMovies)
                 .values(failedAttempts=updated)
-                .where(TableMovies.radarrId == movie.radarrId))
+                .where(TableMovies.radarrId == movie.radarrId)
+            ),
+        )
 
 
 def wanted_download_subtitles_movie(radarr_id, job_id=None):
@@ -119,13 +92,13 @@ def wanted_download_subtitles_movie(radarr_id, job_id=None):
         .where(TableMovies.radarrId == radarr_id)
     movie = database.execute(stmt).first()
 
-    previously_indexed_subtitles = get_subtitles(radarr_id=radarr_id)
+    previously_indexed_subtitles = get_subtitles(radarr_id=radarr_id) or []
 
     if not movie:
         logging.debug(f"BAZARR no movie with that radarrId can be found in database: {radarr_id}")
         return
     elif not len(previously_indexed_subtitles) or \
-            any([not x['embedded_track_id'] for x in previously_indexed_subtitles if not x['path']]):
+            any([not x.get('embedded_track_id') for x in previously_indexed_subtitles if x and not x.get('path', True)]):
         # subtitles indexing for this movie might be incomplete, we'll do it again
         store_subtitles_movie(radarr_id)
         movie = database.execute(stmt).first()

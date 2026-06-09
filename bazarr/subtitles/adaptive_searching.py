@@ -27,12 +27,42 @@ def _safe_timestamp(value):
         return 0.0
 
 
+def _normalize_base_language(language):
+    if not isinstance(language, str):
+        return None
+
+    base = language.split(":", 1)[0].strip().lower()
+    return base or None
+
+
+def _group_attempts_by_base_language(attempts):
+    grouped = {}
+    for language, timestamp in attempts:
+        base_language = _normalize_base_language(language)
+        if not base_language:
+            continue
+        grouped.setdefault(base_language, []).append([base_language, timestamp])
+    return grouped
+
+
+def _compact_attempts(attempts_by_language, exclude_language=None):
+    compacted = []
+    for language, language_attempts in attempts_by_language.items():
+        if language == exclude_language:
+            continue
+        sorted_attempts = sorted(language_attempts, key=lambda x: _safe_timestamp(x[1]))
+        compacted.append(sorted_attempts[0])
+        if len(sorted_attempts) > 1 and sorted_attempts[-1] != sorted_attempts[0]:
+            compacted.append(sorted_attempts[-1])
+    return compacted
+
+
 def is_search_active(desired_language, attempt_string):
     """
     Function to test if it's time to search again after a previous attempt matching the desired language. For 3 weeks,
     we search on a scheduled basis but after 3 weeks we start searching only once a week.
 
-    @param desired_language: 2 letters language to search for in attempts
+    @param desired_language: 2+ letter language code or language code with flags (e.g., 'en', 'en:forced', 'en:hi')
     @type desired_language: str
     @param attempt_string: string representation of a list of lists from database column failedAttempts
     @type attempt_string: str
@@ -45,11 +75,11 @@ def is_search_active(desired_language, attempt_string):
         logging.debug("Adaptive searching is enable, we'll see if it's time to search again...")
         try:
             # let's try to get a list of lists from the string representation in database
-            attempts = ast.literal_eval(attempt_string)
+            attempts = ast.literal_eval(attempt_string or '[]')
             if type(attempts) is not list:
                 # attempts should be a list if not, it's malformed or None
                 raise ValueError
-        except (ValueError, SyntaxError):
+        except (ValueError, SyntaxError, TypeError):
             logging.debug("Adaptive searching: attempts is malformed. As a failsafe, search will run.")
             return True
 
@@ -59,8 +89,16 @@ def is_search_active(desired_language, attempt_string):
             logging.debug("Adaptive searching: attempts list is empty, search will run.")
             return True
 
-        # get attempts matching the desired language and sort them by timestamp ascending
-        matching_attempts = sorted([x for x in attempts if x[0] == desired_language], key=lambda x: _safe_timestamp(x[1]))
+        # Extract base language code (handle "en", "en:forced", "en:hi", etc.)
+        base_desired_language = _normalize_base_language(desired_language)
+        if not base_desired_language:
+            return True
+
+        attempts_by_language = _group_attempts_by_base_language(attempts)
+        matching_attempts = sorted(
+            attempts_by_language.get(base_desired_language, []),
+            key=lambda x: _safe_timestamp(x[1]),
+        )
 
         if not len(matching_attempts):
             logging.debug("Adaptive searching: there's no attempts matching desired language, search will run.")
@@ -142,7 +180,7 @@ def updateFailedAttempts(desired_language, attempt_string):
     """
     Function to parse attempts and make sure we only keep initial and latest search timestamp for each language.
 
-    @param desired_language: 2 letters language to search for in attempts
+    @param desired_language: 2+ letter language code or language code with flags (e.g., 'en', 'en:forced', 'en:hi')
     @type desired_language: str
     @param attempt_string: string representation of a list of lists from database column failedAttempts
     @type attempt_string: str
@@ -153,29 +191,41 @@ def updateFailedAttempts(desired_language, attempt_string):
 
     try:
         # let's try to get a list of lists from the string representation in database
-        attempts = ast.literal_eval(attempt_string)
+        attempts = ast.literal_eval(attempt_string or '[]')
         logging.debug(f"Adaptive searching: current attempts value is {attempts}")
         if type(attempts) is not list:
             # attempts should be a list if not, it's malformed or None
             raise ValueError
-    except (ValueError, SyntaxError):
+    except (ValueError, SyntaxError, TypeError):
         logging.debug("Adaptive searching: failed to parse attempts value, we'll use an empty list.")
         attempts = []
 
     attempts = _safe_attempt_items(attempts)
 
-    matching_attempts = sorted([x for x in attempts if x[0] == desired_language], key=lambda x: _safe_timestamp(x[1]))
-    logging.debug(f"Adaptive searching: attempts matching language {desired_language}: {matching_attempts}")
+    # Extract base language code (handle "en", "en:forced", "en:hi", etc.)
+    base_desired_language = _normalize_base_language(desired_language)
+    attempts_by_language = _group_attempts_by_base_language(attempts)
 
-    filtered_attempts = sorted([x for x in attempts if x[0] != desired_language], key=lambda x: _safe_timestamp(x[1]))
-    logging.debug(f"Adaptive searching: attempts not matching language {desired_language}: {filtered_attempts}")
+    if not base_desired_language:
+        compacted = sorted(_compact_attempts(attempts_by_language), key=lambda x: x[0])
+        logging.debug(f"Adaptive searching: malformed desired language; preserving compacted attempts {compacted}")
+        return str(compacted)
 
-    # get the initial search from attempts if there's one
-    if len(matching_attempts):
+    matching_attempts = sorted(
+        attempts_by_language.get(base_desired_language, []),
+        key=lambda x: _safe_timestamp(x[1]),
+    )
+    logging.debug(f"Adaptive searching: attempts matching language {base_desired_language}: {matching_attempts}")
+
+    filtered_attempts = _compact_attempts(attempts_by_language, exclude_language=base_desired_language)
+    logging.debug(f"Adaptive searching: compacted non-target attempts: {filtered_attempts}")
+
+    # Keep initial search for target language if it exists.
+    if matching_attempts:
         filtered_attempts.append(matching_attempts[0])
 
-    # append current attempt with language and timestamp to attempts
-    filtered_attempts.append([desired_language, datetime.timestamp(datetime.now())])
+    # Append current attempt for target language as latest.
+    filtered_attempts.append([base_desired_language, datetime.timestamp(datetime.now())])
 
     updated_attempts = sorted(filtered_attempts, key=lambda x: x[0])
     logging.debug(f"Adaptive searching: updated attempts that will be saved to database is {updated_attempts}")
