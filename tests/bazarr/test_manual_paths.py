@@ -194,3 +194,74 @@ def test_movie_manual_download_handles_none_audio_list_and_message_less_result()
 
     assert result == ("", 204)
     assert notifications == []
+
+
+def test_episode_manual_download_passes_none_for_missing_scene_name():
+    module = _load_manual_module(profile_payload={"items": [], "originalFormat": 0})
+
+    episode_info = SimpleNamespace(
+        audio_language="['eng']",
+        path="/series/episode.mkv",
+        sceneName=None,
+        season=1,
+        episode=2,
+        episodeTitle="Pilot",
+        title="Series",
+    )
+    captured_scene = []
+    module.database = SimpleNamespace(execute=lambda stmt: _Result(first_value=episode_info))
+    module.get_audio_profile_languages = lambda audio_language: [{"name": "English"}]
+    module.path_mappings.path_replace = lambda path: path
+    module.get_profile_id = lambda **kwargs: 44
+    module.manual_download_subtitle = lambda *args, **kwargs: captured_scene.append(args[6]) or SimpleNamespace()
+    module.store_subtitles = lambda *args, **kwargs: None
+    module.history_log = lambda *args, **kwargs: None
+    module.send_notifications = lambda *args, **kwargs: None
+
+    result = module.episode_manually_download_specific_subtitle(
+        sonarr_series_id=5,
+        sonarr_episode_id=11,
+        hi="False",
+        forced="False",
+        use_original_format="False",
+        selected_provider="provider",
+        subtitle="sub-id",
+        job_id="job",
+    )
+
+    assert result == ("", 204)
+    assert captured_scene == [None]
+
+
+def test_movie_manual_download_passes_none_for_missing_scene_name():
+    module = _load_manual_module(profile_payload={"items": [], "originalFormat": 0})
+
+    movie_info = SimpleNamespace(
+        title="Movie",
+        year=2024,
+        path="/movies/movie.mkv",
+        sceneName=None,
+        audio_language="['eng']",
+    )
+    captured_scene = []
+    module.database = SimpleNamespace(execute=lambda stmt: _Result(first_value=movie_info))
+    module.get_audio_profile_languages = lambda audio_language: [{"name": "English"}]
+    module.path_mappings.path_replace_movie = lambda path: path
+    module.get_profile_id = lambda **kwargs: 44
+    module.manual_download_subtitle = lambda *args, **kwargs: captured_scene.append(args[6]) or SimpleNamespace()
+    module.store_subtitles_movie = lambda *args, **kwargs: None
+    module.history_log_movie = lambda *args, **kwargs: None
+    module.send_notifications_movie = lambda *args, **kwargs: None
+
+    result = module.movie_manually_download_specific_subtitle(
+        radarr_id=7,
+        hi="False",
+        forced="False",
+        use_original_format="False",
+        selected_provider="provider",
+        subtitle="sub-id",
+        job_id="job",
+    )
+
+    assert result == ("", 204)
+    assert captured_scene == [None]
