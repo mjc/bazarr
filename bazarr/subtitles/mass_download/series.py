@@ -223,7 +223,7 @@ def episode_download_specific_subtitles(sonarr_series_id, sonarr_episode_id, lan
     if not os.path.exists(episodePath):
         return 'Episode file not found. Path mapping issue?', 500
 
-    sceneName = episodeInfo.sceneName or None
+    sceneName = episodeInfo.sceneName or 'None'
 
     title = episodeInfo.title
 

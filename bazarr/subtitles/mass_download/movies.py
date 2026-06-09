@@ -138,7 +138,7 @@ def movie_download_specific_subtitles(radarr_id, language, hi, forced, job_id=No
     if not os.path.exists(moviePath):
         return 'Movie file not found. Path mapping issue?', 500
 
-    sceneName = movieInfo.sceneName or None
+    sceneName = movieInfo.sceneName or 'None'
 
     title = movieInfo.title
 

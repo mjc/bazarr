@@ -1234,7 +1234,7 @@ def test_movie_download_specific_subtitles_records_success(monkeypatch):
     assert job_names == ["Searching FR:HI for Movie", "Searched FR:HI for Movie"]
 
 
-def test_movie_download_specific_subtitles_uses_none_for_missing_scene_name(monkeypatch):
+def test_movie_download_specific_subtitles_uses_none_string_for_missing_scene_name(monkeypatch):
     module = load_mass_download_module("movies")
 
     movie_info = SimpleNamespace(
@@ -1268,7 +1268,7 @@ def test_movie_download_specific_subtitles_uses_none_for_missing_scene_name(monk
     result = module.movie_download_specific_subtitles(7, "fr", "False", "False", job_id="job")
 
     assert result == ("", 204)
-    assert captured_scene == [None]
+    assert captured_scene == ["None"]
 
 
 def test_movie_download_specific_subtitles_emits_event_when_nothing_found(monkeypatch):
@@ -1533,7 +1533,7 @@ def test_episode_download_specific_subtitles_returns_not_found_when_episode_row_
     assert result != ("", 204)
 
 
-def test_episode_download_specific_subtitles_uses_none_for_missing_scene_name(monkeypatch):
+def test_episode_download_specific_subtitles_uses_none_string_for_missing_scene_name(monkeypatch):
     module = load_mass_download_module("series")
 
     episode_info = SimpleNamespace(
@@ -1570,7 +1570,7 @@ def test_episode_download_specific_subtitles_uses_none_for_missing_scene_name(mo
     result = module.episode_download_specific_subtitles(5, 11, "fr", "False", "False", job_id="job")
 
     assert result == ("", 204)
-    assert captured_scene == [None]
+    assert captured_scene == ["None"]
 
 
 def test_series_download_subtitles_sets_fallback_allowed_per_settings(monkeypatch):
