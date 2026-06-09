@@ -47,7 +47,14 @@ def sync_subtitles(video_path,
             use_subsync_threshold = settings.subsync.use_subsync_movie_threshold
             subsync_threshold = settings.subsync.subsync_movie_threshold
 
-        if not use_subsync_threshold or (use_subsync_threshold and percent_score <= float(subsync_threshold)):
+        # Guard threshold conversion
+        try:
+            threshold_float = float(subsync_threshold) if subsync_threshold else 100.0
+        except (TypeError, ValueError):
+            logging.warning(f"BAZARR invalid subsync threshold value: {subsync_threshold}, using default 100.0")
+            threshold_float = 100.0
+
+        if not use_subsync_threshold or (use_subsync_threshold and percent_score <= threshold_float):
             subsync = SubSyncer()
             sync_kwargs = {
                 'video_path': video_path,
@@ -67,7 +74,7 @@ def sync_subtitles(video_path,
             }
             try:
                 subsync.sync(**sync_kwargs)
-                if callback:
+                if callback and callable(callback):
                     callback()
             except Exception:
                 logging.exception(f'BAZARR an unhandled exception occurs during the synchronization process for this '
@@ -76,7 +83,8 @@ def sync_subtitles(video_path,
             else:
                 return True
             finally:
-                jobs_queue.update_job_name(job_id=job_id, new_job_name=f"Synced {srt_path}")
+                if job_id:
+                    jobs_queue.update_job_name(job_id=job_id, new_job_name=f"Synced {srt_path}")
                 del subsync
                 gc.collect()
         else:
