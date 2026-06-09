@@ -33,7 +33,15 @@ def _safe_missing_languages(missing_subtitles):
         logging.debug("BAZARR invalid missing_subtitles value for wanted movie search: %r", missing_subtitles)
         return []
 
-    return [language for language in missing if isinstance(language, str)]
+    safe = []
+    for language in missing:
+        if not isinstance(language, str):
+            continue
+        base_language = language.split(":", 1)[0].strip()
+        if not base_language:
+            continue
+        safe.append(language)
+    return safe
 
 
 def _wanted_movie(movie, providers_list, job_id=None):

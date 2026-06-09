@@ -952,3 +952,35 @@ def test_wanted_episode_fuzz_malformed_missing_subtitles_fails_safe(monkeypatch)
         module._wanted_episode(episode, ["provider"])
 
         assert captured == [[]]
+
+
+def test_wanted_movie_ignores_empty_base_language_tokens(monkeypatch):
+    module = load_wanted_module("movies")
+    movie = _movie_row()
+    movie.missing_subtitles = "[':hi', '', ':forced', 'en', 'fr:forced']"
+    captured = []
+
+    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured.append(args[1]) or iter(()))
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "is_search_active", lambda desired_language, attempt_string: True)
+    monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda *args, **kwargs: None))
+
+    module._wanted_movie(movie, ["provider"])
+
+    assert captured == [[("en", "False", "False"), ("fr", "False", "True")]]
+
+
+def test_wanted_episode_ignores_empty_base_language_tokens(monkeypatch):
+    module = load_wanted_module("series")
+    episode = _episode_row()
+    episode.missing_subtitles = "[':hi', '', ':forced', 'en:hi', 'fr']"
+    captured = []
+
+    monkeypatch.setattr(module, "generate_subtitles", lambda *args, **kwargs: captured.append(args[1]) or iter(()))
+    monkeypatch.setattr(module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
+    monkeypatch.setattr(module, "is_search_active", lambda desired_language, attempt_string: True)
+    monkeypatch.setattr(module, "database", SimpleNamespace(execute=lambda *args, **kwargs: None))
+
+    module._wanted_episode(episode, ["provider"])
+
+    assert captured == [[("en", "True", "False"), ("fr", "False", "False")]]
