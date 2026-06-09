@@ -154,3 +154,25 @@ def test_is_search_active_respects_multi_digit_delta_weeks():
     for weeks in range(10, 21):
         module.settings.general.adaptive_searching_delta = f"{weeks}w"
         assert module.is_search_active("en", attempts) is False
+
+
+def test_is_search_active_fails_safe_on_nonnumeric_delay_values():
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delta = "1w"
+
+    attempts = "[['en', 1609459200]]"
+    for bad_delay in ["aw", "xd", "--w", " w", "d", "w"]:
+        module.settings.general.adaptive_searching_delay = bad_delay
+        assert module.is_search_active("en", attempts) is True
+
+
+def test_is_search_active_fails_safe_on_nonnumeric_delta_values():
+    module = _load_adaptive_module()
+    module.settings.general.adaptive_searching = True
+    module.settings.general.adaptive_searching_delay = "1w"
+
+    attempts = "[['en', 1609459200]]"
+    for bad_delta in ["aw", "xd", "--w", " w", "d", "w"]:
+        module.settings.general.adaptive_searching_delta = bad_delta
+        assert module.is_search_active("en", attempts) is True

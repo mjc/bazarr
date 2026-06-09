@@ -86,21 +86,31 @@ def is_search_active(desired_language, attempt_string):
 
         # defining basic calculation variables
         now = datetime.now()
-        if settings.general.adaptive_searching_delay.endswith('d'):
-            extended_search_delay = timedelta(days=int(settings.general.adaptive_searching_delay[:-1]))
-        elif settings.general.adaptive_searching_delay.endswith('w'):
-            extended_search_delay = timedelta(weeks=int(settings.general.adaptive_searching_delay[:-1]))
-        else:
+        try:
+            if settings.general.adaptive_searching_delay.endswith('d'):
+                extended_search_delay = timedelta(days=int(settings.general.adaptive_searching_delay[:-1]))
+            elif settings.general.adaptive_searching_delay.endswith('w'):
+                extended_search_delay = timedelta(weeks=int(settings.general.adaptive_searching_delay[:-1]))
+            else:
+                logging.debug(f"Adaptive searching: cannot parse adaptive_searching_delay from config file: "
+                              f"{settings.general.adaptive_searching_delay}")
+                return True
+        except ValueError:
             logging.debug(f"Adaptive searching: cannot parse adaptive_searching_delay from config file: "
                           f"{settings.general.adaptive_searching_delay}")
             return True
         logging.debug(f"Adaptive searching: delay after initial search value: {extended_search_delay}")
 
-        if settings.general.adaptive_searching_delta.endswith('d'):
-            extended_search_delta = timedelta(days=int(settings.general.adaptive_searching_delta[:-1]))
-        elif settings.general.adaptive_searching_delta.endswith('w'):
-            extended_search_delta = timedelta(weeks=int(settings.general.adaptive_searching_delta[:-1]))
-        else:
+        try:
+            if settings.general.adaptive_searching_delta.endswith('d'):
+                extended_search_delta = timedelta(days=int(settings.general.adaptive_searching_delta[:-1]))
+            elif settings.general.adaptive_searching_delta.endswith('w'):
+                extended_search_delta = timedelta(weeks=int(settings.general.adaptive_searching_delta[:-1]))
+            else:
+                logging.debug(f"Adaptive searching: cannot parse adaptive_searching_delta from config file: "
+                              f"{settings.general.adaptive_searching_delta}")
+                return True
+        except ValueError:
             logging.debug(f"Adaptive searching: cannot parse adaptive_searching_delta from config file: "
                           f"{settings.general.adaptive_searching_delta}")
             return True
