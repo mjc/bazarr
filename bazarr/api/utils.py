@@ -42,6 +42,25 @@ def _parse_missing_subtitles(missing_subtitles):
     return parsed_missing
 
 
+def _parse_language_value(language):
+    if language == 'None':
+        return None
+    if not isinstance(language, str):
+        return None
+
+    base_language = language.split(':', 1)[0].strip()
+    if not base_language:
+        return None
+
+    return {
+        "name": language_from_alpha2(base_language),
+        "code2": base_language,
+        "code3": alpha3_from_alpha2(base_language),
+        "forced": language.endswith(':forced'),
+        "hi": language.endswith(':hi'),
+    }
+
+
 def authenticate(actual_method):
     @wraps(actual_method)
     def wrapper(*args, **kwargs):
@@ -112,18 +131,8 @@ def postprocess(item):
     else:
         item['hearing_impaired'] = False
 
-    if item.get('language'):
-        if item['language'] == 'None':
-            item['language'] = None
-        if item['language'] is not None:
-            splitted_language = item['language'].split(':')
-            item['language'] = {
-                "name": language_from_alpha2(splitted_language[0]),
-                "code2": splitted_language[0],
-                "code3": alpha3_from_alpha2(splitted_language[0]),
-                "forced": bool(item['language'].endswith(':forced')),
-                "hi": bool(item['language'].endswith(':hi')),
-            }
+    if item.get('language') is not None:
+        item['language'] = _parse_language_value(item.get('language'))
 
     if item.get('path'):
         item['path'] = path_replace(item['path'])

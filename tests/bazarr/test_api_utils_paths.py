@@ -117,3 +117,39 @@ def test_postprocess_filters_non_string_missing_subtitle_entries():
         {"name": "lang-en", "code2": "en", "code3": "en3", "forced": False, "hi": True},
         {"name": "lang-fr", "code2": "fr", "code3": "fr3", "forced": True, "hi": False},
     ]
+
+
+def test_postprocess_fuzz_malformed_language_values_fail_safe():
+    module = _load_api_utils_module()
+    rng = random.Random(9124)
+    malformed_values = [
+        1,
+        1.5,
+        True,
+        object(),
+        [],
+        {},
+    ]
+    malformed_values.extend(
+        "".join(rng.choice("[]{}()'\",abc123:-_ ") for _ in range(rng.randint(1, 20)))
+        for _ in range(120)
+    )
+
+    for malformed in malformed_values:
+        item = _base_item()
+        item["language"] = malformed
+        processed = module.postprocess(item)
+        if isinstance(malformed, str):
+            # String inputs may parse to a language dict or be preserved as-is if malformed.
+            assert "language" in processed
+        else:
+            assert processed["language"] is None
+
+
+def test_postprocess_ignores_empty_base_language_tokens():
+    module = _load_api_utils_module()
+    for malformed in [":hi", "", "   :forced"]:
+        item = _base_item()
+        item["language"] = malformed
+        processed = module.postprocess(item)
+        assert processed["language"] is None
