@@ -32,7 +32,15 @@ def _safe_missing_languages(missing_subtitles):
         logging.debug("BAZARR invalid missing_subtitles value for mass movie download: %r", missing_subtitles)
         return []
 
-    return [language for language in missing if isinstance(language, str)]
+    safe = []
+    for language in missing:
+        if not isinstance(language, str):
+            continue
+        base_language = language.split(":", 1)[0].strip()
+        if not base_language:
+            continue
+        safe.append(language)
+    return safe
 
 
 def movies_download_subtitles(no, job_id=None, job_sub_function=False):
@@ -108,10 +116,11 @@ def movies_download_subtitles(no, job_id=None, job_sub_function=False):
 
     downloaded_count = 0
     if providers_list:
-        for language in missing_languages:
+        for raw_language in missing_languages:
+            language = raw_language.strip()
             hi_ = "True" if language.endswith(':hi') else "False"
             forced_ = "True" if language.endswith(':forced') else "False"
-            languages.append((language.split(":")[0], hi_, forced_))
+            languages.append((language.split(":", 1)[0], hi_, forced_))
 
         if languages:
             for result in generate_subtitles(moviePath,
