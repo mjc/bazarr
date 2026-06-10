@@ -1,50 +1,24 @@
-import importlib
 from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
 
-
-class _Language:
-    def __init__(self, code):
-        self.code = code
-
-    @staticmethod
-    def rebuild(lang, hi=False, forced=False):
-        lang.hi = hi
-        lang.forced = forced
-        return lang
-
-
-class _Subtitle:
-    def __init__(self, *args, **kwargs):
-        self.content = b""
-        self.format = ("srt",)
-        self.mods = None
-
-    def is_valid(self):
-        return True
-
-    def set_encoding(self, *_args, **_kwargs):
-        return None
+from languages import get_languages
+import subtitles.upload as upload
 
 
 @pytest.fixture
 def upload_module(bind_wanted_database, monkeypatch):
-    module = importlib.reload(importlib.import_module("subtitles.upload"))
+    module = upload
     bind_wanted_database(module, "movies")
     bind_wanted_database(module, "series")
 
-    monkeypatch.setattr(module, "Language", _Language)
-    monkeypatch.setattr(module, "Subtitle", _Subtitle)
-    monkeypatch.setattr(module, "CustomLanguage", SimpleNamespace(from_value=lambda *args, **kwargs: None))
-    monkeypatch.setattr(module, "alpha3_from_alpha2", lambda code: "eng")
-    monkeypatch.setattr(module, "alpha2_from_alpha3", lambda code: "en")
-    monkeypatch.setattr(module, "language_from_alpha3", lambda code: "English")
-    monkeypatch.setattr(module, "get_array_from", lambda value: value)
-    monkeypatch.setattr(module, "get_target_folder", lambda path: None)
-    monkeypatch.setattr(module, "force_unicode", lambda path: path)
-    monkeypatch.setattr(module, "get_format_identifier", lambda ext: "srt")
+    monkeypatch.setattr(
+        get_languages,
+        "languages_dict",
+        [{"code2": "en", "code3": "eng", "code3b": None, "name": "English"}],
+        raising=False,
+    )
     monkeypatch.setattr(module, "set_chmod", lambda **kwargs: None)
     monkeypatch.setattr(module, "sync_subtitles", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "postprocessing", lambda *args, **kwargs: None)
@@ -62,7 +36,6 @@ def upload_module(bind_wanted_database, monkeypatch):
         "save_subtitles",
         lambda *args, **kwargs: [SimpleNamespace(storage_path="/subs/sub.srt")],
     )
-    monkeypatch.setattr(module, "ProcessSubtitlesResult", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(module.settings.general, "single_language", False)
     monkeypatch.setattr(module.settings.general, "use_postprocessing", False)
     monkeypatch.setattr(module.settings.general, "postprocessing_cmd", "")
