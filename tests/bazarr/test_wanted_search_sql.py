@@ -1,55 +1,17 @@
-import importlib.util
 import os
-import sys
 import time
-import types
-from pathlib import Path
-from types import SimpleNamespace
 
 import sqlalchemy as sa
 
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _settings(adaptive_searching):
-    return SimpleNamespace(
-        general=SimpleNamespace(
-            adaptive_searching=adaptive_searching,
-            adaptive_searching_delay="3w",
-            adaptive_searching_delta="1w",
-        ),
-        postgresql=SimpleNamespace(enabled=False),
-    )
+import app.wanted_sql as wanted_sql
 
 
 def _load_wanted_sql(adaptive_searching):
-    previous_app_module = sys.modules.get('app')
-    previous_config_module = sys.modules.get('app.config')
-    app_module = types.ModuleType('app')
-    config_module = types.ModuleType('app.config')
-    config_module.settings = _settings(adaptive_searching)
-    sys.modules['app'] = app_module
-    sys.modules['app.config'] = config_module
-
-    try:
-        spec = importlib.util.spec_from_file_location(
-            'wanted_sql_test_module',
-            _REPO_ROOT / 'bazarr/app/wanted_sql.py',
-        )
-        wanted_sql = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(wanted_sql)
-        return wanted_sql
-    finally:
-        if previous_app_module is None:
-            sys.modules.pop('app', None)
-        else:
-            sys.modules['app'] = previous_app_module
-
-        if previous_config_module is None:
-            sys.modules.pop('app.config', None)
-        else:
-            sys.modules['app.config'] = previous_config_module
+    wanted_sql.settings.general.adaptive_searching = adaptive_searching
+    wanted_sql.settings.general.adaptive_searching_delay = "3w"
+    wanted_sql.settings.general.adaptive_searching_delta = "1w"
+    wanted_sql.settings.postgresql.enabled = False
+    return wanted_sql
 
 
 def _wanted_rows(connection, media):
