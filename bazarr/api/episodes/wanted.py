@@ -7,6 +7,7 @@ from functools import reduce
 
 from app.database import get_exclusion_clause, TableEpisodes, TableShows, database, select, func
 from api.swaggerui import subtitles_language_model
+from app.wanted_sql import has_wanted_subtitle
 
 from ..utils import authenticate, postprocess
 
@@ -49,7 +50,8 @@ class EpisodesWanted(Resource):
         episodeid = args.get('episodeid[]')
 
         wanted_conditions = [(TableEpisodes.missing_subtitles.is_not(None)),
-                             (TableEpisodes.missing_subtitles != '[]')]
+                             (TableEpisodes.missing_subtitles != '[]'),
+                             has_wanted_subtitle(TableEpisodes.missing_subtitles)]
         if len(episodeid) > 0:
             wanted_conditions.append((TableEpisodes.sonarrEpisodeId.in_(episodeid)))
             start = 0

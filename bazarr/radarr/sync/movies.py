@@ -17,7 +17,8 @@ from radarr.rootfolder import check_radarr_rootfolder
 from subtitles.indexer.movies import store_subtitles_movie
 from subtitles.mass_download import movies_download_subtitles
 from utilities.path_mappings import path_mappings
-from subtitles.adaptive_searching import is_search_active
+from app.wanted_sql import has_due_missing_subtitle, supports_sqlite_wanted_search
+from subtitles.wanted.utils import get_due_missing_languages
 
 from sqlalchemy.exc import IntegrityError
 from .parser import movieParser
@@ -388,14 +389,20 @@ def _is_there_missing_subtitles(radarr_id: int) -> bool:
                          (TableMovies.radarrId == radarr_id)]
     if not radarr_id:
         return False
+    if supports_sqlite_wanted_search():
+        movies_conditions.append(
+            has_due_missing_subtitle(TableMovies.missing_subtitles, TableMovies.failedAttempts)
+        )
     movies_conditions += get_exclusion_clause('movie')
     missing_movies = database.execute(
-        select(TableMovies.missing_subtitles, TableMovies.failedAttempts)
+        select(TableMovies.radarrId, TableMovies.missing_subtitles, TableMovies.failedAttempts)
         .select_from(TableMovies)
         .where(reduce(operator.and_, movies_conditions))) \
         .all()
-    for missing_movie in missing_movies:
-        for language in missing_movie.missing_subtitles:
-            if is_search_active(desired_language=language, attempt_string=missing_movie.failedAttempts):
-                return True
-    return False
+    if supports_sqlite_wanted_search():
+        return len(missing_movies) > 0
+
+    return any(
+        get_due_missing_languages(movie.missing_subtitles, movie.failedAttempts)
+        for movie in missing_movies
+    )

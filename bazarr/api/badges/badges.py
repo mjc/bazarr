@@ -1,17 +1,18 @@
 # coding=utf-8
 
 import operator
-import ast
 
 from functools import reduce
 from flask_restx import Resource, Namespace, fields, marshal
 
 from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableMovies, database, select
 from app.config import settings
+from app.wanted_sql import has_wanted_subtitle
 
 from app.get_providers import get_throttled_providers
 from app.signalr_client import sonarr_signalr_client, radarr_signalr_client
 from app.announcements import get_all_announcements
+from subtitles.serialization import parse_missing_subtitles
 from utilities.health import get_health_issues
 
 from ..utils import authenticate
@@ -38,7 +39,8 @@ class Badges(Resource):
     def get(self):
         """Get badges count to update the UI"""
         episodes_conditions = [(TableEpisodes.missing_subtitles.is_not(None)),
-                               (TableEpisodes.missing_subtitles != '[]')]
+                               (TableEpisodes.missing_subtitles != '[]'),
+                               has_wanted_subtitle(TableEpisodes.missing_subtitles)]
         episodes_conditions += get_exclusion_clause('series')
         missing_episodes = database.execute(
             select(TableEpisodes.missing_subtitles)
@@ -48,10 +50,11 @@ class Badges(Resource):
             .all()
         missing_episodes_count = 0
         for episode in missing_episodes:
-            missing_episodes_count += len(ast.literal_eval(episode.missing_subtitles))
+            missing_episodes_count += len(parse_missing_subtitles(episode.missing_subtitles))
 
         movies_conditions = [(TableMovies.missing_subtitles.is_not(None)),
-                             (TableMovies.missing_subtitles != '[]')]
+                             (TableMovies.missing_subtitles != '[]'),
+                             has_wanted_subtitle(TableMovies.missing_subtitles)]
         movies_conditions += get_exclusion_clause('movie')
         missing_movies = database.execute(
             select(TableMovies.missing_subtitles)
@@ -60,7 +63,7 @@ class Badges(Resource):
             .all()
         missing_movies_count = 0
         for movie in missing_movies:
-            missing_movies_count += len(ast.literal_eval(movie.missing_subtitles))
+            missing_movies_count += len(parse_missing_subtitles(movie.missing_subtitles))
 
         throttled_providers = len(get_throttled_providers())
 

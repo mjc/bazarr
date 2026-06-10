@@ -7,6 +7,7 @@ from functools import reduce
 
 from app.database import get_exclusion_clause, TableMovies, database, select, func
 from api.swaggerui import subtitles_language_model
+from app.wanted_sql import has_wanted_subtitle
 
 from api.utils import authenticate, postprocess
 
@@ -46,7 +47,8 @@ class MoviesWanted(Resource):
         radarrid = args.get("radarrid[]")
 
         wanted_conditions = [(TableMovies.missing_subtitles.is_not(None)),
-                             (TableMovies.missing_subtitles != '[]')]
+                             (TableMovies.missing_subtitles != '[]'),
+                             has_wanted_subtitle(TableMovies.missing_subtitles)]
         if len(radarrid) > 0:
             wanted_conditions.append((TableMovies.radarrId.in_(radarrid)))
             start = 0

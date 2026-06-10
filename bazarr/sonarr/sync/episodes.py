@@ -19,7 +19,8 @@ from app.event_handler import event_stream
 from sonarr.info import get_sonarr_info
 from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications
-from subtitles.adaptive_searching import is_search_active
+from app.wanted_sql import has_due_missing_subtitle, supports_sqlite_wanted_search
+from subtitles.wanted.utils import get_due_missing_languages
 
 from .parser import episodeParser
 from .utils import get_episodes_from_sonarr_api, get_episodesFiles_from_sonarr_api
@@ -370,23 +371,31 @@ def _is_there_missing_subtitles(series_id: int = None, episode_id: int = None) -
         or not (`False`).
     :rtype: bool
     """
-    episodes_conditions = [(TableEpisodes.missing_subtitles.is_not(None)),
-                           (TableEpisodes.missing_subtitles != '[]')]
+    episodes_conditions = [
+        (TableEpisodes.missing_subtitles.is_not(None)),
+        (TableEpisodes.missing_subtitles != '[]'),
+    ]
     if all([series_id, episode_id]) or not any([series_id, episode_id]):
         return False
     elif series_id:
         episodes_conditions.append(TableEpisodes.sonarrSeriesId == series_id)
     elif episode_id:
         episodes_conditions.append(TableEpisodes.sonarrEpisodeId == episode_id)
+    if supports_sqlite_wanted_search():
+        episodes_conditions.append(
+            has_due_missing_subtitle(TableEpisodes.missing_subtitles, TableEpisodes.failedAttempts)
+        )
     episodes_conditions += get_exclusion_clause('series')
     missing_episodes = database.execute(
-        select(TableEpisodes.missing_subtitles, TableEpisodes.failedAttempts)
+        select(TableEpisodes.sonarrEpisodeId, TableEpisodes.missing_subtitles, TableEpisodes.failedAttempts)
         .select_from(TableEpisodes)
         .join(TableShows)
         .where(reduce(operator.and_, episodes_conditions))) \
         .all()
-    for missing_episode in missing_episodes:
-        for language in missing_episode.missing_subtitles:
-            if is_search_active(desired_language=language, attempt_string=missing_episode.failedAttempts):
-                return True
-    return False
+    if supports_sqlite_wanted_search():
+        return len(missing_episodes) > 0
+
+    return any(
+        get_due_missing_languages(episode.missing_subtitles, episode.failedAttempts)
+        for episode in missing_episodes
+    )
