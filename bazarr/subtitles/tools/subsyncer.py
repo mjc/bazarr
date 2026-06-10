@@ -3,8 +3,6 @@
 import logging
 import os
 
-from ffsubsync.ffsubsync import run, make_parser
-
 from utilities.binaries import get_binary
 from radarr.history import history_log_movie
 from sonarr.history import history_log
@@ -192,6 +190,7 @@ class SubSyncer:
             if settings.subsync.debug:
                 unparsed_args.append('--make-test-case')
 
+            make_parser, run = _load_ffsubsync()
             parser = make_parser()
             self.args = parser.parse_args(args=unparsed_args)
 
