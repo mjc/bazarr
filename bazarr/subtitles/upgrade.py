@@ -466,9 +466,9 @@ def _language_still_desired(language, profile_id):
 def _language_from_items(items):
     results = []
     for item in items:
-        if item['forced'] == 'True':
+        if item['forced']:
             results.append(f'{item["language"]}:forced')
-        elif item['hi'] == 'True':
+        elif item['hi']:
             results.append(f'{item["language"]}:hi')
         else:
             results.append(item['language'])
@@ -479,6 +479,6 @@ def _language_from_items(items):
 def _is_hi_required(language, profile_id):
     profile = get_profiles_list(profile_id=profile_id)
     for item in profile['items']:
-        if language.split(':')[0] == item['language'] and item['hi'] == 'True':
+        if language.split(':')[0] == item['language'] and item['hi']:
             return True
     return False
