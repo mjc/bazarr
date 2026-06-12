@@ -1,9 +1,10 @@
 from app.database import _normalize_profile_items
 
 
-def test_normalize_profile_items_converts_boolean_strings():
+def test_normalize_profile_items_converts_legacy_boolean_strings():
     items = [
         {
+            "id": 1,
             "language": "en",
             "forced": "True",
             "hi": "False",
@@ -11,6 +12,7 @@ def test_normalize_profile_items_converts_boolean_strings():
             "audio_only_include": "False",
         },
         {
+            "id": 2,
             "language": "fr",
             "forced": False,
             "hi": True,
@@ -21,6 +23,7 @@ def test_normalize_profile_items_converts_boolean_strings():
 
     assert _normalize_profile_items(items) == [
         {
+            "id": 1,
             "language": "en",
             "forced": True,
             "hi": False,
@@ -28,6 +31,7 @@ def test_normalize_profile_items_converts_boolean_strings():
             "audio_only_include": False,
         },
         {
+            "id": 2,
             "language": "fr",
             "forced": False,
             "hi": True,
@@ -37,6 +41,6 @@ def test_normalize_profile_items_converts_boolean_strings():
     ]
 
 
-def test_normalize_profile_items_drops_malformed_items():
+def test_normalize_profile_items_ignores_invalid_items():
     assert _normalize_profile_items(None) == []
-    assert _normalize_profile_items([None, {"language": "en"}]) == [{"language": "en"}]
+    assert _normalize_profile_items([None, "en", {"language": "fr"}]) == [{"language": "fr"}]
