@@ -15,6 +15,12 @@ from app.database import TableMovies, TableShows, database, select
 from app.get_args import args
 
 
+def _load_ffsubsync():
+    from ffsubsync.ffsubsync import make_parser, run
+
+    return make_parser, run
+
+
 class SubSyncer:
     def __init__(self):
         self.reference = None
@@ -184,8 +190,7 @@ class SubSyncer:
             if settings.subsync.debug:
                 unparsed_args.append('--make-test-case')
 
-            from ffsubsync.ffsubsync import run, make_parser
-
+            make_parser, run = _load_ffsubsync()
             parser = make_parser()
             self.args = parser.parse_args(args=unparsed_args)
 

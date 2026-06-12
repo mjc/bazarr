@@ -310,8 +310,8 @@ def list_missing_subtitles_movies(no=None):
                     # HI is considered as good as normal
                     elif (cutoff_language and
                           {'language': cutoff_language['language'],
-                           'forced': 'False',
-                           'hi': 'True'} in actual_subtitles_list):
+                           'forced': False,
+                           'hi': True} in actual_subtitles_list):
                         cutoff_met = True
 
             if cutoff_met:
@@ -325,11 +325,11 @@ def list_missing_subtitles_movies(no=None):
 
                 # remove missing that have forced or hi subtitles for this language in existing
                 for item in actual_subtitles_list:
-                    if item['hi'] == 'True':
+                    if item['hi']:
                         try:
                             missing_subtitles_list.remove({'language': item['language'],
-                                                           'forced': 'False',
-                                                           'hi': 'False'})
+                                                           'forced': False,
+                                                           'hi': False})
                         except ValueError:
                             pass
 
@@ -337,9 +337,9 @@ def list_missing_subtitles_movies(no=None):
                 missing_subtitles_output_list = []
                 for item in missing_subtitles_list:
                     lang = item['language']
-                    if item['forced'] == 'True':
+                    if item['forced']:
                         lang += ':forced'
-                    elif item['hi'] == 'True':
+                    elif item['hi']:
                         lang += ':hi'
                     missing_subtitles_output_list.append(lang)
 

@@ -132,7 +132,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
         result = list(generate_subtitles(path_mappings.path_replace(episode['video_path']),
                                          [(language, is_hi, is_forced)],
                                          audio_language,
-                                         str(episode['sceneName']),
+                                         episode['sceneName'],
                                          episode['seriesTitle'],
                                          'series',
                                          episode['profileId'],
@@ -238,7 +238,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
         result = list(generate_subtitles(path_mappings.path_replace_movie(movie['video_path']),
                                          [(language, is_hi, is_forced)],
                                          audio_language,
-                                         str(movie['sceneName']),
+                                         movie['sceneName'],
                                          movie['title'],
                                          'movie',
                                          movie['profileId'],
@@ -466,9 +466,9 @@ def _language_still_desired(language, profile_id):
 def _language_from_items(items):
     results = []
     for item in items:
-        if item['forced'] == 'True':
+        if item['forced']:
             results.append(f'{item["language"]}:forced')
-        elif item['hi'] == 'True':
+        elif item['hi']:
             results.append(f'{item["language"]}:hi')
         else:
             results.append(item['language'])
@@ -479,6 +479,6 @@ def _language_from_items(items):
 def _is_hi_required(language, profile_id):
     profile = get_profiles_list(profile_id=profile_id)
     for item in profile['items']:
-        if language.split(':')[0] == item['language'] and item['hi'] == 'True':
+        if language.split(':')[0] == item['language'] and item['hi']:
             return True
     return False

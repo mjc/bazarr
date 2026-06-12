@@ -61,7 +61,7 @@ def _wanted_movie(movie, providers_list, job_id=None):
     for result in generate_subtitles(path_mappings.path_replace_movie(movie.path),
                                      languages,
                                      audio_language,
-                                     str(movie.sceneName) if movie.sceneName else None,
+                                     movie.sceneName,
                                      movie.title or 'Unknown',
                                      'movie',
                                      movie.profileId,
