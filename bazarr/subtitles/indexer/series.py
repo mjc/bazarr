@@ -21,6 +21,10 @@ from app.jobs_queue import jobs_queue
 gc.enable()
 
 
+def _is_true(value):
+    return value is True or value == 'True'
+
+
 def store_subtitles(sonarr_episode_id, use_cache=True):
     item = database.execute(
         select(TableEpisodes.sonarrSeriesId,
@@ -266,15 +270,15 @@ def list_missing_subtitles(no=None, epno=None):
                     language_code = language.get('language')
                     if not isinstance(language_code, str) or not language_code:
                         continue
-                    if language.get('audio_exclude') == "True":
+                    if _is_true(language.get('audio_exclude')):
                         if matches_audio(language):
                             continue
-                    if language.get('audio_only_include') == "True":
+                    if _is_true(language.get('audio_only_include')):
                         if not matches_audio(language):
                             continue
                     desired_subtitles_list.append({'language': language_code,
-                                                   'forced': str(language.get('forced', False)),
-                                                   'hi': str(language.get('hi', False))})
+                                                   'forced': _is_true(language.get('forced')),
+                                                   'hi': _is_true(language.get('hi'))})
 
             # get existing subtitles
             actual_subtitles_list = []
@@ -289,8 +293,8 @@ def list_missing_subtitles(no=None, epno=None):
                 if not isinstance(language_code, str) or not language_code:
                     continue
                 actual_subtitles_list.append({'language': language_code,
-                                              'forced': str(subtitles.get('forced', False)),
-                                              'hi': str(subtitles.get('hi', False))})
+                                              'forced': _is_true(subtitles.get('forced')),
+                                              'hi': _is_true(subtitles.get('hi'))})
 
             # check if cutoff is reached and skip any further check
             cutoff_met = False
@@ -304,13 +308,13 @@ def list_missing_subtitles(no=None, epno=None):
                     if not isinstance(cutoff_code, str) or not cutoff_code:
                         continue
                     cutoff_language = {'language': cutoff_code,
-                                       'forced': cutoff_temp.get('forced', 'False'),
-                                       'hi': cutoff_temp.get('hi', 'False')}
-                    if cutoff_temp.get('audio_only_include') == 'True' and not matches_audio(cutoff_temp):
+                                       'forced': _is_true(cutoff_temp.get('forced')),
+                                       'hi': _is_true(cutoff_temp.get('hi'))}
+                    if _is_true(cutoff_temp.get('audio_only_include')) and not matches_audio(cutoff_temp):
                         # We don't want subs in this language unless it matches
                         # the audio. Don't use it to meet the cutoff.
                         continue
-                    elif cutoff_temp.get('audio_exclude') == 'True' and matches_audio(cutoff_temp):
+                    elif _is_true(cutoff_temp.get('audio_exclude')) and matches_audio(cutoff_temp):
                         # The cutoff is met through one of the audio tracks.
                         cutoff_met = True
                     elif cutoff_language in actual_subtitles_list:

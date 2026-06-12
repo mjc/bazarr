@@ -113,7 +113,7 @@ def test_provider_episodes_get_returns_not_found_when_row_disappears_after_reind
     assert result == ("Episode not found", 404)
 
 
-def test_provider_movies_get_uses_none_string_for_missing_scene_name(
+def test_provider_movies_get_preserves_missing_scene_name(
     provider_movies, movie_row_factory, movie_subtitle_row_factory, monkeypatch
 ):
     movie_row_factory(radarrId=7, sceneName=None)
@@ -125,10 +125,10 @@ def test_provider_movies_get_uses_none_string_for_missing_scene_name(
     result = _call_resource_method(provider_movies.ProviderMovies.get, provider_movies.ProviderMovies())
 
     assert result == {"data": []}
-    assert captured_scenes == ["None"]
+    assert captured_scenes == [None]
 
 
-def test_provider_episodes_get_uses_none_string_for_missing_scene_name(
+def test_provider_episodes_get_preserves_missing_scene_name(
     provider_episodes, episode_row_factory, episode_subtitle_row_factory, monkeypatch
 ):
     episode_row_factory(sonarrEpisodeId=11, sceneName=None)
@@ -144,7 +144,7 @@ def test_provider_episodes_get_uses_none_string_for_missing_scene_name(
     result = _call_resource_method(provider_episodes.ProviderEpisodes.get, provider_episodes.ProviderEpisodes())
 
     assert result == {"data": []}
-    assert captured_scenes == ["None"]
+    assert captured_scenes == [None]
 
 
 def test_provider_movies_get_returns_file_missing_when_path_is_none(

@@ -311,6 +311,10 @@ def _minimum_score_above_current(score):
         return None
 
 
+def _is_true(value):
+    return value is True or value == 'True'
+
+
 def get_upgradable_episode_subtitles(history_id_list=None):
     if not settings.general.upgrade_subs:
         # return an empty set of rows
@@ -502,9 +506,9 @@ def _language_from_items(items):
         if not isinstance(language, str) or not language.strip():
             continue
 
-        if str(item.get('forced')) == 'True':
+        if _is_true(item.get('forced')):
             results.append(f'{language}:forced')
-        elif str(item.get('hi')) == 'True':
+        elif _is_true(item.get('hi')):
             results.append(f'{language}:hi')
         else:
             results.append(language)
@@ -527,6 +531,6 @@ def _is_hi_required(language, profile_id):
     for item in items:
         if not isinstance(item, dict):
             continue
-        if base_language == item.get('language') and str(item.get('hi')) == 'True':
+        if base_language == item.get('language') and _is_true(item.get('hi')):
             return True
     return False
