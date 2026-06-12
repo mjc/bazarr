@@ -55,7 +55,7 @@ def test_get_language_obj_handles_malformed_profile_items(language_dictionary, m
                 {"bad": "shape"},
                 {"language": None},
                 {"language": "en", "forced": True, "hi": False},
-                {"language": "fr", "forced": None, "hi": True},
+                {"language": "fr", "forced": False, "hi": True},
             ],
             "originalFormat": 1,
         },
