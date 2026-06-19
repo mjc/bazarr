@@ -1,9 +1,6 @@
 # coding=utf-8
 # fmt: off
 
-import ast
-import logging
-
 
 def parse_language_token(language):
     if not isinstance(language, str):
@@ -33,15 +30,9 @@ def parse_language_token(language):
 
 
 def safe_missing_languages(missing_subtitles, context):
-    try:
-        missing = ast.literal_eval(missing_subtitles)
-    except (ValueError, SyntaxError, TypeError):
-        logging.debug("BAZARR malformed missing_subtitles value for %s: %r", context, missing_subtitles)
-        return []
+    from utilities.text_list import parse_text_list_or_default
 
-    if not isinstance(missing, list):
-        logging.debug("BAZARR invalid missing_subtitles value for %s: %r", context, missing_subtitles)
-        return []
+    missing = parse_text_list_or_default(missing_subtitles)
 
     safe = []
     for language in missing:
@@ -75,12 +66,16 @@ def format_episode_part(value):
         return str(value) if value is not None else "??"
 
 
+def _is_unindexed_external_subtitle(subtitle):
+    if not subtitle or not isinstance(subtitle, dict):
+        return True
+    if subtitle.get('path', True):
+        return False
+    return not subtitle.get('embedded_track_id')
+
+
 def has_unindexed_external_subtitle(subtitles):
-    return any(
-        not subtitle or not isinstance(subtitle, dict) or not subtitle.get('embedded_track_id')
-        for subtitle in subtitles
-        if not subtitle or not isinstance(subtitle, dict) or not subtitle.get('path', True)
-    )
+    return any(_is_unindexed_external_subtitle(subtitle) for subtitle in subtitles)
 
 
 def build_search_payload(missing_subtitles, context, include_predicate=None):

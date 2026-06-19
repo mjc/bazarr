@@ -8,6 +8,7 @@ from flask import request, abort
 from app.config import settings, base_url
 from languages.get_languages import language_from_alpha2, alpha3_from_alpha2
 from app.database import get_audio_profile_languages, get_desired_languages, get_subtitles
+from subtitles.serialization import parse_missing_subtitles
 from utilities.path_mappings import path_mappings
 
 None_Keys = ['null', 'undefined', '', None]
@@ -43,7 +44,7 @@ def authenticate(actual_method):
     return wrapper
 
 
-def postprocess(item):
+def postprocess(item, subtitles=None):
     # Remove ffprobe_cache
     if item.get('radarrId'):
         path_replace = path_mappings.path_replace_movie
@@ -67,8 +68,11 @@ def postprocess(item):
         item['alternativeTitles'] = []
 
     # Add subtitles
-    item['subtitles'] = get_subtitles(sonarr_episode_id=item.get('sonarrEpisodeId'),
-                                      radarr_id=item.get('radarrId'))
+    if subtitles is None:
+        item['subtitles'] = get_subtitles(sonarr_episode_id=item.get('sonarrEpisodeId'),
+                                          radarr_id=item.get('radarrId'))
+    else:
+        item['subtitles'] = subtitles
 
     if settings.general.embedded_subs_show_desired and item.get('profileId'):
         desired_lang_list = get_desired_languages(item['profileId'])
@@ -77,7 +81,7 @@ def postprocess(item):
 
     # Parse missing subtitles
     if item.get('missing_subtitles'):
-        item['missing_subtitles'] = ast.literal_eval(item['missing_subtitles'])
+        item['missing_subtitles'] = parse_missing_subtitles(item['missing_subtitles'])
         for i, subs in enumerate(item['missing_subtitles']):
             language = subs.split(':')
             item['missing_subtitles'][i] = {"name": language_from_alpha2(language[0]),
