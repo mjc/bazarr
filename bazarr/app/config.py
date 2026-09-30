@@ -2,7 +2,6 @@
 
 import hashlib
 import os
-import ast
 import logging
 import re
 import secrets
@@ -507,10 +506,14 @@ def convert_ini_to_yaml(config_file):
         items = config_object.items(section)
         output_dict[section] = dict()
         for item in items:
-            try:
-                output_dict[section].update({item[0]: ast.literal_eval(item[1])})
-            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
-                output_dict[section].update({item[0]: item[1]})
+            value = item[1]
+            if value and (value in ('True', 'False', 'None') or value[0] in "[{\"'" or
+                          re.fullmatch(r'-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?', value)):
+                try:
+                    value = None if value == 'None' else yaml.safe_load(value)
+                except yaml.YAMLError:
+                    pass
+            output_dict[section].update({item[0]: value})
     with open(os.path.join(os.path.dirname(config_file), 'config.yaml'), 'w') as file:
         yaml.dump(output_dict, file)
     os.replace(config_file, f'{config_file}.old')
@@ -1009,7 +1012,14 @@ def save_settings(settings_items):
 def get_array_from(property):
     if property:
         if '[' in property:
-            return ast.literal_eval(property)
+            try:
+                value = yaml.safe_load(property)
+                if isinstance(value, list):
+                    return value
+            except yaml.YAMLError:
+                pass
+            property = property.strip().strip('[]')
+            return [item.strip().strip("'\"") for item in property.split(',') if item.strip()]
         elif ',' in property:
             return property.split(',')
         else:
