@@ -16,8 +16,8 @@ widgets = Table(
 )
 
 
-def test_transactional_session_insert_exercise_assert(transactional_engine, transactional_session):
-    metadata.create_all(transactional_engine)
+def test_transactional_session_insert_exercise_assert(transactional_connection, transactional_session):
+    metadata.create_all(transactional_connection)
 
     transactional_session.execute(widgets.insert().values(id=1, name="alpha"))
     transactional_session.flush()
@@ -26,8 +26,8 @@ def test_transactional_session_insert_exercise_assert(transactional_engine, tran
     assert row == "alpha"
 
 
-def test_transactional_session_rolls_back_between_tests(transactional_engine, transactional_session):
-    metadata.create_all(transactional_engine)
+def test_transactional_session_rolls_back_between_tests(transactional_connection, transactional_session):
+    metadata.create_all(transactional_connection)
 
     count = transactional_session.execute(text("SELECT COUNT(*) FROM widgets")).scalar_one()
     assert count == 0
