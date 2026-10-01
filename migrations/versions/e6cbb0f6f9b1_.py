@@ -5,11 +5,10 @@ Revises: 537e9b4d10e3
 Create Date: 2026-06-02 00:00:00.000000
 
 """
+from math import isfinite
+
 from alembic import op
 import sqlalchemy as sa
-
-from utilities.text_list import parse_text_list_or_default
-from subtitles.adaptive_searching import get_attempt_windows
 
 # revision identifiers, used by Alembic.
 revision = 'e6cbb0f6f9b1'
@@ -44,14 +43,99 @@ def index_exists(bind, table_name, index_name):
     return any(i["name"] == index_name for i in indexes)
 
 
+def _parse_legacy_text_list(value):
+    """Decode the Python-list format written by pre-normalization releases."""
+    if not isinstance(value, str):
+        return []
+
+    value = value.strip()
+    if value == '[]':
+        return []
+    if not value.startswith('[') or not value.endswith(']'):
+        return []
+
+    values = []
+    body = value[1:-1].strip()
+    if not body:
+        return values
+
+    index = 0
+    while index < len(body):
+        while index < len(body) and body[index].isspace():
+            index += 1
+
+        if body.startswith('None', index):
+            values.append(None)
+            index += 4
+        elif index < len(body) and body[index] in ("'", '"'):
+            quote = body[index]
+            index += 1
+            chars = []
+            while index < len(body):
+                char = body[index]
+                if char == "\\":
+                    index += 1
+                    if index >= len(body):
+                        return []
+                    chars.append(body[index])
+                    index += 1
+                    continue
+                if char == quote:
+                    index += 1
+                    break
+                chars.append(char)
+                index += 1
+            else:
+                return []
+            values.append(''.join(chars))
+        else:
+            return []
+
+        while index < len(body) and body[index].isspace():
+            index += 1
+        if index == len(body):
+            break
+        if body[index] != ',':
+            return []
+        index += 1
+        if index == len(body):
+            return []
+
+    return [value for value in values if value is not None]
+
+
+def _parse_legacy_attempt_windows(value):
+    """Decode the legacy attempt representation with migration-owned rules."""
+    if not isinstance(value, str) or not value.startswith('[[') or not value.endswith(']]'):
+        return {}
+
+    windows = {}
+    for attempt in value[2:-2].split('], ['):
+        try:
+            language, timestamp_text = attempt.split(', ', 1)
+            if language[0] not in ("'", '"') or language[-1] != language[0]:
+                return {}
+            language = language[1:-1]
+            timestamp = float(timestamp_text)
+        except (IndexError, TypeError, ValueError):
+            return {}
+
+        if not isfinite(timestamp):
+            return {}
+        initial, latest = windows.get(language, (timestamp, timestamp))
+        windows[language] = (min(initial, timestamp), max(latest, timestamp))
+
+    return windows
+
+
 def _parse_missing_text_list(value):
-    return [language for language in parse_text_list_or_default(value) if language is not None]
+    return _parse_legacy_text_list(value)
 
 
 def _attempt_window_items(value):
     return tuple(
         (language, attempt_window[0], attempt_window[1])
-        for language, attempt_window in get_attempt_windows(value).items()
+        for language, attempt_window in _parse_legacy_attempt_windows(value).items()
     )
 
 

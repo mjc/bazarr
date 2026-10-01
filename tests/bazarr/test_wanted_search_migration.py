@@ -54,16 +54,26 @@ def test_normal_startup_upgrades_development_database(monkeypatch, tmp_path):
         engine.dispose()
 
 
-def test_migration_appends_missing_rows_using_shared_text_parser():
+def test_migration_appends_missing_rows_using_frozen_legacy_parser(monkeypatch):
     rows = []
+
+    def fail_runtime_parser(*_args, **_kwargs):
+        pytest.fail("migration must not use the runtime text-list parser")
+
+    monkeypatch.setattr(migration, "parse_text_list_or_default", fail_runtime_parser, raising=False)
 
     migration._append_missing_rows("movie", 7, "['en', None, 'fr:hi', 'en']", rows)
 
     assert rows == [("movie", 7, "en"), ("movie", 7, "fr:hi")]
 
 
-def test_migration_appends_attempt_rows_using_shared_attempt_parser():
+def test_migration_appends_attempt_rows_using_frozen_legacy_parser(monkeypatch):
     rows = []
+
+    def fail_runtime_parser(*_args, **_kwargs):
+        pytest.fail("migration must not use the runtime attempt parser")
+
+    monkeypatch.setattr(migration, "get_attempt_windows", fail_runtime_parser, raising=False)
 
     migration._append_attempt_rows("series", 17, "[['en', 1], ['en', 3], ['fr', 2]]", rows)
 
@@ -71,3 +81,13 @@ def test_migration_appends_attempt_rows_using_shared_attempt_parser():
         ("series", 17, "en", 1.0, 3.0),
         ("series", 17, "fr", 2.0, 2.0),
     ]
+
+
+def test_migration_frozen_parsers_ignore_malformed_and_non_finite_values():
+    missing_rows = []
+    migration._append_missing_rows("movie", 7, "['en', invalid]", missing_rows)
+    assert missing_rows == []
+
+    attempt_rows = []
+    migration._append_attempt_rows("movie", 7, "[['en', inf]]", attempt_rows)
+    assert attempt_rows == []
