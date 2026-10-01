@@ -14,7 +14,8 @@ from radarr.history import history_log_movie
 from app.notifier import send_notifications_movie
 from app.get_providers import get_providers
 from app.database import (
-    get_exclusion_clause, get_audio_profile_languages, TableMissingSubtitles, TableMovies, TableMoviesSubtitles,
+    get_exclusion_clause, get_audio_profile_languages, TableMissingSubtitleScans, TableMissingSubtitles,
+    TableMovies, TableMoviesSubtitles,
     database, select, get_subtitles,
 )
 from app.event_handler import event_stream
@@ -30,6 +31,7 @@ from subtitles.wanted_state import (
     get_due_missing_languages_for_media,
     get_missing_languages,
     iter_due_missing_languages_maps,
+    needs_missing_subtitle_scan,
     record_failed_subtitle_attempts,
     record_failed_subtitle_attempts_map,
 )
@@ -37,13 +39,16 @@ from .utils import get_language_search_items
 
 
 _WANTED_MOVIE_DETAILS_SELECT = select(TableMovies.path,
-                                      TableMovies.missing_subtitles,
                                       TableMovies.radarrId,
                                       TableMovies.audio_language,
                                       TableMovies.sceneName,
-                                      TableMovies.failedAttempts,
                                       TableMovies.title,
                                       TableMovies.profileId,
+                                      select(TableMissingSubtitleScans.media_id)
+                                      .where(TableMissingSubtitleScans.media_type == 'movie')
+                                      .where(TableMissingSubtitleScans.media_id == TableMovies.radarrId)
+                                      .exists()
+                                      .label("has_missing_subtitle_scan"),
                                       select(TableMoviesSubtitles.id)
                                       .where(TableMoviesSubtitles.radarrId == TableMovies.radarrId)
                                       .limit(1)
@@ -63,14 +68,17 @@ _DUE_MOVIE_DETAILS_BATCH_SIZE = 5000
 
 _WANTED_MOVIES_SELECT = select(TableMovies.radarrId,
                               TableMovies.audio_language,
-                              TableMovies.failedAttempts,
-                              TableMovies.missing_subtitles,
                               TableMovies.path,
                               TableMovies.profileId,
                               TableMovies.sceneName,
                               TableMovies.tags,
                               TableMovies.monitored,
                               TableMovies.title,
+                              select(TableMissingSubtitleScans.media_id)
+                              .where(TableMissingSubtitleScans.media_type == 'movie')
+                              .where(TableMissingSubtitleScans.media_id == TableMovies.radarrId)
+                              .exists()
+                              .label("has_missing_subtitle_scan"),
                               select(TableMoviesSubtitles.id)
                               .where(TableMoviesSubtitles.radarrId == TableMovies.radarrId)
                               .limit(1)
@@ -97,8 +105,11 @@ def _count_searchable_due_movies(adaptive_search_policy, exclusion_clause):
 
 
 def _movie_needs_wanted_lookup_refresh(movie):
+    has_scan = getattr(movie, "has_missing_subtitle_scan", None)
+    if has_scan is None:
+        has_scan = not needs_missing_subtitle_scan('movie', movie.radarrId)
     return (
-        movie.missing_subtitles is None or
+        not has_scan or
         not getattr(movie, "has_indexed_subtitles", True) or
         getattr(movie, "has_incomplete_embedded_subtitles", False)
     )
@@ -220,7 +231,7 @@ def wanted_download_subtitles_movie(
                 logging.debug(f"BAZARR no movie with that radarrId can be found in database after subtitles refresh: {radarr_id}")
                 return
             rebuilt_wanted_state = True
-        if movie.missing_subtitles is None:
+        if needs_missing_subtitle_scan('movie', radarr_id):
             # missing subtitles calculation for this movie is incomplete, we'll do it again
             list_missing_subtitles_movies(no=radarr_id)
             rebuilt_wanted_state = True

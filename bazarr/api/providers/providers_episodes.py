@@ -10,6 +10,7 @@ from app.get_providers import get_providers
 from subtitles.manual import manual_search, episode_manually_download_specific_subtitle
 from subtitles.indexer.series import store_subtitles, list_missing_subtitles
 from subtitles.language_utils import has_unindexed_external_subtitle
+from subtitles.wanted_state import needs_missing_subtitle_scan
 
 from ..utils import authenticate, normalize_flag_token
 
@@ -50,8 +51,7 @@ class ProviderEpisodes(Resource):
         stmt = select(TableEpisodes.path,
                       TableEpisodes.sceneName,
                       TableShows.title,
-                      TableShows.profileId,
-                      TableEpisodes.missing_subtitles) \
+                      TableShows.profileId) \
             .select_from(TableEpisodes) \
             .join(TableShows) \
             .where(TableEpisodes.sonarrEpisodeId == sonarrEpisodeId)
@@ -67,7 +67,7 @@ class ProviderEpisodes(Resource):
             episodeInfo = database.execute(stmt).first()
             if not episodeInfo:
                 return 'Episode not found', 404
-        elif episodeInfo.missing_subtitles is None:
+        elif needs_missing_subtitle_scan('series', sonarrEpisodeId):
             # missing subtitles calculation for this episode is incomplete, we'll do it again
             list_missing_subtitles(epno=sonarrEpisodeId)
             episodeInfo = database.execute(stmt).first()

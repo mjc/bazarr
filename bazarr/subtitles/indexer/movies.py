@@ -242,8 +242,7 @@ def store_subtitles_movie(radarr_id, use_cache=True):
 def list_missing_subtitles_movies(no=None, *args, **kwargs):  # job_id might be provided but isn't used for now
     stmt = select(TableMovies.radarrId,
                   TableMovies.profileId,
-                  TableMovies.audio_language,
-                  TableMovies.missing_subtitles)
+                  TableMovies.audio_language)
 
     if no:
         movies_subtitles = database.execute(stmt.where(TableMovies.radarrId == no))
@@ -259,7 +258,7 @@ def list_missing_subtitles_movies(no=None, *args, **kwargs):  # job_id might be 
                                 movie_subtitles.audio_language))
 
     for movie_subtitles in movies_subtitles:
-        missing_subtitles_text = '[]'
+        missing_subtitles_output_list = []
         if movie_subtitles.profileId:
             audio_language_codes = {
                 x['code2']
@@ -371,7 +370,7 @@ def list_missing_subtitles_movies(no=None, *args, **kwargs):  # job_id might be 
                         cutoff_met = True
 
             if cutoff_met:
-                missing_subtitles_text = str([])
+                missing_subtitles_output_list = []
             else:
                 # get difference between desired and existing subtitles
                 missing_subtitles_list = []
@@ -410,10 +409,8 @@ def list_missing_subtitles_movies(no=None, *args, **kwargs):  # job_id might be 
                         lang += ':hi'
                     missing_subtitles_output_list.append(lang)
 
-                missing_subtitles_text = str(missing_subtitles_output_list)
-
         store_missing_subtitles(
-            TableMovies.__table__, 'radarrId', 'movie', movie_subtitles.radarrId, missing_subtitles_text,
+            TableMovies.__table__, 'radarrId', 'movie', movie_subtitles.radarrId, missing_subtitles_output_list,
         )
         event_stream(type='movie', payload=movie_subtitles.radarrId)
         event_stream(type='movie-wanted', action='update', payload=movie_subtitles.radarrId)

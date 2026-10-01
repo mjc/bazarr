@@ -15,7 +15,8 @@ from sonarr.history import history_log
 from app.notifier import send_notifications
 from app.get_providers import get_providers
 from app.database import (
-    get_exclusion_clause, get_audio_profile_languages, TableMissingSubtitles, TableShows, TableEpisodes,
+    get_exclusion_clause, get_audio_profile_languages, TableMissingSubtitleScans, TableMissingSubtitles,
+    TableShows, TableEpisodes,
     TableEpisodesSubtitles, database, select, get_subtitles,
 )
 from app.event_handler import event_stream
@@ -31,6 +32,7 @@ from subtitles.wanted_state import (
     get_due_missing_languages_for_media,
     get_missing_languages,
     iter_due_missing_languages_maps,
+    needs_missing_subtitle_scan,
     record_failed_subtitle_attempts,
     record_failed_subtitle_attempts_map,
 )
@@ -38,16 +40,19 @@ from .utils import get_language_search_items
 
 
 _WANTED_EPISODE_DETAILS_SELECT = select(TableEpisodes.path,
-                                        TableEpisodes.missing_subtitles,
                                         TableEpisodes.sonarrEpisodeId,
                                         TableEpisodes.sonarrSeriesId,
                                         TableEpisodes.audio_language,
                                         TableEpisodes.sceneName,
-                                        TableEpisodes.failedAttempts,
                                         TableShows.title,
                                         TableShows.profileId,
                                         TableEpisodes.season,
                                         TableEpisodes.episode,
+                                        select(TableMissingSubtitleScans.media_id)
+                                        .where(TableMissingSubtitleScans.media_type == 'series')
+                                        .where(TableMissingSubtitleScans.media_id == TableEpisodes.sonarrEpisodeId)
+                                        .exists()
+                                        .label("has_missing_subtitle_scan"),
                                         TableEpisodes.title.label('episodeTitle'),
                                         select(TableEpisodesSubtitles.id)
                                         .where(TableEpisodesSubtitles.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId)
@@ -81,8 +86,11 @@ def _count_searchable_due_episodes(adaptive_search_policy, exclusion_clause):
 
 
 def _episode_needs_wanted_lookup_refresh(episode):
+    has_scan = getattr(episode, "has_missing_subtitle_scan", None)
+    if has_scan is None:
+        has_scan = not needs_missing_subtitle_scan('series', episode.sonarrEpisodeId)
     return (
-        episode.missing_subtitles is None or
+        not has_scan or
         not getattr(episode, "has_indexed_subtitles", True) or
         getattr(episode, "has_incomplete_embedded_subtitles", False)
     )
@@ -204,7 +212,7 @@ def wanted_download_subtitles(
                 logging.debug(f"BAZARR no episode with that sonarrId can be found in database after subtitles refresh: {sonarr_episode_id}")
                 return
             rebuilt_wanted_state = True
-        if episode_details.missing_subtitles is None:
+        if needs_missing_subtitle_scan('series', sonarr_episode_id):
             # missing subtitles calculation for this episode is incomplete, we'll do it again
             list_missing_subtitles(epno=sonarr_episode_id)
             rebuilt_wanted_state = True

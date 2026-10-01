@@ -83,10 +83,10 @@ def test_bulk_subtitles_match_single_media_with_embedded_ids(runtime_database, m
 
 
 @pytest.mark.parametrize('media_type', ['movie', 'series'])
-def test_missing_state_failure_rolls_back_both_representations(runtime_database, monkeypatch, media_type):
+def test_missing_state_failure_rolls_back_normalized_rows(runtime_database, monkeypatch, media_type):
     engine, session = runtime_database
     table, _ = seed_media(session, media_type, "['fr']")
-    state.refresh_wanted_search_state(media_type, 7, "['fr']", failed_attempts="[['fr', 10]]")
+    state.refresh_wanted_search_state(media_type, 7, ['fr'], failed_attempts=[['fr', 10]])
     recalculate, events = configure_indexer(monkeypatch, media_type)
 
     def fail_insert(connection, cursor, statement, parameters, context, executemany):
@@ -103,14 +103,14 @@ def test_missing_state_failure_rolls_back_both_representations(runtime_database,
     assert state.get_missing_languages(media_type, 7) == ['fr']
     assert events == []
     recalculate()
-    assert session.execute(select(table.missing_subtitles)).scalar_one() == "['en']"
+    assert session.execute(select(table.missing_subtitles)).scalar_one() == "['fr']"
     assert state.get_missing_languages(media_type, 7) == ['en']
     assert state.get_failed_attempt_pairs(media_type, 7) == [['fr', 10.0]]
 
 
 @pytest.mark.parametrize('media_type', ['movie', 'series'])
 @pytest.mark.parametrize('stale_languages', [[], ['fr']])
-def test_unchanged_legacy_value_repairs_normalized_state(runtime_database, monkeypatch, media_type, stale_languages):
+def test_indexer_replaces_normalized_state(runtime_database, monkeypatch, media_type, stale_languages):
     _, session = runtime_database
     seed_media(session, media_type, "['en']")
     state.refresh_wanted_search_state(media_type, 7, stale_languages)
@@ -143,53 +143,38 @@ def test_concurrent_missing_refreshes_keep_representations_consistent(runtime_da
     event.listen(engine, 'before_cursor_execute', interleave)
     try:
         with ThreadPoolExecutor(max_workers=2) as workers:
-            first = workers.submit(refresh, "['en']")
+            first = workers.submit(refresh, ['en'])
             assert first_insert.wait(5), 'first writer did not reach its insert'
-            second = workers.submit(refresh, "['fr']")
+            second = workers.submit(refresh, ['fr'])
             first.result(timeout=10)
             second.result(timeout=10)
     finally:
         event.remove(engine, 'before_cursor_execute', interleave)
-    assert session.execute(select(db.TableMovies.missing_subtitles)).scalar_one() == "['fr']"
+    assert session.execute(select(db.TableMovies.missing_subtitles)).scalar_one() == '[]'
     assert state.get_missing_languages('movie', 7) == ['fr']
 
 
 @pytest.mark.parametrize('media_type', ['movie', 'series'])
-def test_failed_attempt_mirror_rolls_back_with_normalized_rows(runtime_database, monkeypatch, media_type):
+def test_failed_attempts_write_only_normalized_rows(runtime_database, monkeypatch, media_type):
     engine, session = runtime_database
     media_table, id_column = seed_media(session, media_type)
-
-    def fail_legacy_update(connection, cursor, statement, parameters, context, executemany):
-        if statement.startswith(f'UPDATE {media_table.__tablename__}'):
-            raise sqlite3.OperationalError('interrupted legacy mirror update')
-
-    event.listen(engine, 'before_cursor_execute', fail_legacy_update)
-    try:
-        with pytest.raises(sqlite3.OperationalError):
-            state.record_failed_subtitle_attempts_map(media_type, {7: ['en']})
-    finally:
-        event.remove(engine, 'before_cursor_execute', fail_legacy_update)
-
-    assert state.get_failed_attempt_pairs(media_type, 7) == []
+    state.record_failed_subtitle_attempts_map(media_type, {7: ['en']})
+    attempts = state.get_failed_attempt_pairs(media_type, 7)
+    assert len(attempts) == 1
+    assert attempts[0][0] == 'en'
     assert session.execute(select(getattr(media_table, 'failedAttempts'))
                            .where(getattr(media_table, id_column) == 7)).scalar_one() is None
-
-    state.record_failed_subtitle_attempts_map(media_type, {7: ['en']})
-    normalized = state.get_failed_attempt_pairs(media_type, 7)
-    legacy = session.execute(select(getattr(media_table, 'failedAttempts'))
-                             .where(getattr(media_table, id_column) == 7)).scalar_one()
-    assert state.get_attempt_windows(legacy) == {'en': (normalized[0][1], normalized[-1][1])}
 
 
 @pytest.mark.parametrize('media_type', ['movie', 'series'])
 def test_record_failed_attempts_ignores_media_deleted_before_write(runtime_database, media_type):
     _, _session = runtime_database
 
-    assert state.record_failed_subtitle_attempts(media_type, 7, ['en']) == '[]'
+    assert state.record_failed_subtitle_attempts(media_type, 7, ['en']) is None
     assert state.get_failed_attempt_pairs(media_type, 7) == []
 
 
-def test_concurrent_failed_attempts_keep_latest_timestamp_and_legacy_mirror(runtime_database, monkeypatch):
+def test_concurrent_failed_attempts_keep_latest_normalized_timestamp(runtime_database, monkeypatch):
     engine, session = runtime_database
     seed_media(session, 'movie')
     thread_sessions = scoped_session(sessionmaker(bind=engine))
@@ -226,19 +211,17 @@ def test_concurrent_failed_attempts_keep_latest_timestamp_and_legacy_mirror(runt
         event.remove(engine, 'before_cursor_execute', interleave)
 
     normalized = state.get_failed_attempt_pairs('movie', 7)
-    legacy = session.execute(select(db.TableMovies.failedAttempts)
-                             .where(db.TableMovies.radarrId == 7)).scalar_one()
-    windows = state.get_attempt_windows(legacy)
     assert len(normalized) == 2
     assert normalized[0][1] <= normalized[-1][1]
-    assert windows == {'en': (normalized[0][1], normalized[-1][1])}
+    assert session.execute(select(db.TableMovies.failedAttempts)
+                           .where(db.TableMovies.radarrId == 7)).scalar_one() is None
 
 
 @pytest.mark.parametrize('media_type, event_type', [('movie', 'movie'), ('series', 'episode')])
 def test_unchanged_missing_state_notifies_rescan_without_rewriting(runtime_database, monkeypatch, media_type, event_type):
     engine, session = runtime_database
     seed_media(session, media_type, "['en']")
-    state.refresh_wanted_search_state(media_type, 7, "['en']")
+    state.refresh_wanted_search_state(media_type, 7, ['en'])
     recalculate, events = configure_indexer(monkeypatch, media_type)
     writes = []
 
@@ -327,7 +310,7 @@ def test_explicit_unusable_movie_removes_history_and_wanted_state(runtime_databa
     _, session = runtime_database
     seed_media(session, 'movie')
     session.execute(insert(db.TableHistoryMovie).values(radarrId=7, action=1, description='Saved history'))
-    state.refresh_wanted_search_state('movie', 7, "['en']", "[['en', 10]]")
+    state.refresh_wanted_search_state('movie', 7, ['en'], [['en', 10]])
     configure_sync(monkeypatch, radarr, [payload])
     monkeypatch.setattr(radarr, 'get_movie_file_size_from_db', lambda path: 0)
     monkeypatch.setattr(radarr.settings.general, 'enable_strm_support', False)
@@ -342,7 +325,7 @@ def test_explicit_unusable_movie_removes_history_and_wanted_state(runtime_databa
 def test_valid_empty_response_removes_media_and_normalized_state(runtime_database, monkeypatch, media_type):
     _, session = runtime_database
     table, id_column = seed_media(session, media_type)
-    state.refresh_wanted_search_state(media_type, 7, "['en']", "[['en', 10]]")
+    state.refresh_wanted_search_state(media_type, 7, ['en'], [['en', 10]])
     module = radarr if media_type == 'movie' else sonarr
     configure_sync(monkeypatch, module, [])
     (module.update_movies if media_type == 'movie' else module.update_series)(job_id='test')

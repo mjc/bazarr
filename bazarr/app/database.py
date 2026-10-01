@@ -317,6 +317,15 @@ class TableMissingSubtitles(Base):
     )
 
 
+class TableMissingSubtitleScans(Base):
+    __tablename__ = 'table_missing_subtitle_scans'
+
+    # A row means the media has been indexed, even when its missing-language
+    # set is empty.
+    media_type = mapped_column(Text, primary_key=True)
+    media_id = mapped_column(Integer, primary_key=True)
+
+
 class TableFailedSubtitleAttempts(Base):
     __tablename__ = 'table_failed_subtitle_attempts'
 

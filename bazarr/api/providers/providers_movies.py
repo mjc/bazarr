@@ -10,6 +10,7 @@ from app.get_providers import get_providers
 from subtitles.manual import manual_search, movie_manually_download_specific_subtitle
 from subtitles.indexer.movies import store_subtitles_movie, list_missing_subtitles_movies
 from subtitles.language_utils import has_unindexed_external_subtitle
+from subtitles.wanted_state import needs_missing_subtitle_scan
 
 from ..utils import authenticate, normalize_flag_token
 
@@ -51,8 +52,7 @@ class ProviderMovies(Resource):
         stmt = select(TableMovies.title,
                       TableMovies.path,
                       TableMovies.sceneName,
-                      TableMovies.profileId,
-                      TableMovies.missing_subtitles) \
+                      TableMovies.profileId) \
             .where(TableMovies.radarrId == radarrId)
         movieInfo = database.execute(stmt).first()
 
@@ -66,7 +66,7 @@ class ProviderMovies(Resource):
             movieInfo = database.execute(stmt).first()
             if not movieInfo:
                 return 'Movie not found', 404
-        elif movieInfo.missing_subtitles is None:
+        elif needs_missing_subtitle_scan('movie', radarrId):
             # missing subtitles calculation for this movie is incomplete, we'll do it again
             list_missing_subtitles_movies(no=radarrId)
             movieInfo = database.execute(stmt).first()

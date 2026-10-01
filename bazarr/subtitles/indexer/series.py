@@ -247,8 +247,7 @@ def list_missing_subtitles(no=None, epno=None, *args, **kwargs):  # job_id might
     stmt = select(TableShows.sonarrSeriesId,
                   TableEpisodes.sonarrEpisodeId,
                   TableShows.profileId,
-                  TableEpisodes.audio_language,
-                  TableEpisodes.missing_subtitles) \
+                  TableEpisodes.audio_language) \
         .select_from(TableEpisodes) \
         .join(TableShows)
 
@@ -268,7 +267,7 @@ def list_missing_subtitles(no=None, epno=None, *args, **kwargs):  # job_id might
                                 episode_subtitles.audio_language))
 
     for episode_subtitles in episodes_subtitles:
-        missing_subtitles_text = '[]'
+        missing_subtitles_output_list = []
         if episode_subtitles.profileId:
             audio_language_codes = {
                 x['code2']
@@ -380,7 +379,7 @@ def list_missing_subtitles(no=None, epno=None, *args, **kwargs):  # job_id might
                         cutoff_met = True
 
             if cutoff_met:
-                missing_subtitles_text = str([])
+                missing_subtitles_output_list = []
             else:
                 # if cutoff isn't met or None, we continue
 
@@ -421,11 +420,9 @@ def list_missing_subtitles(no=None, epno=None, *args, **kwargs):  # job_id might
                         lang += ':hi'
                     missing_subtitles_output_list.append(lang)
 
-                missing_subtitles_text = str(missing_subtitles_output_list)
-
         store_missing_subtitles(
             TableEpisodes.__table__, 'sonarrEpisodeId', 'series', episode_subtitles.sonarrEpisodeId,
-            missing_subtitles_text,
+            missing_subtitles_output_list,
         )
         event_stream(type='episode', payload=episode_subtitles.sonarrEpisodeId)
         event_stream(type='episode-wanted', action='update', payload=episode_subtitles.sonarrEpisodeId)

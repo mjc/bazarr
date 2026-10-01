@@ -21,7 +21,7 @@ from app.config import settings
 from ..download import generate_subtitles
 from ..language_utils import format_episode_part, has_unindexed_external_subtitle, resolve_audio_language
 from ..serialization import missing_subtitle_to_language_tuple
-from ..wanted_state import get_missing_languages, get_missing_languages_map, legacy_missing_cache_needs_rebuild
+from ..wanted_state import get_missing_languages, get_missing_languages_map, needs_missing_subtitle_scan
 
 
 def series_download_subtitles(no, job_id=None, job_sub_function=False):
@@ -107,7 +107,6 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
     conditions = [(TableEpisodes.sonarrEpisodeId == no)]
     conditions += get_exclusion_clause('series')
     stmt = select(TableEpisodes.path,
-                  TableEpisodes.missing_subtitles,
                   TableEpisodes.monitored,
                   TableEpisodes.sonarrEpisodeId,
                   TableEpisodes.sceneName,
@@ -140,7 +139,7 @@ def episode_download_subtitles(no, job_id=None, job_sub_function=False, provider
             logging.debug(f"BAZARR no episode with that sonarrEpisodeId can be found in database after subtitles refresh: {no}")
             jobs_queue.update_job_progress(job_id=job_id, progress_message="Episode not found in database.")
             return
-    if legacy_missing_cache_needs_rebuild(episode.missing_subtitles):
+    if needs_missing_subtitle_scan('series', episode.sonarrEpisodeId):
         # missing subtitles calculation for this episode is incomplete, we'll do it again
         list_missing_subtitles(epno=no)
         missing_languages = None

@@ -60,7 +60,7 @@ def test_movie_missing_recalculation_updates_normalized_wanted_rows(
     ).scalar_one()
     wanted_state = _wanted_state_for(transactional_session, wanted_search_tables, "movie", movie.radarrId)
 
-    assert missing_subtitles == "['en']"
+    assert missing_subtitles == "[]"
     assert wanted_state == {"missing": ["en"], "failed": ["en"]}
 
 
@@ -82,5 +82,5 @@ def test_episode_missing_recalculation_updates_normalized_wanted_rows(
     ).scalar_one()
     wanted_state = _wanted_state_for(transactional_session, wanted_search_tables, "series", episode.sonarrEpisodeId)
 
-    assert missing_subtitles == "['en']"
+    assert missing_subtitles == "[]"
     assert wanted_state == {"missing": ["en"], "failed": ["en"]}

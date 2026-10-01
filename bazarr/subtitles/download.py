@@ -16,7 +16,7 @@ from constants import HI_EXCLUDED
 from utilities.path_mappings import path_mappings
 from utilities.helper import get_target_folder, force_unicode
 from languages.get_languages import alpha3_from_alpha2, alpha2_from_alpha3
-from subtitles.serialization import parse_missing_subtitles, missing_subtitle_to_language_tuple
+from subtitles.serialization import missing_subtitle_to_language_tuple
 
 from app.get_providers import blacklist_subtitle
 

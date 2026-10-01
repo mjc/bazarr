@@ -218,7 +218,9 @@ def test_completed_failures_are_saved_when_later_search_raises(
         .where(attempts.c.media_id == media_id)
     ).scalars().all()
     assert saved_languages == ["en"]
-    legacy = transactional_session.execute(
-        select(media_table.c.failedAttempts).where(media_id_column == media_id)
-    ).scalar_one()
-    assert wanted_state.get_attempt_windows(legacy)["en"][0] == wanted_state.get_attempt_windows(legacy)["en"][1]
+    attempt_row = transactional_session.execute(
+        select(attempts.c.initial_attempt_at, attempts.c.latest_attempt_at)
+        .where(attempts.c.media_type == media_type)
+        .where(attempts.c.media_id == media_id)
+    ).one()
+    assert attempt_row.initial_attempt_at == attempt_row.latest_attempt_at
