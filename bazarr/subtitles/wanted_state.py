@@ -11,6 +11,7 @@ from app.database import (
     TableFailedSubtitleAttempts,
     TableMissingSubtitles,
     TableMovies,
+    TableShows,
     database,
     delete,
     insert,
@@ -25,10 +26,12 @@ from subtitles.language_utils import parse_language_token
 from subtitles.serialization import parse_missing_subtitles
 
 WANTED_STATE_QUERY_BATCH_SIZE = 5000
-# Leave room for fixed parameters in queries that filter by media type.
+# Keep IN queries below SQLite's historical 999-variable limit, including
+# their fixed media-type and policy parameters.
 WANTED_STATE_ID_QUERY_BATCH_SIZE = 900
 FAILED_ATTEMPT_TEMP_TABLE_MIN_SIZE = 1000
 FAILED_ATTEMPT_UPSERT_BATCH_SIZE = 100
+FAILED_ATTEMPT_UPDATE_BATCH_SIZE = 300
 
 
 def _iter_chunks(items, batch_size=None):
@@ -132,7 +135,8 @@ def record_failed_subtitle_attempts(media_type, media_id, languages):
     return record_failed_subtitle_attempts_map(media_type, {media_id: languages}).get(media_id, '[]')
 
 
-def record_failed_subtitle_attempts_map(media_type, languages_by_media_id):
+def record_failed_subtitle_attempts_map(media_type, languages_by_media_id, attempted_at_by_media_id=None):
+    attempted_at_by_media_id = attempted_at_by_media_id or {}
     languages_by_media_id = {
         media_id: list(dict.fromkeys(languages))
         for media_id, languages in languages_by_media_id.items()
@@ -147,7 +151,7 @@ def record_failed_subtitle_attempts_map(media_type, languages_by_media_id):
         'movie': (TableMovies.__table__, 'radarrId'),
         'series': (TableEpisodes.__table__, 'sonarrEpisodeId'),
     }[media_type]
-    for media_id_chunk in _iter_chunks(media_ids):
+    for media_id_chunk in _iter_chunks(media_ids, WANTED_STATE_ID_QUERY_BATCH_SIZE):
         with _wanted_state_transaction() as connection:
             media_ids_to_update = connection.execute(
                 select(media_table.c[media_id_column])
@@ -160,42 +164,34 @@ def record_failed_subtitle_attempts_map(media_type, languages_by_media_id):
 
             current_timestamp = datetime.timestamp(datetime.now())
             media_ids_to_update = set(media_ids_to_update)
-            existing_attempts = {media_id: {} for media_id in media_ids_to_update}
-            for row in connection.execute(
-                select(
-                    TableFailedSubtitleAttempts.media_id,
-                    TableFailedSubtitleAttempts.language,
-                    TableFailedSubtitleAttempts.initial_attempt_at,
-                    TableFailedSubtitleAttempts.latest_attempt_at,
-                )
-                .where(TableFailedSubtitleAttempts.media_type == media_type)
-                .where(TableFailedSubtitleAttempts.media_id.in_(media_ids_to_update))
-            ):
-                existing_attempts[row.media_id][row.language] = row
-
             rows = []
             for media_id in media_ids_to_update:
                 for language in languages_by_media_id[media_id]:
-                    existing_attempt = existing_attempts[media_id].get(language)
+                    attempted_at = attempted_at_by_media_id.get(media_id, current_timestamp)
                     rows.append({
                         "media_type": media_type,
                         "media_id": media_id,
                         "language": language,
-                        "initial_attempt_at": (
-                            existing_attempt.initial_attempt_at if existing_attempt else current_timestamp
-                        ),
-                        "latest_attempt_at": current_timestamp,
+                        "initial_attempt_at": attempted_at,
+                        "latest_attempt_at": attempted_at,
                     })
 
+            initial_timestamp = TableFailedSubtitleAttempts.initial_attempt_at
+            incoming_initial_timestamp = insert(TableFailedSubtitleAttempts).excluded.initial_attempt_at
             latest_timestamp = TableFailedSubtitleAttempts.latest_attempt_at
+            incoming_timestamp = insert(TableFailedSubtitleAttempts).excluded.latest_attempt_at
             for row_chunk in _iter_chunks(rows, FAILED_ATTEMPT_UPSERT_BATCH_SIZE):
                 statement = insert(TableFailedSubtitleAttempts).values(row_chunk)
                 connection.execute(
                     statement.on_conflict_do_update(
                         index_elements=["media_type", "media_id", "language"],
                         set_={
+                            "initial_attempt_at": case(
+                                (initial_timestamp > incoming_initial_timestamp, incoming_initial_timestamp),
+                                else_=initial_timestamp,
+                            ),
                             "latest_attempt_at": case(
-                                (latest_timestamp < current_timestamp, current_timestamp),
+                                (latest_timestamp < incoming_timestamp, incoming_timestamp),
                                 else_=latest_timestamp,
                             ),
                         },
@@ -335,22 +331,71 @@ def get_missing_languages_map(media_type, media_ids):
     return missing_languages
 
 
-def delete_wanted_search_state(media_type, media_ids):
+def delete_wanted_search_state(media_type, media_ids, connection=None):
+    executor = database if connection is None else connection
     media_ids = _normalize_media_ids(media_ids, coerce_int=True)
 
-    for media_id_chunk in _iter_chunks(media_ids):
+    for media_id_chunk in _iter_chunks(media_ids, WANTED_STATE_ID_QUERY_BATCH_SIZE):
         if not media_id_chunk:
             continue
-        database.execute(
+        executor.execute(
             delete(TableMissingSubtitles)
             .where(TableMissingSubtitles.media_type == media_type)
             .where(TableMissingSubtitles.media_id.in_(media_id_chunk))
         )
-        database.execute(
+        executor.execute(
             delete(TableFailedSubtitleAttempts)
             .where(TableFailedSubtitleAttempts.media_type == media_type)
             .where(TableFailedSubtitleAttempts.media_id.in_(media_id_chunk))
         )
+
+
+def delete_media_and_wanted_search_state(media_type, table, id_column_name, media_ids):
+    """Delete media and its normalized search state atomically."""
+    media_table = getattr(table, '__table__', table)
+    media_ids = _normalize_media_ids(media_ids, coerce_int=True)
+    deleted_ids = []
+
+    for media_id_chunk in _iter_chunks(media_ids, WANTED_STATE_ID_QUERY_BATCH_SIZE):
+        if not media_id_chunk:
+            continue
+        with _wanted_state_transaction() as connection:
+            locked_ids = connection.execute(
+                select(media_table.c[id_column_name])
+                .where(media_table.c[id_column_name].in_(media_id_chunk))
+                .order_by(media_table.c[id_column_name])
+                .with_for_update()
+            ).scalars().all()
+            if not locked_ids:
+                continue
+            connection.execute(
+                delete(media_table).where(media_table.c[id_column_name].in_(locked_ids))
+            )
+            delete_wanted_search_state(media_type, locked_ids, connection=connection)
+            deleted_ids.extend(locked_ids)
+
+    return deleted_ids
+
+
+def delete_series_and_wanted_search_state(series_id):
+    """Delete a series and its episode search state in one writer transaction."""
+    series_id = int(series_id)
+    with _wanted_state_transaction() as connection:
+        # Lock the parent before reading its episodes, also blocking new episode
+        # inserts on PostgreSQL. SQLite serializes writers with BEGIN IMMEDIATE.
+        if connection.execute(
+            select(TableShows.sonarrSeriesId)
+            .where(TableShows.sonarrSeriesId == series_id).with_for_update()
+        ).first() is None:
+            return
+        episode_ids = connection.execute(
+            select(TableEpisodes.sonarrEpisodeId)
+            .where(TableEpisodes.sonarrSeriesId == series_id)
+        ).scalars().all()
+        # Cascading episode deletion waits for any active episode state writer;
+        # cleanup then includes the state it committed before releasing its lock.
+        connection.execute(delete(TableShows).where(TableShows.sonarrSeriesId == series_id))
+        delete_wanted_search_state('series', episode_ids, connection=connection)
 
 
 def update_failed_subtitle_attempts(table, update_items, id_column_name, connection=None):
@@ -386,8 +431,8 @@ def update_failed_subtitle_attempts(table, update_items, id_column_name, connect
     if id_column_ref is None:
         return
 
-    for index in range(0, len(update_items), WANTED_STATE_QUERY_BATCH_SIZE):
-        chunk = dict(update_items[index:index + WANTED_STATE_QUERY_BATCH_SIZE])
+    for index in range(0, len(update_items), FAILED_ATTEMPT_UPDATE_BATCH_SIZE):
+        chunk = dict(update_items[index:index + FAILED_ATTEMPT_UPDATE_BATCH_SIZE])
         execute = connection.execute if connection is not None else database.execute
         execute(
             table.update()
@@ -464,7 +509,8 @@ def count_due_missing_media(media_type, adaptive_search_policy=None):
     ).scalar() or 0
 
 
-def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, batch_size=None):
+def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, batch_size=None,
+                                   eligible_media_ids=None):
     if batch_size is None:
         batch_size = WANTED_STATE_QUERY_BATCH_SIZE
     if batch_size < 1:
@@ -473,6 +519,8 @@ def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, bat
         adaptive_search_policy = get_adaptive_search_policy()
 
     statement = due_missing_languages_statement(media_type, adaptive_search_policy)
+    if eligible_media_ids is not None:
+        statement = statement.where(TableMissingSubtitles.media_id.in_(eligible_media_ids))
     last_media_id = None
     while True:
         # Keyset pagination bounds ORM buffering and tolerates searches deleting
@@ -487,11 +535,12 @@ def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, bat
         if not media_ids:
             return
         due_languages = {}
-        for row in database.execute(
-            statement.where(TableMissingSubtitles.media_id.in_(media_ids))
-            .order_by(TableMissingSubtitles.media_id, TableMissingSubtitles.id)
-        ):
-            due_languages.setdefault(row.media_id, []).append(row.language)
+        for media_id_chunk in _iter_chunks(media_ids, WANTED_STATE_ID_QUERY_BATCH_SIZE):
+            for row in database.execute(
+                statement.where(TableMissingSubtitles.media_id.in_(media_id_chunk))
+                .order_by(TableMissingSubtitles.media_id, TableMissingSubtitles.id)
+            ):
+                due_languages.setdefault(row.media_id, []).append(row.language)
         last_media_id = media_ids[-1]
         yield due_languages
 
@@ -526,7 +575,7 @@ def get_due_missing_languages_map(media_type, media_ids=None, adaptive_search_po
         .order_by(TableMissingSubtitles.id)
     )
     if has_media_filter:
-        for media_id_chunk in _iter_chunks(media_ids):
+        for media_id_chunk in _iter_chunks(media_ids, WANTED_STATE_ID_QUERY_BATCH_SIZE):
             for row in database.execute(
                 statement.where(TableMissingSubtitles.media_id.in_(media_id_chunk))
             ):
