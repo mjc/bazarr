@@ -119,7 +119,7 @@ class Rebulk(Builder):
 
         return matches
 
-    def effective_rules(self, context=None):
+    def effective_rules(self, context: dict[str, _ContextValue] | None = None) -> Rules:
         """
         Get effective rules for this rebulk object and its children.
         :param context:
@@ -129,9 +129,8 @@ class Rebulk(Builder):
         """
         rules = Rules()
         rules.extend(self._rules)
-        for rebulk in self._rebulks:
-            if not rebulk.disabled(context):
-                extend_safe(rules, rebulk._rules)
+        extend_safe(rules, (rule for rebulk in self._rebulks if not rebulk.disabled(context)
+                            for rule in rebulk._rules))
         return rules
 
     def _execute_rules(self, matches, context):
@@ -157,26 +156,8 @@ class Rebulk(Builder):
         :rtype:
         """
         patterns = list(self._patterns)
-        seen: set[Pattern] | None
-        try:
-            seen = set(patterns)
-        except TypeError:
-            seen = None
-        for rebulk in self._rebulks:
-            if rebulk.disabled(context):
-                continue
-            if seen is None:
-                extend_safe(patterns, rebulk._patterns)
-                continue
-            try:
-                for pattern in rebulk._patterns:
-                    if pattern not in seen:
-                        seen.add(pattern)
-                        patterns.append(pattern)
-            except TypeError:
-                # Custom patterns may define equality without being hashable.
-                seen = None
-                extend_safe(patterns, rebulk._patterns)
+        extend_safe(patterns, (pattern for rebulk in self._rebulks if not rebulk.disabled(context)
+                               for pattern in rebulk._patterns))
         return patterns
 
     def _matches_patterns(self, matches, context):
