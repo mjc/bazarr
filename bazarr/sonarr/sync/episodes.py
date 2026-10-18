@@ -14,6 +14,7 @@ from app.database import database, TableShows, TableEpisodes, TableMissingSubtit
     get_exclusion_clause
 from app.config import settings
 from utilities.helper import bool_map
+from utilities.collections import unique_in_order
 from utilities.path_mappings import path_mappings
 from subtitles.indexer.series import store_subtitles, series_full_scan_subtitles
 from subtitles.mass_download import episode_download_subtitles
@@ -401,7 +402,7 @@ def _is_there_missing_subtitles(series_id: int = None, episode_id: int = None) -
         .all()
     due_languages_by_episode = get_due_missing_languages_map(
         'series',
-        list(dict.fromkeys(missing_episode.sonarrEpisodeId for missing_episode in missing_episodes)),
+        unique_in_order(missing_episode.sonarrEpisodeId for missing_episode in missing_episodes),
     )
     for missing_episode in missing_episodes:
         due_languages = due_languages_by_episode.get(missing_episode.sonarrEpisodeId, [])

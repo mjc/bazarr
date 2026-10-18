@@ -3,11 +3,9 @@
 """
 Various utilities functions
 """
-from collections.abc import Iterable, MutableSet
-from types import GeneratorType
-from typing import TypeVar
+from collections.abc import MutableSet
 
-_T = TypeVar('_T')
+from types import GeneratorType
 
 
 def find_all(string, sub, start=None, end=None, ignore_case=False, **kwargs):
@@ -89,31 +87,17 @@ def is_iterable(obj):
     return hasattr(obj, '__iter__') and not isinstance(obj, str) or isinstance(obj, GeneratorType)
 
 
-def extend_safe(target: list[_T], source: Iterable[_T]) -> None:
+def extend_safe(target, source):
     """
-    Append new source values in order, preserving duplicates already in target.
-    Fall back to list membership when either iterable contains unhashable values.
+    Extends source list to target list only if elements doesn't exists in target list.
     :param target:
     :type target: list
     :param source:
-    :type source: iterable
+    :type source: list
     """
-    seen: set[_T] | None
-    try:
-        seen = set(target)
-    except TypeError:
-        seen = None
     for elt in source:
-        if seen is not None:
-            try:
-                if elt in seen:
-                    continue
-                seen.add(elt)
-            except TypeError:
-                seen = None
-        if seen is None and elt in target:
-            continue
-        target.append(elt)
+        if elt not in target:
+            target.append(elt)
 
 
 class _Ref:

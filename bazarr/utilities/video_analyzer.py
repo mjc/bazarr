@@ -8,6 +8,7 @@ from app.database import TableEpisodes, TableMovies, database, update, select, g
 from languages.custom_lang import CustomLanguage
 from languages.get_languages import language_from_alpha3, alpha3_from_alpha2
 from utilities.path_mappings import path_mappings
+from utilities.collections import unique_in_order
 
 from knowit.api import know, KnowitException
 
@@ -114,7 +115,7 @@ def embedded_audio_reader(file: str, file_size: int | float | None,
 
             audio_list.append(language)
 
-    return list(dict.fromkeys(audio_list))
+    return unique_in_order(audio_list)
 
 
 def subtitles_sync_references(subtitles_path, sonarr_episode_id=None, radarr_movie_id=None):

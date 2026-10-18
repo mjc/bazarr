@@ -5,7 +5,6 @@ Introspect rebulk object to retrieve capabilities.
 """
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
-from itertools import chain
 
 from .pattern import StringPattern, RePattern, FunctionalPattern
 from .utils import extend_safe
@@ -102,13 +101,13 @@ class Introspection(Description):
         :return:
         :rtype:
         """
-        values_by_property = defaultdict(list)
-        for description in chain(self.patterns, self.rules):
-            for key, values in description.properties.items():
-                values_by_property[key].extend(values)
         properties = defaultdict(list)
-        for key, values in values_by_property.items():
-            extend_safe(properties[key], values)
+        for pattern in self.patterns:
+            for key, values in pattern.properties.items():
+                extend_safe(properties[key], values)
+        for rule in self.rules:
+            for key, values in rule.properties.items():
+                extend_safe(properties[key], values)
         return properties
 
 

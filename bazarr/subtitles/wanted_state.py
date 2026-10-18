@@ -4,6 +4,7 @@ from sqlalchemy import Table
 
 from datetime import datetime
 from contextlib import contextmanager
+from collections.abc import Iterable
 
 from sqlalchemy import case, func, or_
 from sqlalchemy.engine import Connection
@@ -26,6 +27,7 @@ from subtitles.adaptive_searching import (
 )
 from subtitles.language_utils import parse_language_token
 from subtitles.serialization import parse_missing_subtitles
+from utilities.collections import unique_in_order
 
 WANTED_STATE_QUERY_BATCH_SIZE = 5000
 # Leave room for the media-type parameter under SQLite's older bind limit.
@@ -40,14 +42,15 @@ def _iter_chunks(items, batch_size=None):
         yield items[index:index + batch_size]
 
 
-def _normalize_media_ids(media_ids, coerce_int=False):
+def _normalize_media_ids(media_ids: int | str | Iterable[int | str],
+                         coerce_int: bool = False) -> list[int | str]:
     if isinstance(media_ids, (int, str)):
         media_ids = [media_ids]
     else:
-        media_ids = list(dict.fromkeys(media_ids))
+        media_ids = unique_in_order(media_ids)
 
     if coerce_int:
-        return list(dict.fromkeys(int(media_id) for media_id in media_ids))
+        return unique_in_order(int(media_id) for media_id in media_ids)
     return media_ids
 
 
@@ -110,12 +113,12 @@ def record_failed_subtitle_attempts_map(media_type, languages_by_media_id, attem
             continue
         if isinstance(languages, str):
             languages = [languages]
-        canonical_languages = dict.fromkeys(
+        canonical_languages = unique_in_order(
             parsed[0] for language in languages
             if (parsed := parse_language_token(language)) is not None
         )
         if canonical_languages:
-            normalized_languages[media_id] = list(canonical_languages)
+            normalized_languages[media_id] = canonical_languages
     if not normalized_languages:
         return
 
@@ -450,7 +453,7 @@ def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, bat
 def get_due_missing_languages_map(media_type, media_ids=None, adaptive_search_policy=None):
     has_media_filter = media_ids is not None
     if has_media_filter:
-        media_ids = list(dict.fromkeys(media_ids))
+        media_ids = unique_in_order(media_ids)
         due_languages = {media_id: [] for media_id in media_ids}
         if not media_ids:
             return due_languages

@@ -9,7 +9,6 @@ import os
 import shlex
 import sys
 from argparse import ArgumentParser
-from rebulk.utils import extend_safe
 
 # importlib.resources.read_text() is deprecated since Python 3.11.
 # importlib.resources.files() is new in Python 3.9.
@@ -230,7 +229,7 @@ def merge_options(*options):
     return merged
 
 
-def merge_option_value(option: str, value, merged) -> None:
+def merge_option_value(option, value, merged):
     """
     Merge option value
     :param option:
@@ -240,7 +239,9 @@ def merge_option_value(option: str, value, merged) -> None:
     """
     if value is not None and option != 'pristine':
         if option in merged.keys() and isinstance(merged[option], list):
-            extend_safe(merged[option], (val for val in value if val is not None))
+            for val in value:
+                if val not in merged[option] and val is not None:
+                    merged[option].append(val)
         elif option in merged.keys() and isinstance(merged[option], dict):
             merged[option] = merge_options(merged[option], value)
         elif isinstance(value, list):

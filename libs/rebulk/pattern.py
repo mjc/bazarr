@@ -6,7 +6,6 @@ Abstract pattern class definition along with various implementations (regexp, st
 # pylint: disable=super-init-not-called,wrong-import-position
 
 from abc import ABCMeta, abstractmethod
-from typing import Literal, TypeVar, overload
 
 from . import debug
 from .formatters import default_formatter
@@ -15,8 +14,6 @@ from .match import Match
 from .remodule import re, REGEX_ENABLED
 from .utils import find_all, is_iterable, get_first_defined
 from .validators import allways_true
-
-_ContextValue = TypeVar('_ContextValue')
 
 
 class BasePattern(metaclass=ABCMeta):
@@ -140,18 +137,6 @@ class Pattern(BasePattern, metaclass=ABCMeta):
         :rtype:
         """
         return self._log_level if self._log_level is not None else debug.LOG_LEVEL
-
-    @overload
-    def matches(self, input_string: str, context: dict[str, _ContextValue] | None = None,
-                with_raw_matches: Literal[False] = False) -> list[Match]: ...
-
-    @overload
-    def matches(self, input_string: str, context: dict[str, _ContextValue] | None = None,
-                with_raw_matches: Literal[True] = True) -> tuple[list[Match], list[Match]]: ...
-
-    @overload
-    def matches(self, input_string: str, context: dict[str, _ContextValue] | None = None,
-                with_raw_matches: bool = False) -> list[Match] | tuple[list[Match], list[Match]]: ...
 
     def matches(self, input_string, context=None, with_raw_matches=False):
         """
