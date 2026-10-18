@@ -1,6 +1,8 @@
 import logging
+from types import SimpleNamespace
 
 import pytest
+from pytest_mock import MockerFixture
 
 from bazarr.utilities import video_analyzer
 
@@ -323,6 +325,41 @@ def test_embedded_audio_reader_accepts_string_language(mocker, video_file):
         "bazarr.utilities.video_analyzer.language_from_alpha3", lambda alpha3: alpha3
     )
 
-    result = video_analyzer.embedded_audio_reader(1e6, video_file)
+    result = video_analyzer.embedded_audio_reader(video_file, 1e6)
 
     assert result == ["jpn"]
+
+
+@pytest.mark.parametrize('provider', ['ffprobe', 'mediainfo'])
+@pytest.mark.parametrize('missing_first', [False, True])
+def test_audio_language_deduplication_keeps_one_missing_language(provider: str, missing_first: bool,
+                                                               mocker: MockerFixture) -> None:
+    tracks = [{'language': 'eng'}, {'language': 'eng'}, {}, {'language': 'fra'},
+              {'language': None}, {'language': 'zzz'}, {}, {'language': 'fra'}]
+    if missing_first:
+        tracks.insert(0, {})
+    mocker.patch.object(video_analyzer, 'parse_video_metadata', return_value={provider: {'audio': tracks}})
+    mocker.patch.object(video_analyzer, '_handle_alpha3', side_effect=lambda track: track['language'])
+    mocker.patch.object(video_analyzer, 'language_from_alpha3',
+                      side_effect={'eng': 'English', 'fra': 'French'}.get)
+
+    result = video_analyzer.embedded_audio_reader('/video.mkv', 1000)
+
+    assert result == ([None, 'English', 'French'] if missing_first else ['English', None, 'French'])
+
+
+@pytest.mark.parametrize('provider', ['ffprobe', 'mediainfo'])
+def test_missing_audio_languages_use_the_default_once(provider: str, mocker: MockerFixture) -> None:
+    from app import database
+
+    mocker.patch.object(video_analyzer, 'parse_video_metadata',
+                      return_value={provider: {'audio': [{}, {}, {}]}})
+    mocker.patch.object(database, 'settings',
+                      SimpleNamespace(general=SimpleNamespace(default_und_audio_lang='en')))
+
+    languages = video_analyzer.embedded_audio_reader('/video.mkv', 1000)
+
+    assert languages == [None]
+    assert database.get_audio_profile_languages(str(languages)) == [
+        {'name': 'English', 'code2': 'en', 'code3': 'eng'},
+    ]

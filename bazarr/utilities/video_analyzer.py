@@ -80,10 +80,12 @@ def embedded_subs_reader(file, file_size, episode_file_id=None, movie_file_id=No
     return subtitles_list
 
 
-def embedded_audio_reader(file, file_size, episode_file_id=None, movie_file_id=None, use_cache=True):
+def embedded_audio_reader(file: str, file_size: int | float | None,
+                          episode_file_id: int | None = None, movie_file_id: int | None = None,
+                          use_cache: bool = True) -> list[str | None]:
     data = parse_video_metadata(file, file_size, episode_file_id, movie_file_id, use_cache=use_cache)
 
-    audio_list = []
+    audio_list: list[str | None] = []
 
     if not data:
         return audio_list
@@ -110,10 +112,9 @@ def embedded_audio_reader(file, file_size, episode_file_id=None, movie_file_id=N
                 continue
             language = language_from_alpha3(alpha3)
 
-            if language not in audio_list:
-                audio_list.append(language)
+            audio_list.append(language)
 
-    return audio_list
+    return list(dict.fromkeys(audio_list))
 
 
 def subtitles_sync_references(subtitles_path, sonarr_episode_id=None, radarr_movie_id=None):
