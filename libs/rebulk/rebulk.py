@@ -4,14 +4,17 @@
 Entry point functions and classes for Rebulk
 """
 from logging import getLogger
+from typing import TypeVar
 
 from .builder import Builder
 from .match import Matches
+from .pattern import Pattern
 from .processors import ConflictSolver, PrivateRemover
 from .rules import Rules
 from .utils import extend_safe
 
 log = getLogger(__name__).log
+_ContextValue = TypeVar('_ContextValue')
 
 
 class Rebulk(Builder):
@@ -145,7 +148,7 @@ class Rebulk(Builder):
             rules = self.effective_rules(context)
             rules.execute_all_rules(matches, context)
 
-    def effective_patterns(self, context=None):
+    def effective_patterns(self, context: dict[str, _ContextValue] | None = None) -> list[Pattern]:
         """
         Get effective patterns for this rebulk object and its children.
         :param context:
@@ -154,8 +157,25 @@ class Rebulk(Builder):
         :rtype:
         """
         patterns = list(self._patterns)
+        seen: set[Pattern] | None
+        try:
+            seen = set(patterns)
+        except TypeError:
+            seen = None
         for rebulk in self._rebulks:
-            if not rebulk.disabled(context):
+            if rebulk.disabled(context):
+                continue
+            if seen is None:
+                extend_safe(patterns, rebulk._patterns)
+                continue
+            try:
+                for pattern in rebulk._patterns:
+                    if pattern not in seen:
+                        seen.add(pattern)
+                        patterns.append(pattern)
+            except TypeError:
+                # Custom patterns may define equality without being hashable.
+                seen = None
                 extend_safe(patterns, rebulk._patterns)
         return patterns
 
