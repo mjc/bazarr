@@ -807,7 +807,7 @@ def is_indexed_subtitle_path(*subtitles_paths) -> bool:
     return False
 
 
-def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[dict]:
+def get_subtitles(sonarr_episode_id: int | None = None, radarr_id: int | None = None) -> List[dict]:
     """
     Retrieves a list of subtitles based on the provided episode or movie identifiers.
 
