@@ -92,22 +92,31 @@ def calculate_missing_subtitles(profile: Profile, subtitles: Sequence[SubtitleFi
         return _format(_unsatisfied(_desired(profile.items, audio_language_codes), actual, actual_set,
                                     expanded, profile.non_hi_languages))
 
+    expanded.update(actual_set)
+    for item in actual_set:
+        if item.forced:
+            continue
+        if item.hi == 'required' and item.language not in profile.non_hi_languages:
+            expanded.add(SubtitleRequirement(item.language, False, 'prefer'))
+        elif item.hi == 'prefer' and item.language in profile.non_hi_languages:
+            expanded.add(SubtitleRequirement(item.language, False, 'excluded'))
     satisfied_groups: set[int] = set()
     missing: list[SubtitleRequirement] = []
+    missing_keys: set[SubtitleRequirement] = set()
     for group in profile.groups:
         desired = _desired(group.items, audio_language_codes)
         if not desired:
             satisfied_groups.add(group.group_id)
             continue
-        unsatisfied = [_unsatisfied([item], actual, actual_set, expanded, profile.non_hi_languages) for item in desired]
-        satisfied = any(not item for item in unsatisfied) if group.operator == 'OR' else all(not item for item in unsatisfied)
+        unsatisfied = [item for item in desired if item not in expanded]
+        satisfied = len(unsatisfied) < len(desired) if group.operator == 'OR' else not unsatisfied
         if satisfied:
             satisfied_groups.add(group.group_id)
         else:
-            for entries in unsatisfied:
-                for item in entries:
-                    if item not in missing:
-                        missing.append(item)
+            for item in unsatisfied:
+                if item not in missing_keys:
+                    missing_keys.add(item)
+                    missing.append(item)
     if profile.cutoff and satisfied_groups and (profile.cutoff == ANY_CUTOFF or profile.cutoff in satisfied_groups):
         return []
     return _format(missing)
