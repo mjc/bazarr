@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from tests.helpers.arr_fixtures import series_payload, sonarr_connection
 
 import radarr.sync.movies as radarr_movies
 import radarr.sync.utils as radarr_utils
@@ -10,8 +11,13 @@ import sonarr.sync.utils as sonarr_utils
 import subtitles.sync as subtitle_sync
 
 
+@pytest.fixture(autouse=True)
+def configured_sonarr_connection(monkeypatch):
+    monkeypatch.setattr(sonarr_series, 'get_sonarr_connection', lambda *args: sonarr_connection())
+
+
 def _response(payload):
-    return SimpleNamespace(json=lambda: payload)
+    return SimpleNamespace(json=lambda: payload, raise_for_status=lambda: None)
 
 
 @pytest.fixture
@@ -357,7 +363,7 @@ def test_sonarr_series_sync_returns_for_non_list_payload(monkeypatch, sync_job):
     monkeypatch.setattr(
         sonarr_series,
         "get_series_from_sonarr_api",
-        lambda apikey_sonarr: {"unexpected": "payload"},
+        lambda apikey_sonarr, **kwargs: {"unexpected": "payload"},
     )
     monkeypatch.setattr(
         sonarr_series.database,
@@ -391,8 +397,8 @@ def test_sonarr_series_sync_processes_valid_entries_in_mixed_payload(monkeypatch
     monkeypatch.setattr(
         sonarr_series,
         "get_series_from_sonarr_api",
-        lambda apikey_sonarr: [
-            {"id": 1, "title": "Good Series", "monitored": True},
+        lambda apikey_sonarr, **kwargs: [
+            series_payload(1, "Good Series"),
             {"title": "Missing ID"},
             "bad-entry",
         ],
@@ -402,11 +408,11 @@ def test_sonarr_series_sync_processes_valid_entries_in_mixed_payload(monkeypatch
         "execute",
         lambda *args, **kwargs: SimpleNamespace(all=lambda: []),
     )
-    monkeypatch.setattr(sonarr_series, "get_profile_list", lambda: [])
-    monkeypatch.setattr(sonarr_series, "get_tags", lambda: {})
+    monkeypatch.setattr(sonarr_series, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(sonarr_series, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(sonarr_series, "get_language_profiles", lambda: [])
     monkeypatch.setattr(sonarr_series, "update_one_series", lambda series_id, **kwargs: processed.append(series_id))
-    monkeypatch.setattr(sonarr_series, "sync_episodes", lambda series_id: synced_series.append(series_id))
+    monkeypatch.setattr(sonarr_series, "sync_episodes", lambda series_id, **kwargs: synced_series.append(series_id))
     monkeypatch.setattr(
         sonarr_series.jobs_queue,
         "update_job_progress",

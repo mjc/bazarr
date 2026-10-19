@@ -11,7 +11,8 @@ from constants import MINIMUM_VIDEO_SIZE
 from languages.get_languages import audio_language_from_name
 from utilities.path_mappings import path_mappings
 from utilities.video_analyzer import embedded_audio_reader
-from sonarr.info import get_sonarr_info
+from sonarr.info import SonarrCapabilities, get_sonarr_info
+from sonarr.series_snapshot import Series, SeriesTag, SeriesValues
 from sonarr.episode_snapshot import Episode, EpisodeValues
 
 from .converter import SonarrFormatVideoCodec, SonarrFormatAudioCodec
@@ -27,8 +28,8 @@ def get_matching_profile(tags, language_profiles):
     return matching_profile
 
 
-def seriesParser(show, action, tags_dict, language_profiles, serie_default_profile, audio_profiles,
-                 *, general: DynaBox | None = None):
+def seriesParser(show: Series, action: str, tags_dict: list[SeriesTag], language_profiles, serie_default_profile: int | None, audio_profiles,
+                 *, general: DynaBox | None = None, capabilities: SonarrCapabilities | None = None) -> SeriesValues:
     overview = show['overview'] if 'overview' in show else ''
     poster = ''
     fanart = ''
@@ -42,7 +43,7 @@ def seriesParser(show, action, tags_dict, language_profiles, serie_default_profi
 
     if show['alternateTitles'] is not None:
         alternate_titles = [item['title'] for item in show['alternateTitles'] if 'title' in item and item['title'] not
-                            in [None, ''] and item["title"] != show["title"]]
+                            in [None, ''] and item['title'] != show['title']]
     else:
         alternate_titles = []
 
@@ -54,20 +55,21 @@ def seriesParser(show, action, tags_dict, language_profiles, serie_default_profi
 
     lastAired = parser.parse(show['lastAired']).strftime("%Y-%m-%d") if 'lastAired' in show and show['lastAired'] else None
 
-    original_language = show['originalLanguage'].get('name') if isinstance(show.get('originalLanguage'), dict) else None
+    original = show.get('originalLanguage')
+    original_language = original.get('name') if original is not None else None
 
     audio_language = []
     general_settings = settings.general if general is None else general
     if not general_settings.parse_embedded_audio_track:
-        if get_sonarr_info.is_legacy():
-            audio_language = profile_id_to_language(show['qualityProfileId'], audio_profiles)
+        if get_sonarr_info.is_legacy() if capabilities is None else capabilities.legacy:
+            audio_language = profile_id_to_language(show.get('qualityProfileId'), audio_profiles)
         else:
             if 'languageProfileId' in show:
                 audio_language = profile_id_to_language(show['languageProfileId'], audio_profiles)
             else:
                 audio_language = []
 
-    parsed_series = {
+    parsed_series: SeriesValues = {
         'title': show["title"],
         'path': show["path"],
         'tvdbId': int(show["tvdbId"]),
@@ -137,9 +139,11 @@ def episodeParser(episode: Episode, parse_embedded_audio_track: bool | None = No
         language = file.get('language')
         languages = file.get('languages')
         if language:
-            audio_language = [audio_language_from_name(language['name'])]
+            name = language['name']
+            audio_language = [None if name is None else audio_language_from_name(name)]
         elif languages:
-            audio_language = [audio_language_from_name(language['name']) for language in languages]
+            audio_language = [None if language['name'] is None else audio_language_from_name(language['name'])
+                              for language in languages]
         else:
             series_id = episode['seriesId']
             if audio_languages is None:

@@ -224,3 +224,16 @@ def test_null_optional_file_metadata_and_null_absent_file_are_accepted():
     assert complete_episode_snapshot([absent]) is not None
     missing = dict(episode(), episodeFile=None)
     assert complete_episode_snapshot([missing]) is None
+
+
+def test_single_episode_accepts_authoritative_series_reassignment(live_sync, monkeypatch):
+    session, effects, _ = live_sync
+    session.add(TableShows(sonarrSeriesId=8, title='New Series', path='/new'))
+    session.commit()
+    payload = dict(episode(), seriesId=8)
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', lambda **kwargs: payload)
+    sync.sync_one_episode(101, defer_search=True)
+    session.expire_all()
+    assert session.get(TableEpisodes, 101).sonarrSeriesId == 8
+    effects['delete_media_and_wanted_search_state'].assert_not_called()

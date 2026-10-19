@@ -4,6 +4,13 @@ import datetime
 from types import SimpleNamespace
 
 import pytest
+from tests.helpers.arr_fixtures import series_payload, sonarr_connection
+
+
+@pytest.fixture(autouse=True)
+def configured_sonarr_connection(monkeypatch):
+    from sonarr.sync import series
+    monkeypatch.setattr(series, 'get_sonarr_connection', lambda *args: sonarr_connection())
 
 
 class _Result:
@@ -46,10 +53,10 @@ def test_update_one_series_fetches_and_inserts_for_standalone_call(monkeypatch):
             sonarr=SimpleNamespace(apikey="sonarr-key"),
         ),
     )
-    monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(series_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(series_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
-    monkeypatch.setattr(series_sync, "get_series_from_sonarr_api", lambda **kwargs: [{"id": 123}])
+    monkeypatch.setattr(series_sync, "get_series_from_sonarr_api", lambda **kwargs: [series_payload()])
     monkeypatch.setattr(
         series_sync,
         "seriesParser",
@@ -87,21 +94,21 @@ def test_update_series_runs_one_explicit_episode_sync(monkeypatch):
         series_sync,
         "settings",
         SimpleNamespace(
-            general=SimpleNamespace(debug=False),
+            general=SimpleNamespace(debug=False, serie_default_enabled=False, parse_embedded_audio_track=False, serie_tag_enabled=False),
             sonarr=SimpleNamespace(apikey="sonarr-key", sync_only_monitored_series=False),
         ),
     )
     monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda: None)
-    monkeypatch.setattr(series_sync, "get_series_from_sonarr_api", lambda **kwargs: [{"id": 123, "title": "Series"}])
-    monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(series_sync, "get_series_from_sonarr_api", lambda **kwargs: [series_payload()])
+    monkeypatch.setattr(series_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(series_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
         "update_one_series",
         lambda *args, **kwargs: update_calls.append((args, kwargs)),
     )
-    monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id: episode_sync_calls.append(series_id))
+    monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id, **kwargs: episode_sync_calls.append(series_id))
     monkeypatch.setattr(
         series_sync,
         "jobs_queue",
@@ -146,7 +153,7 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
         series_sync,
         "settings",
         SimpleNamespace(
-            general=SimpleNamespace(debug=False),
+            general=SimpleNamespace(debug=False, serie_default_enabled=False, parse_embedded_audio_track=False, serie_tag_enabled=False),
             sonarr=SimpleNamespace(
                 apikey="sonarr-key",
                 sync_only_monitored_series=False,
@@ -160,8 +167,8 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
         "get_series_from_sonarr_api",
         lambda **kwargs: None,
     )
-    monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(series_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(series_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
@@ -171,7 +178,7 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
     monkeypatch.setattr(
         series_sync,
         "sync_episodes",
-        lambda series_id: episode_sync_calls.append(series_id),
+        lambda series_id, **kwargs: episode_sync_calls.append(series_id),
     )
     monkeypatch.setattr(
         series_sync,
@@ -215,20 +222,20 @@ def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatc
             sonarr=SimpleNamespace(apikey="sonarr-key"),
         ),
     )
-    monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(series_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(series_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
         "seriesParser",
         lambda *args, **kwargs: {"sonarrSeriesId": 123, "path": "/series/path"},
     )
-    monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id: episode_sync_calls.append(series_id))
+    monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id, **kwargs: episode_sync_calls.append(series_id))
 
     series_sync.update_one_series(
         123,
         action="updated",
-        series_data=[{"id": 123}],
+        series_data=[series_payload()],
         sync_episodes_after_update=True,
     )
 

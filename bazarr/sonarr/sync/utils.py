@@ -6,77 +6,33 @@ import logging
 from app.config import settings
 from sonarr.info import SonarrConnection, get_sonarr_info, url_api_sonarr
 from utilities.arr import request_json
-from constants import HEADERS
 from utilities.json_types import JsonValue
 
 
-def get_profile_list():
-    apikey_sonarr = settings.sonarr.apikey
-    profiles_list = []
-
-    # Get profiles data from Sonarr
-    if get_sonarr_info.is_legacy():
-        url_sonarr_api_series = f"{url_api_sonarr()}profile?apikey={apikey_sonarr}"
-    else:
-        if not get_sonarr_info.version().startswith('3.'):
-            # return an empty list when using Sonarr >= v4 that does not support series languages profiles anymore
-            return profiles_list
-        url_sonarr_api_series = f"{url_api_sonarr()}languageprofile?apikey={apikey_sonarr}"
-
-    try:
-        profiles_json = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False,
-                                     headers=HEADERS)
-    except requests.exceptions.ConnectionError:
-        logging.exception("BAZARR Error trying to get profiles from Sonarr. Connection Error.")
-        return None
-    except requests.exceptions.Timeout:
-        logging.exception("BAZARR Error trying to get profiles from Sonarr. Timeout Error.")
-        return None
-    except requests.exceptions.RequestException:
-        logging.exception("BAZARR Error trying to get profiles from Sonarr.")
-        return None
-    else:
-        # Parsing data returned from Sonarr
-        if get_sonarr_info.is_legacy():
-            for profile in profiles_json.json():
-                if not isinstance(profile, dict):
-                    continue
-                profile_id = profile.get('id')
-                language = profile.get('language')
-                if profile_id is not None and isinstance(language, str):
-                    profiles_list.append([profile_id, language.capitalize()])
-        else:
-            for profile in profiles_json.json():
-                if not isinstance(profile, dict):
-                    continue
-                profile_id = profile.get('id')
-                name = profile.get('name')
-                if profile_id is not None and isinstance(name, str):
-                    profiles_list.append([profile_id, name.capitalize()])
-
-    return profiles_list
-
-
-def get_tags():
-    apikey_sonarr = settings.sonarr.apikey
-    tagsDict = []
-
-    # Get tags data from Sonarr
-    url_sonarr_api_series = f"{url_api_sonarr()}tag?apikey={apikey_sonarr}"
-
-    try:
-        tagsDict = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
-    except requests.exceptions.ConnectionError:
-        logging.exception("BAZARR Error trying to get tags from Sonarr. Connection Error.")
+def get_profile_list(*, connection: SonarrConnection | None = None) -> list[list[int | str]] | None:
+    apikey = settings.sonarr.apikey if connection is None else connection.apikey
+    legacy = get_sonarr_info.is_legacy() if connection is None else connection.capabilities.legacy
+    supports_profiles = (legacy or get_sonarr_info.version().startswith('3.')) if connection is None else connection.capabilities.language_profiles
+    if not legacy and not supports_profiles:
         return []
-    except requests.exceptions.Timeout:
-        logging.exception("BAZARR Error trying to get tags from Sonarr. Timeout Error.")
-        return []
-    except requests.exceptions.RequestException:
-        logging.exception("BAZARR Error trying to get tags from Sonarr.")
-        return []
-    else:
-        return tagsDict.json()
+    path = 'profile?' if legacy else 'languageprofile?'
+    profiles = _request_sonarr(path, apikey, connection)
+    if not isinstance(profiles, list):
+        return None
+    result: list[list[int | str]] = []
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            continue
+        profile_id = profile.get('id')
+        name = profile.get('language' if legacy else 'name')
+        if type(profile_id) is int and isinstance(name, str):
+            result.append([profile_id, name.capitalize()])
+    return result
+
+
+def get_tags(*, connection: SonarrConnection | None = None) -> JsonValue:
+    apikey = settings.sonarr.apikey if connection is None else connection.apikey
+    return _request_sonarr('tag?', apikey, connection)
 
 
 def _request_sonarr(path: str, apikey: str, connection: SonarrConnection | None = None,
