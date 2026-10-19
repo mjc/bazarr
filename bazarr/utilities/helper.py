@@ -23,11 +23,16 @@ _FieldValue = TypeVar('_FieldValue', covariant=True)
 class _FieldLookup(Protocol[_FieldValue]):
     def __getitem__(self, key: str, /) -> _FieldValue: ...
 
-    def __contains__(self, key: str, /) -> bool: ...
-
 
 def has_changed_fields(current: _FieldLookup[_FieldValue], incoming: Mapping[str, _FieldValue]) -> bool:
-    return any(key not in current or current[key] != value for key, value in incoming.items())
+    for key in incoming:
+        try:
+            previous = current[key]
+        except KeyError:
+            return True
+        if previous != incoming[key]:
+            return True
+    return False
 
 
 def check_credentials(user: str, pw: str, request: Request, log_success: bool = True) -> bool:
