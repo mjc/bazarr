@@ -3,6 +3,7 @@
 from collections.abc import Iterable, Sequence
 
 from subliminal_patch import core
+from babelfish.exceptions import CountryError, LanguageError
 
 from app.language_profiles import Profile, ProfileItem, SubtitleRequirement
 from languages.custom_lang import CustomLanguage
@@ -28,7 +29,7 @@ def _expanded(actual: list[SubtitleRequirement], lang_equals: core._LanguageEqua
         custom = CustomLanguage.from_value(subtitle.language, 'alpha2')
         try:
             language = custom.subzero_language() if custom else core.Language.fromietf(subtitle.language)
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, LanguageError, CountryError):
             languages.add(subtitle.language)
             continue
         language.forced = subtitle.forced
