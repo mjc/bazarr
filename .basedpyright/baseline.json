@@ -286,32 +286,6 @@
                 }
             }
         ],
-        "./bazarr/radarr/info.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 49,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 49,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 49,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./bazarr/radarr/sync/movies.py": [
             {
                 "code": "reportOptionalMemberAccess",
@@ -422,32 +396,6 @@
                 "range": {
                     "startColumn": 47,
                     "endColumn": 52,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./bazarr/sonarr/info.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 49,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 49,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 49,
-                    "endColumn": 62,
                     "lineCount": 1
                 }
             }
