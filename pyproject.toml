@@ -1,5 +1,36 @@
 [tool.basedpyright]
-include = ["bazarr/utilities"]
+include = [
+    "bazarr/utilities",
+    "bazarr/api/episodes/blacklist.py",
+    "bazarr/api/episodes/episodes.py",
+    "bazarr/api/episodes/history.py",
+    "bazarr/api/episodes/wanted.py",
+    "bazarr/api/formatting.py",
+    "bazarr/api/history/stats.py",
+    "bazarr/api/movies/blacklist.py",
+    "bazarr/api/movies/history.py",
+    "bazarr/api/movies/movies.py",
+    "bazarr/api/movies/tags.py",
+    "bazarr/api/movies/wanted.py",
+    "bazarr/api/response_data.py",
+    "bazarr/api/response_types.py",
+    "bazarr/api/series/series.py",
+    "bazarr/api/series/tags.py",
+    "bazarr/api/subtitles/subtitles_contents.py",
+    "bazarr/api/system/languages.py",
+    "bazarr/api/utils.py",
+    "bazarr/app/check_update.py",
+    "bazarr/app/database.py",
+    "bazarr/app/notifier.py",
+    "bazarr/languages/formatting.py",
+    "bazarr/radarr/info.py",
+    "bazarr/radarr/sync/movies.py",
+    "bazarr/sonarr/info.py",
+    "bazarr/sonarr/sync/episodes.py",
+    "bazarr/sonarr/sync/series.py",
+    "bazarr/sonarr/sync/utils.py",
+    "bazarr/subtitles/upgrade.py",
+]
 pythonVersion = "3.10"
 pythonPlatform = "All"
 extraPaths = ["bazarr", "custom_libs", "libs"]
