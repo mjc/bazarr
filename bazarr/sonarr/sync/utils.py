@@ -77,14 +77,15 @@ def get_tags():
         return tagsDict.json()
 
 
-def get_series_from_sonarr_api(apikey_sonarr, sonarr_series_id=None):
+def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None):
     url_sonarr_api_series = (f"{url_api_sonarr()}series/{sonarr_series_id if sonarr_series_id else ''}?"
                              f"apikey={apikey_sonarr}")
     try:
         r = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
         r.raise_for_status()
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code:
+        response: requests.Response | None = e.response
+        if response is not None and response.status_code:
             raise requests.exceptions.HTTPError
         logging.exception("BAZARR Error trying to get series from Sonarr. Http error.")
         return
