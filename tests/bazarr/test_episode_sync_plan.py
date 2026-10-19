@@ -237,3 +237,59 @@ def test_single_episode_accepts_authoritative_series_reassignment(live_sync, mon
     session.expire_all()
     assert session.get(TableEpisodes, 101).sonarrSeriesId == 8
     effects['delete_media_and_wanted_search_state'].assert_not_called()
+
+
+def test_episode_rechecks_current_file_before_deciding_to_skip_indexing(live_sync, monkeypatch):
+    from sqlalchemy import update
+    session, effects, _ = live_sync
+    payload = episode()
+    payload['title'] = 'Updated'
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', lambda **kwargs: [payload])
+    prepare = sync._prepare_episode_sync
+
+    def prepare_with_interleaved_file_change(*args, **kwargs):
+        plan = prepare(*args, **kwargs)
+        session.execute(update(TableEpisodes).where(TableEpisodes.sonarrEpisodeId == 101)
+                        .values(path='/other.mkv', episode_file_id=20))
+        return plan
+
+    monkeypatch.setattr(sync, '_prepare_episode_sync', prepare_with_interleaved_file_change)
+    sync.sync_episodes(7, defer_search=True)
+    session.expire_all()
+    assert session.get(TableEpisodes, 101).path == '/show/episode.mkv'
+    assert session.get(TableEpisodes, 101).title == 'Updated'
+    effects['store_subtitles'].assert_called_once_with(101)
+
+
+def test_comparison_rows_are_released_before_subtitle_indexing(live_sync, monkeypatch):
+    from weakref import ref
+    from types import SimpleNamespace
+    session, _, _ = live_sync
+    payload = episode()
+    payload['episodeFile']['path'] = '/updated.mkv'
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', lambda **kwargs: [payload])
+    references = []
+    first_query = True
+
+    class ComparisonRow(dict):
+        pass
+
+    def execute(statement):
+        nonlocal first_query
+        result = session.execute(statement)
+        if first_query:
+            first_query = False
+            rows = [ComparisonRow(row) for row in result.mappings()]
+            references.extend(ref(row) for row in rows)
+            return SimpleNamespace(mappings=lambda: iter(rows))
+        return result
+
+    def store(episode_id):
+        assert episode_id == 101
+        assert references and all(reference() is None for reference in references)
+
+    monkeypatch.setattr(sync, 'database', SimpleNamespace(execute=execute))
+    monkeypatch.setattr(sync, 'store_subtitles', store)
+    sync.sync_episodes(7, defer_search=True)

@@ -117,7 +117,7 @@ def test_raw_movie_graph_is_released_before_subtitle_indexing(movie_sync, monkey
     deleted.assert_not_called()
 
 
-def test_eligibility_and_monitored_and_previous_file_reads_are_not_repeated(movie_sync, monkeypatch):
+def test_eligibility_and_monitored_reads_are_not_repeated(movie_sync, monkeypatch):
     session, _, _, store, statements = movie_sync
     payload = movie_payload(1, 'Updated', '/movie.mkv', size=1)
     monkeypatch.setattr(sync, 'get_movies_from_radarr_api', lambda **kwargs: [payload])
@@ -127,7 +127,8 @@ def test_eligibility_and_monitored_and_previous_file_reads_are_not_repeated(movi
     sync.update_movies(job_id=1)
     actual_size.assert_called_once_with('/movie.mkv')
     selects = [statement for statement in statements if statement.is_select]
-    assert len(selects) == 1
+    assert len(selects) == 2
+    assert set(selects[1].selected_columns.keys()) == {'movie_file_id', 'path'}
     store.assert_not_called()
     session.expire_all()
     assert session.get(TableMovies, 1).title == 'Updated'
@@ -190,3 +191,24 @@ def test_legacy_movie_metadata_uses_one_resolved_capability(movie_sync, monkeypa
     assert stored.video_codec == 'h264'
     assert stored.audio_codec == 'AC3'
     sync.get_radarr_connection.assert_called_once()
+
+
+def test_movie_rechecks_current_file_before_deciding_to_skip_indexing(movie_sync, monkeypatch):
+    from sqlalchemy import update
+    session, _, _, store, _ = movie_sync
+    monkeypatch.setattr(sync, 'get_movies_from_radarr_api',
+                        lambda **kwargs: [movie_payload(1, 'Updated', '/movie.mkv')])
+    prepare = sync._prepare_movie_sync
+
+    def prepare_with_interleaved_file_change(*args, **kwargs):
+        plan = prepare(*args, **kwargs)
+        session.execute(update(TableMovies).where(TableMovies.radarrId == 1)
+                        .values(path='/other.mkv', movie_file_id=20))
+        return plan
+
+    monkeypatch.setattr(sync, '_prepare_movie_sync', prepare_with_interleaved_file_change)
+    sync.update_movies(job_id=1)
+    session.expire_all()
+    assert session.get(TableMovies, 1).path == '/movie.mkv'
+    assert session.get(TableMovies, 1).title == 'Updated'
+    store.assert_called_once_with(1)

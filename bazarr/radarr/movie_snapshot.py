@@ -94,7 +94,7 @@ class MovieValues(TypedDict):
 @dataclass(frozen=True)
 class MovieChange:
     values: MovieValues
-    previous_file: tuple[int | None, str | None] | None
+    existing: bool
     position: int
 
 

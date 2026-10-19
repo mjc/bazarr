@@ -70,15 +70,14 @@ def _has_usable_movie_file(movie: JsonValue, *, general: DynaBox | None = None) 
 
 
 # Update movies in DB
-def update_movie(updated_movie: MovieValues, *, previous_file: tuple[int | None, str | None] | None = None) -> None:
+def update_movie(updated_movie: MovieValues) -> None:
     try:
-        if previous_file is None:
-            previous_movie_data = database.execute(
-                select(TableMovies.movie_file_id, TableMovies.path)
-                .where(TableMovies.radarrId == updated_movie['radarrId'])).first()
-            previous_file = (previous_movie_data.movie_file_id, previous_movie_data.path) if previous_movie_data else (None, None)
+        previous_movie_data = database.execute(
+            select(TableMovies.movie_file_id, TableMovies.path)
+            .where(TableMovies.radarrId == updated_movie['radarrId'])).first()
         previous_movie_id = updated_movie['radarrId']
-        previous_movie_file_id, previous_movie_path = previous_file
+        previous_movie_file_id = previous_movie_data.movie_file_id if previous_movie_data else None
+        previous_movie_path = previous_movie_data.path if previous_movie_data else None
 
         updated_movie['updated_at_timestamp'] = datetime.now()
         database.execute(
@@ -181,9 +180,9 @@ def _prepare_movie_sync(connection: RadarrConnection, radarr: DynaBox,
         if previous is None:
             if 'profileId' not in values:
                 values['profileId'] = default_profile
-            changes.append(MovieChange(values, None, position))
+            changes.append(MovieChange(values, False, position))
         elif has_changed_fields(previous, values):
-            changes.append(MovieChange(values, (previous['movie_file_id'], previous['path']), position))
+            changes.append(MovieChange(values, True, position))
     deleted = list(current.keys() - retained) if complete else []
     if not complete:
         logging.warning('BAZARR Skipping movie deletion because Radarr returned unidentified movies.')
@@ -226,11 +225,11 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
         change = plan.changes.pop()
         jobs_queue.update_job_progress(job_id=job_id, progress_value=change.position,
                                        progress_message=change.values['title'])
-        if change.previous_file is None:
+        if not change.existing:
             add_movie(change.values)
             added += 1
         else:
-            update_movie(change.values, previous_file=change.previous_file)
+            update_movie(change.values)
             updated += 1
         del change
     trace(f'Skipped {plan.missing_count} file missing movies out of {plan.movie_count}')
