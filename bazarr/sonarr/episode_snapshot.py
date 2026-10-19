@@ -75,10 +75,6 @@ class EpisodeSyncPlan:
     skipped_count: int
 
 
-def _integer(value: JsonValue) -> TypeGuard[int]:
-    return type(value) is int
-
-
 def _language(value: JsonValue) -> bool:
     return isinstance(value, dict) and 'name' in value and (value['name'] is None or isinstance(value['name'], str))
 
@@ -87,9 +83,9 @@ def is_episode_file(value: JsonValue) -> TypeGuard[EpisodeFile]:
     if not isinstance(value, dict):
         return False
     file_id, path, size = value.get('id'), value.get('path'), value.get('size')
-    if not (_integer(file_id) and file_id > 0
+    if not (type(file_id) is int and file_id > 0
             and isinstance(path, str) and path.strip()
-            and _integer(size) and size >= 0):
+            and type(size) is int and size >= 0):
         return False
     quality = value.get('quality')
     if not isinstance(quality, dict):
@@ -97,7 +93,7 @@ def is_episode_file(value: JsonValue) -> TypeGuard[EpisodeFile]:
     definition = quality.get('quality')
     if not isinstance(definition, dict) or not isinstance(definition.get('name'), str):
         return False
-    if 'resolution' in definition and not _integer(definition['resolution']):
+    if 'resolution' in definition and type(definition['resolution']) is not int:
         return False
     if 'sceneName' in value and value['sceneName'] is not None and not isinstance(value['sceneName'], str):
         return False
@@ -121,19 +117,19 @@ def is_episode(value: JsonValue) -> TypeGuard[Episode]:
     if not isinstance(value, dict):
         return False
     for key in ('id', 'seriesId', 'seasonNumber', 'episodeNumber'):
-        if not _integer(value.get(key)):
+        if type(value.get(key)) is not int:
             return False
     episode_id, series_id = value['id'], value['seriesId']
-    if not _integer(episode_id) or not _integer(series_id) or episode_id <= 0 or series_id <= 0:
+    if type(episode_id) is not int or type(series_id) is not int or episode_id <= 0 or series_id <= 0:
         return False
     if not isinstance(value.get('title'), str):
         return False
     if not isinstance(value.get('hasFile'), bool) or not isinstance(value.get('monitored'), bool):
         return False
     for key in ('absoluteEpisodeNumber', 'tvdbId'):
-        if key in value and value[key] is not None and not _integer(value[key]):
+        if key in value and value[key] is not None and type(value[key]) is not int:
             return False
-    if 'episodeFileId' in value and not _integer(value['episodeFileId']):
+    if 'episodeFileId' in value and type(value['episodeFileId']) is not int:
         return False
     if 'episodeFile' in value and value['episodeFile'] is not None and not is_episode_file(value['episodeFile']):
         return False
