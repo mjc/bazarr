@@ -3,6 +3,7 @@
 import datetime
 import operator
 import itertools
+from typing import Literal
 
 from dateutil import rrule
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
@@ -14,11 +15,20 @@ from ..utils import authenticate
 
 api_ns_history_stats = Namespace('History Statistics', description='Get history statistics')
 
+TimeFrame = Literal['week', 'month', 'trimester', 'year']
+TIMEFRAMES: tuple[TimeFrame, ...] = ('week', 'month', 'trimester', 'year')
+TIMEFRAME_DELAYS: dict[TimeFrame, int] = {
+    'year': 364 * 24 * 60 * 60,
+    'trimester': 90 * 24 * 60 * 60,
+    'month': 30 * 24 * 60 * 60,
+    'week': 6 * 24 * 60 * 60,
+}
+
 
 @api_ns_history_stats.route('history/stats')
 class HistoryStats(Resource):
     get_request_parser = reqparse.RequestParser()
-    get_request_parser.add_argument('timeFrame', type=str, default='month',
+    get_request_parser.add_argument('timeFrame', type=str, default='month', choices=TIMEFRAMES,
                                     help='Timeframe to get stats for. Must be in ["week", "month", "trimester", '
                                          '"year"]')
     get_request_parser.add_argument('action', type=str, default='All', help='Action type to filter for.')
@@ -46,20 +56,12 @@ class HistoryStats(Resource):
     def get(self):
         """Get history statistics"""
         args = self.get_request_parser.parse_args()
-        timeframe = args.get('timeFrame')
+        timeframe: TimeFrame = args['timeFrame']
         action = args.get('action')
         provider = args.get('provider')
         language = args.get('language')
 
-        # timeframe must be in ['week', 'month', 'trimester', 'year']
-        if timeframe == 'year':
-            delay = 364 * 24 * 60 * 60
-        elif timeframe == 'trimester':
-            delay = 90 * 24 * 60 * 60
-        elif timeframe == 'month':
-            delay = 30 * 24 * 60 * 60
-        elif timeframe == 'week':
-            delay = 6 * 24 * 60 * 60
+        delay = TIMEFRAME_DELAYS[timeframe]
 
         now = datetime.datetime.now()
         past = now - datetime.timedelta(seconds=delay)
