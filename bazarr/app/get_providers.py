@@ -14,6 +14,7 @@ import re
 from zoneinfo import ZoneInfo
 from requests import ConnectionError
 from subzero.language import Language
+from subzero.cache_backends.file import SZFileBackend
 from subliminal_patch.exceptions import (TooManyRequests, APIThrottled, ParseResponseError, IPAddressBlocked,
                                          MustGetBlacklisted, SearchLimitReached, ProviderError, ForbiddenError)
 from subliminal.exceptions import DownloadLimitExceeded, ServiceUnavailable, AuthenticationError, ConfigurationError
@@ -59,13 +60,16 @@ def midnight_gmt_limit_reset_timedelta():
     return time_until_midnight(timezone=ZoneInfo('Etc/GMT')) + datetime.timedelta(minutes=15)
 
 
-VALID_THROTTLE_EXCEPTIONS = (TooManyRequests, DownloadLimitExceeded, ServiceUnavailable, APIThrottled,
+VALID_THROTTLE_EXCEPTIONS: tuple[type[Exception], ...] = (TooManyRequests, DownloadLimitExceeded, ServiceUnavailable, APIThrottled,
                              ParseResponseError, IPAddressBlocked)
 VALID_COUNT_EXCEPTIONS = ('TooManyRequests', 'ServiceUnavailable', 'APIThrottled', requests.exceptions.Timeout,
                           requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, socket.timeout)
 
 
-def provider_throttle_map():
+ThrottlePolicy = tuple[datetime.timedelta, str]
+
+
+def provider_throttle_map() -> dict[str, dict[type[Exception], ThrottlePolicy]]:
     return {
         "default": {
             TooManyRequests: (datetime.timedelta(hours=1), "1 hour"),
@@ -416,16 +420,18 @@ def _handle_mgb(name, exception, ids, language):
     blacklist_subtitle(name, exception.id, exception.media_type, ids, language)
 
 
-def provider_throttle(name, exception, ids=None, language=None):
+def provider_throttle(name: str, exception: Exception, ids: dict[str, int | None] | None = None,
+                      language: Language | None = None) -> None:
     if isinstance(exception, MustGetBlacklisted) and isinstance(ids, dict) and isinstance(language, Language):
         return _handle_mgb(name, exception, ids, language)
 
-    cls = getattr(exception, "__class__")
-    cls_name = getattr(cls, "__name__")
+    cls = type(exception)
+    cls_name = cls.__name__
     if cls not in VALID_THROTTLE_EXCEPTIONS:
         for valid_cls in VALID_THROTTLE_EXCEPTIONS:
-            if isinstance(cls, valid_cls):
+            if isinstance(exception, valid_cls):
                 cls = valid_cls
+                break
 
     throttle_data = provider_throttle_map().get(name, provider_throttle_map()["default"]).get(cls, None) or \
                     provider_throttle_map()["default"].get(cls, None)
@@ -440,11 +446,13 @@ def provider_throttle(name, exception, ids=None, language=None):
     if cls_name not in VALID_COUNT_EXCEPTIONS or throttled_count(name):
         if cls_name == 'ValueError' and isinstance(exception.args, tuple) and len(exception.args) and exception.args[
             0].startswith('unsupported pickle protocol'):
-            for fn in subliminal_cache_region.backend.all_filenames:
-                try:
-                    os.remove(fn)
-                except (IOError, OSError):
-                    logging.debug("Couldn't remove cache file: %s", os.path.basename(fn))
+            backend = subliminal_cache_region.backend
+            if isinstance(backend, SZFileBackend):
+                for fn in backend.all_filenames:
+                    try:
+                        os.remove(fn)
+                    except (IOError, OSError):
+                        logging.debug("Couldn't remove cache file: %s", os.path.basename(fn))
         else:
             tp[name] = (cls_name, throttle_until, throttle_description)
             set_throttled_providers(str(tp))
