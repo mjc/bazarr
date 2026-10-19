@@ -6,21 +6,18 @@ import logging
 import subliminal_patch
 import pretty
 import time
-import socket
-import requests
 import traceback
 import re
 
-from zoneinfo import ZoneInfo
-from requests import ConnectionError
 from subzero.language import Language
-from subliminal_patch.exceptions import (TooManyRequests, APIThrottled, ParseResponseError, IPAddressBlocked,
-                                         MustGetBlacklisted, SearchLimitReached, ProviderError, ForbiddenError)
-from subliminal.exceptions import DownloadLimitExceeded, ServiceUnavailable, AuthenticationError, ConfigurationError
+from subzero.cache_backends.file import SZFileBackend
+from subliminal_patch.exceptions import MustGetBlacklisted
 from subliminal import region as subliminal_cache_region
 from subliminal_patch.extensions import provider_registry
 
 from app.get_args import args
+from app.provider_throttling import (ThrottleCounter, ThrottlePolicy, record_failure, reset_failure_counts,
+                                     resolve_throttle_policy)
 from app.config import settings
 from languages.get_languages import CustomLanguage
 from app.event_handler import event_stream
@@ -32,118 +29,10 @@ from utilities.analytics import event_tracker
 _TRACEBACK_RE = re.compile(r'File "(.*?providers[\\/].*?)", line (\d+)')
 
 
-def time_until_midnight(timezone: ZoneInfo) -> datetime.timedelta:
-    """
-    Get timedelta until midnight.
-    """
-    now_in_tz = datetime.datetime.now(tz=timezone)
-    midnight = now_in_tz.replace(hour=0, minute=0, second=0, microsecond=0) + \
-               datetime.timedelta(days=1)
-    return midnight - now_in_tz
-
-
-# Titulky resets its download limits at the start of a new day from its perspective - the Europe/Prague timezone
-# Needs to convert to offset-naive dt
-def titulky_limit_reset_timedelta():
-    return time_until_midnight(timezone=ZoneInfo('Europe/Prague'))
-
-
-# LegendasDivx reset its searches limit at approximately midnight, Lisbon time, every day. We wait 1 more hours just
-# to be sure.
-def legendasdivx_limit_reset_timedelta():
-    return time_until_midnight(timezone=ZoneInfo('Europe/Lisbon')) + datetime.timedelta(minutes=60)
-
-
-# Get timedelta until midnight GMT
-def midnight_gmt_limit_reset_timedelta():
-    return time_until_midnight(timezone=ZoneInfo('Etc/GMT')) + datetime.timedelta(minutes=15)
-
-
-VALID_THROTTLE_EXCEPTIONS = (TooManyRequests, DownloadLimitExceeded, ServiceUnavailable, APIThrottled,
-                             ParseResponseError, IPAddressBlocked)
-VALID_COUNT_EXCEPTIONS = ('TooManyRequests', 'ServiceUnavailable', 'APIThrottled', requests.exceptions.Timeout,
-                          requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, socket.timeout)
-
-
-def provider_throttle_map():
-    return {
-        "default": {
-            TooManyRequests: (datetime.timedelta(hours=1), "1 hour"),
-            DownloadLimitExceeded: (datetime.timedelta(hours=3), "3 hours"),
-            ServiceUnavailable: (datetime.timedelta(minutes=20), "20 minutes"),
-            APIThrottled: (datetime.timedelta(minutes=10), "10 minutes"),
-            ParseResponseError: (datetime.timedelta(hours=6), "6 hours"),
-            requests.exceptions.Timeout: (datetime.timedelta(hours=1), "1 hour"),
-            socket.timeout: (datetime.timedelta(hours=1), "1 hour"),
-            requests.exceptions.ConnectTimeout: (datetime.timedelta(hours=1), "1 hour"),
-            requests.exceptions.ReadTimeout: (datetime.timedelta(hours=1), "1 hour"),
-            ConfigurationError: (datetime.timedelta(hours=12), "12 hours"),
-            PermissionError: (datetime.timedelta(hours=12), "12 hours"),
-            requests.exceptions.ProxyError: (datetime.timedelta(hours=1), "1 hour"),
-            AuthenticationError: (datetime.timedelta(hours=12), "12 hours"),
-        },
-        "opensubtitlescom": {
-            TooManyRequests: (datetime.timedelta(minutes=1), "1 minute"),
-            DownloadLimitExceeded: (datetime.timedelta(hours=6), "6 hours"),
-            ProviderError: (datetime.timedelta(minutes=1), "1 minute"),
-        },
-        "addic7ed": {
-            DownloadLimitExceeded: (datetime.timedelta(hours=3), "3 hours"),
-            TooManyRequests: (datetime.timedelta(minutes=5), "5 minutes"),
-            IPAddressBlocked: (datetime.timedelta(hours=1), "1 hours"),
-        },
-        "titlovi": {
-            TooManyRequests: (datetime.timedelta(minutes=5), "5 minutes"),
-        },
-        "titrari": {
-            TooManyRequests: (datetime.timedelta(minutes=10), "10 minutes"),
-        },
-        "titulky": {
-            TooManyRequests: (datetime.timedelta(minutes=1), "1 minute"),
-            DownloadLimitExceeded: (
-                titulky_limit_reset_timedelta(),
-                f"{titulky_limit_reset_timedelta().seconds // 3600 + 1} hours")
-        },
-        "legendasdivx": {
-            TooManyRequests: (datetime.timedelta(hours=3), "3 hours"),
-            DownloadLimitExceeded: (
-                legendasdivx_limit_reset_timedelta(),
-                f"{legendasdivx_limit_reset_timedelta().seconds // 3600 + 1} hours"),
-            IPAddressBlocked: (
-                legendasdivx_limit_reset_timedelta(),
-                f"{legendasdivx_limit_reset_timedelta().seconds // 3600 + 1} hours"),
-            SearchLimitReached: (
-                legendasdivx_limit_reset_timedelta(),
-                f"{legendasdivx_limit_reset_timedelta().seconds // 3600 + 1} hours"),
-        },
-        "whisperai": {
-            ConnectionError: (datetime.timedelta(minutes=5), "5 minutes"),
-        },
-        "regielive": {
-            APIThrottled: (datetime.timedelta(hours=1), "1 hour"),
-            TooManyRequests: (datetime.timedelta(minutes=5), "5 minutes"),
-            ProviderError: (datetime.timedelta(minutes=10), "10 minutes"),
-        },
-        "subsource": {
-            APIThrottled: (datetime.timedelta(minutes=10), "10 minutes"),
-            AuthenticationError: (datetime.timedelta(hours=1), "1 hour"),
-            ForbiddenError: (datetime.timedelta(minutes=15), "15 minutes"),
-            TooManyRequests: (datetime.timedelta(hours=1), "1 hour"),
-        },
-        "subdl": {
-            ProviderError: (datetime.timedelta(hours=1), "1 hour"),
-            DownloadLimitExceeded: (
-                midnight_gmt_limit_reset_timedelta(),
-                f"{midnight_gmt_limit_reset_timedelta().seconds // 3600 + 1} hours"),
-            APIThrottled: (datetime.timedelta(minutes=15), "15 minutes"),
-        }
-    }
-
-
 PROVIDERS_FORCED_OFF = ["addic7ed", "tvsubtitles", "legendasdivx", "napiprojekt", "shooter",
                         "hosszupuska", "supersubtitles", "titlovi", "assrt"]
 
-throttle_count = {}
+throttle_count: dict[str, ThrottleCounter] = {}
 
 
 def provider_pool():
@@ -416,49 +305,40 @@ def _handle_mgb(name, exception, ids, language):
     blacklist_subtitle(name, exception.id, exception.media_type, ids, language)
 
 
-def provider_throttle(name, exception, ids=None, language=None):
-    if isinstance(exception, MustGetBlacklisted) and isinstance(ids, dict) and isinstance(language, Language):
-        return _handle_mgb(name, exception, ids, language)
+def provider_throttle(name: str, exception: Exception, ids: dict[str, int | None] | None = None,
+                      language: Language | None = None) -> None:
+    if isinstance(exception, MustGetBlacklisted) and ids is not None and language is not None:
+        _handle_mgb(name, exception, ids, language)
+        return
 
-    cls = getattr(exception, "__class__")
-    cls_name = getattr(cls, "__name__")
-    if cls not in VALID_THROTTLE_EXCEPTIONS:
-        for valid_cls in VALID_THROTTLE_EXCEPTIONS:
-            if isinstance(cls, valid_cls):
-                cls = valid_cls
-
-    throttle_data = provider_throttle_map().get(name, provider_throttle_map()["default"]).get(cls, None) or \
-                    provider_throttle_map()["default"].get(cls, None)
-
-    if throttle_data:
-        throttle_delta, throttle_description = throttle_data
-    else:
-        throttle_delta, throttle_description = datetime.timedelta(minutes=10), "10 minutes"
-
-    throttle_until = datetime.datetime.now() + throttle_delta
-
-    if cls_name not in VALID_COUNT_EXCEPTIONS or throttled_count(name):
-        if cls_name == 'ValueError' and isinstance(exception.args, tuple) and len(exception.args) and exception.args[
-            0].startswith('unsupported pickle protocol'):
-            for fn in subliminal_cache_region.backend.all_filenames:
+    if type(exception) is ValueError and exception.args and isinstance(exception.args[0], str) and \
+            exception.args[0].startswith('unsupported pickle protocol'):
+        backend = subliminal_cache_region.backend
+        if isinstance(backend, SZFileBackend):
+            for filename in backend.all_filenames:
                 try:
-                    os.remove(fn)
-                except (IOError, OSError):
-                    logging.debug("Couldn't remove cache file: %s", os.path.basename(fn))
-        else:
-            tp[name] = (cls_name, throttle_until, throttle_description)
-            set_throttled_providers(str(tp))
+                    os.remove(filename)
+                except OSError:
+                    logging.debug("Couldn't remove cache file: %s", os.path.basename(filename))
+        update_throttled_provider()
+        return
 
-            trac_info = _get_traceback_info(exception)
+    policy = resolve_throttle_policy(name, exception)
+    if policy.failures == 1 or throttled_count(name, policy):
+        cls_name = type(exception).__name__
+        throttle_until, throttle_description = policy.deadline(datetime.datetime.now())
+        tp[name] = (cls_name, throttle_until, throttle_description)
+        set_throttled_providers(str(tp))
 
-            logging.info("Throttling %s for %s, until %s, because of: %s. Exception info: %r", name,
-                         throttle_description, throttle_until.strftime("%y/%m/%d %H:%M"), cls_name, trac_info)
-            event_tracker.track_throttling(provider=name, exception_name=cls_name, exception_info=trac_info)
+        trac_info = _get_traceback_info(exception)
+        logging.info("Throttling %s for %s, until %s, because of: %s. Exception info: %r", name,
+                     throttle_description, throttle_until.strftime("%y/%m/%d %H:%M"), cls_name, trac_info)
+        event_tracker.track_throttling(provider=name, exception_name=cls_name, exception_info=trac_info)
 
     update_throttled_provider()
 
 
-def _get_traceback_info(exc: Exception):
+def _get_traceback_info(exc: Exception) -> str:
     traceback_str = " ".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
     clean_msg = str(exc).replace("\n", " ").strip()
@@ -479,31 +359,13 @@ def _get_traceback_info(exc: Exception):
     return message + extra
 
 
-def throttled_count(name):
-    global throttle_count
-    if name in list(throttle_count.keys()):
-        if 'count' in list(throttle_count[name].keys()):
-            for key, value in throttle_count[name].items():
-                if key == 'count':
-                    value += 1
-                    throttle_count[name]['count'] = value
-        else:
-            throttle_count[name] = {"count": 1, "time": (datetime.datetime.now() + datetime.timedelta(seconds=120))}
-
-    else:
-        throttle_count[name] = {"count": 1, "time": (datetime.datetime.now() + datetime.timedelta(seconds=120))}
-
-    # the window is evaluated first so that failures older than it cannot add up to a
-    # throttle: a provider that has been quiet since then starts counting again from one
-    if throttle_count[name]['time'] <= datetime.datetime.now():
-        throttle_count[name] = {"count": 1, "time": (datetime.datetime.now() + datetime.timedelta(seconds=120))}
-    count = throttle_count[name]['count']
-    if count >= 5:
-        # spent on the throttle being applied, so the next one starts from a clean count.
-        # Searches run in parallel and can report the same provider, hence the tolerant pop
-        throttle_count.pop(name, None)
+def throttled_count(name: str, policy: ThrottlePolicy = ThrottlePolicy(
+    datetime.timedelta(minutes=10), '10 minutes', failures=5,
+)) -> bool:
+    count = record_failure(throttle_count, name, policy)
+    if count >= policy.failures:
         return True
-    logging.info("Provider %s throttle count %s of 5, waiting 5sec and trying again", name, count)
+    logging.info("Provider %s throttle count %s of %s, waiting 5sec and trying again", name, count, policy.failures)
     time.sleep(5)
     return False
 
@@ -551,14 +413,15 @@ def list_throttled_providers():
     return throttled_providers
 
 
-def reset_throttled_providers(only_auth_or_conf_error=False):
+def reset_throttled_providers(only_auth_or_conf_error: bool = False) -> None:
+    removed = []
     for provider in list(tp):
         if only_auth_or_conf_error and tp[provider][0] not in ['AuthenticationError', 'ConfigurationError',
                                                                'PaymentRequired']:
             continue
         tp.pop(provider, None)
-        # the reset hands back a clean slate, including strikes not yet spent on a throttle
-        throttle_count.pop(provider, None)
+        removed.append(provider)
+    reset_failure_counts(throttle_count, removed if only_auth_or_conf_error else None)
     set_throttled_providers(str(tp))
     update_throttled_provider()
     if only_auth_or_conf_error:
