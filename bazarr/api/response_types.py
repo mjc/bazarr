@@ -1,5 +1,6 @@
 # coding=utf-8
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal, TypeAlias, TypedDict
 
@@ -53,16 +54,16 @@ class SeriesRow(MediaMetadata):
 
 class EpisodeRow(MediaMetadata):
     audio_language: str | None
-    missing_subtitles: list[str]
+    missing_subtitles: Sequence[str]
     monitored: str | None
 
 
 class MovieRow(SeriesRow):
-    missing_subtitles: list[str]
+    missing_subtitles: Sequence[str]
 
 
 class WantedRow(MediaMetadata):
-    missing_subtitles: list[str]
+    missing_subtitles: Sequence[str]
     tags: str | None
 
 

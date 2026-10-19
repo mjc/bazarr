@@ -7,10 +7,9 @@ from functools import reduce
 
 from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableMissingSubtitles, database, select, func
 from api.swaggerui import subtitles_language_model
-from subtitles.wanted_state import get_missing_languages_map
 
 from ..utils import authenticate
-from api.response_data import load_formatter
+from api.response_data import load_formatter, load_missing_languages
 
 api_ns_episodes_wanted = Namespace('Episodes Wanted', description='List episodes wanted subtitles')
 
@@ -81,14 +80,15 @@ class EpisodesWanted(Resource):
             stmt = stmt.order_by(TableEpisodes.sonarrEpisodeId.desc()).limit(length).offset(start)
 
         episodes = database.execute(stmt).all()
-        missing_languages = get_missing_languages_map('series', [x.sonarrEpisodeId for x in episodes])
+        media_ids = stmt.with_only_columns(TableEpisodes.sonarrEpisodeId, maintain_column_froms=True)
+        missing_languages = load_missing_languages('series', media_ids) if episodes else {}
         formatter = load_formatter()
 
         results = [formatter.wanted({
             'seriesTitle': x.seriesTitle,
             'episode_number': x.episode_number,
             'episodeTitle': x.episodeTitle,
-            'missing_subtitles': missing_languages[x.sonarrEpisodeId],
+            'missing_subtitles': missing_languages.get(x.sonarrEpisodeId, ()),
             'sonarrSeriesId': x.sonarrSeriesId,
             'sonarrEpisodeId': x.sonarrEpisodeId,
             'sceneName': x.sceneName,

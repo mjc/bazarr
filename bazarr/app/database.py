@@ -7,7 +7,7 @@ import os
 import flask_migrate
 import signal
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TypeVar
 
 from dogpile.cache import make_region
@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import List
 
 from sqlalchemy import create_engine, inspect, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, text, \
-    BigInteger, Boolean, Index, SQLColumnExpression
+    BigInteger, Boolean, Index, SQLColumnExpression, Select
 # importing here to be indirectly imported in other modules later
 from sqlalchemy import update, delete, select, func, UniqueConstraint  # noqa W0611
 from sqlalchemy.orm import scoped_session, sessionmaker, mapped_column, close_all_sessions, declarative_base, Mapped
@@ -835,7 +835,19 @@ def _sort_subtitles(subtitles: list[_Subtitle]) -> list[_Subtitle]:
 def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, list[SubtitleFile]]:
     if not media_ids:
         return {}
+    return _load_subtitles_map(media_type, (
+        media_ids[index:index + SUBTITLE_MAP_QUERY_BATCH_SIZE]
+        for index in range(0, len(media_ids), SUBTITLE_MAP_QUERY_BATCH_SIZE)
+    ))
 
+
+def get_subtitles_for_query(media_type: str, media_ids: Select[tuple[int]]) -> dict[int, list[SubtitleFile]]:
+    return _load_subtitles_map(media_type, (media_ids.correlate(None),))
+
+
+def _load_subtitles_map(
+    media_type: str, selections: Iterable[list[int] | Select[tuple[int]]],
+) -> dict[int, list[SubtitleFile]]:
     subtitles_by_media_id: dict[int, list[SubtitleFile]] = defaultdict(list)
     if media_type == "series":
         media_id_column = TableEpisodesSubtitles.sonarrEpisodeId
@@ -866,12 +878,10 @@ def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, list[S
     else:
         return {}
 
-    # Keep bulk list endpoints compatible with SQLite's historical variable limit.
-    for index in range(0, len(media_ids), SUBTITLE_MAP_QUERY_BATCH_SIZE):
-        media_id_chunk = media_ids[index:index + SUBTITLE_MAP_QUERY_BATCH_SIZE]
+    for selection in selections:
         rows = database.execute(
-            select(*subtitle_columns).where(media_id_column.in_(media_id_chunk))
-        ).all()
+            select(*subtitle_columns).where(media_id_column.in_(selection))
+        )
         for media_id, path, language, forced, hi, size, embedded_id, subtitle_id in rows:
             subtitles_by_media_id[media_id].append(
                 _subtitle_payload(path, language, forced, hi, size, embedded_id, subtitle_id, replace_path))

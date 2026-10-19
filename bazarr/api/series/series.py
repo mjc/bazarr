@@ -160,12 +160,23 @@ class Series(Resource):
         }, TableShows.sortTitle, sort_by, sort_order)
 
         if length > 0:
-            stmt = stmt.limit(length).offset(start)
+            stmt = stmt.order_by(TableShows.sonarrSeriesId).limit(length).offset(start)
 
         series = database.execute(stmt).all()
         formatter = load_formatter()
+        if (not length or length < 0) and missing is None:
+            # Unpaginated audio loading does not need the episode-count joins.
+            audio_ids = select(TableShows.sonarrSeriesId).where(TableShows.audio_language == '[]', *where_clauses)
+        else:
+            page_query = stmt.with_only_columns(TableShows.sonarrSeriesId, TableShows.audio_language,
+                                                maintain_column_froms=True)
+            if not length or length < 0:
+                page_query = page_query.order_by(None)
+            page = page_query.subquery()
+            audio_ids = select(page.c.sonarrSeriesId).where(page.c.audio_language == '[]')
         audio_by_series = load_series_audio_languages(
-            (x.sonarrSeriesId for x in series if x.audio_language == '[]'), formatter.audio_names)
+            audio_ids, formatter.audio_names,
+        ) if any(x.audio_language == '[]' for x in series) else {}
         results = [formatter.series({
             'tvdbId': x.tvdbId,
             'alternativeTitles': x.alternativeTitles,
@@ -187,7 +198,7 @@ class Series(Resource):
             'lastAired': x.lastAired,
             'episodeFileCount': x.episodeFileCount,
             'episodeMissingCount': x.episodeMissingCount,
-        }, episode_audio=audio_by_series.get(x.sonarrSeriesId)) for x in series]
+        }, episode_audio=audio_by_series.get(x.sonarrSeriesId, ())) for x in series]
 
         count_stmt = select(func.count()) \
             .select_from(TableShows) \

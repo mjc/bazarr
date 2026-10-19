@@ -2,12 +2,11 @@
 
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 
-from app.database import TableEpisodes, TableShows, database, select, get_subtitles_map
+from app.database import TableEpisodes, TableShows, database, select, get_subtitles_for_query
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
-from subtitles.wanted_state import get_missing_languages_map
 
 from ..utils import authenticate
-from api.response_data import load_formatter
+from api.response_data import load_formatter, load_missing_languages
 
 api_ns_episodes = Namespace('Episodes', description='List episodes metadata for specific series or episodes.')
 
@@ -62,28 +61,24 @@ class Episodes(Resource):
                 TableShows.profileId
             ).join(TableShows)
 
-        if len(episodeId) > 0:
-            stmt_query = database.execute(
-                stmt
-                .where(TableEpisodes.sonarrEpisodeId.in_(episodeId)))\
-                .all()
-        elif len(seriesId) > 0:
-            stmt_query = database.execute(
-                stmt
-                .where(TableEpisodes.sonarrSeriesId.in_(seriesId))
-                .order_by(TableEpisodes.season.desc(), TableEpisodes.episode.desc()))\
-                .all()
+        if episodeId:
+            stmt = stmt.where(TableEpisodes.sonarrEpisodeId.in_(episodeId))
+        elif seriesId:
+            stmt = stmt.where(TableEpisodes.sonarrSeriesId.in_(seriesId)) \
+                .order_by(TableEpisodes.season.desc(), TableEpisodes.episode.desc())
         else:
             return "Series or Episode ID not provided", 404
 
-        missing_languages = get_missing_languages_map('series', [x.sonarrEpisodeId for x in stmt_query])
-        subtitles_map = get_subtitles_map('series', [x.sonarrEpisodeId for x in stmt_query])
+        stmt_query = database.execute(stmt).all()
+        media_ids = stmt.with_only_columns(TableEpisodes.sonarrEpisodeId, maintain_column_froms=True).order_by(None)
+        missing_languages = load_missing_languages('series', media_ids) if stmt_query else {}
+        subtitles_map = get_subtitles_for_query('series', media_ids) if stmt_query else {}
         formatter = load_formatter(x.profileId for x in stmt_query)
 
         return marshal([formatter.episode({
                 'audio_language': x.audio_language,
                 'episode': x.episode,
-                'missing_subtitles': missing_languages[x.sonarrEpisodeId],
+                'missing_subtitles': missing_languages.get(x.sonarrEpisodeId, ()),
                 'monitored': x.monitored,
                 'path': x.path,
                 'season': x.season,
@@ -92,4 +87,4 @@ class Episodes(Resource):
                 'title': x.title,
                 'sceneName': x.sceneName,
                 'profileId': x.profileId,  # required to filter desired subtitles when settings.general.embedded_subs_show_desired
-                }, subtitles=subtitles_map.get(x.sonarrEpisodeId, [])) for x in stmt_query], self.get_response_model, envelope='data')
+                }, subtitles=subtitles_map.get(x.sonarrEpisodeId, ())) for x in stmt_query], self.get_response_model, envelope='data')

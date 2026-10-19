@@ -7,10 +7,9 @@ from functools import reduce
 
 from app.database import get_exclusion_clause, TableMovies, TableMissingSubtitles, database, select, func
 from api.swaggerui import subtitles_language_model
-from subtitles.wanted_state import get_missing_languages_map
 
 from api.utils import authenticate
-from api.response_data import load_formatter
+from api.response_data import load_formatter, load_missing_languages
 
 
 api_ns_movies_wanted = Namespace('Movies Wanted', description='List movies wanted subtitles')
@@ -71,12 +70,13 @@ class MoviesWanted(Resource):
             stmt = stmt.order_by(TableMovies.radarrId.desc()).limit(length).offset(start)
 
         movies = database.execute(stmt).all()
-        missing_languages = get_missing_languages_map('movie', [x.radarrId for x in movies])
+        media_ids = stmt.with_only_columns(TableMovies.radarrId, maintain_column_froms=True)
+        missing_languages = load_missing_languages('movie', media_ids) if movies else {}
         formatter = load_formatter()
 
         results = [formatter.wanted({
             'title': x.title,
-            'missing_subtitles': missing_languages[x.radarrId],
+            'missing_subtitles': missing_languages.get(x.radarrId, ()),
             'radarrId': x.radarrId,
             'sceneName': x.sceneName,
             'tags': x.tags,

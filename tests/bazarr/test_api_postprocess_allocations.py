@@ -6,6 +6,7 @@ from importlib import import_module
 
 import pytest
 from flask.testing import FlaskClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api import formatting, response_data
@@ -136,6 +137,7 @@ def test_history_does_not_load_unused_subtitles(
     for module in (app_database, history_module):
         monkeypatch.setattr(module, 'get_subtitles', reject_subtitle_lookup, raising=False)
         monkeypatch.setattr(module, 'get_subtitles_map', reject_subtitle_lookup, raising=False)
+        monkeypatch.setattr(module, 'get_subtitles_for_query', reject_subtitle_lookup, raising=False)
     monkeypatch.setattr(ast, 'literal_eval', reject_literal_eval)
 
     response = api_client.get(f'/api/{kind}/history', headers={'X-API-KEY': api_key})
@@ -200,7 +202,9 @@ def test_series_audio_is_loaded_before_formatting(
     memory_session.flush()
     monkeypatch.setattr(response_data, 'database', memory_session)
     monkeypatch.setattr(ast, 'literal_eval', reject_literal_eval)
-    audio = response_data.load_series_audio_languages([1], formatter.audio_names)
+    audio = response_data.load_series_audio_languages(
+        select(TableShows.sonarrSeriesId).where(TableShows.sonarrSeriesId == 1), formatter.audio_names,
+    )
 
     def reject_query() -> None:
         pytest.fail('Formatting must not load database rows')

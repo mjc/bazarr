@@ -1,10 +1,15 @@
 from flask.testing import FlaskClient
 from pytest import MonkeyPatch
 from pytest_mock import MockerFixture
+from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from api import formatting, response_data
 from app.database import TableEpisodes, TableShows
+
+
+def selected_series(*series_ids: int) -> Select[tuple[int]]:
+    return select(TableShows.sonarrSeriesId).where(TableShows.sonarrSeriesId.in_(series_ids))
 
 
 def add_series(session: Session, series_id: int, audio_language: str | None = '[]') -> None:
@@ -33,7 +38,7 @@ def test_repeated_episode_languages_are_parsed_once(
     parse = mocker.spy(formatting, 'parse_text_tuple')
     execute = mocker.spy(memory_session, 'execute')
 
-    result = response_data.load_series_audio_languages([1, 2], response_data.load_formatter().audio_names)
+    result = response_data.load_series_audio_languages(selected_series(1, 2), response_data.load_formatter().audio_names)
 
     assert {series_id: set(names) for series_id, names in result.items()} == {
         1: {'English', 'French'}, 2: {'English', 'French'},
@@ -42,13 +47,13 @@ def test_repeated_episode_languages_are_parsed_once(
     assert execute.call_count == 1
 
 
-def test_empty_request_does_not_query(memory_session: Session, monkeypatch: MonkeyPatch,
-                                     mocker: MockerFixture) -> None:
+def test_empty_selection_returns_no_languages(memory_session: Session, monkeypatch: MonkeyPatch,
+                                             mocker: MockerFixture) -> None:
     monkeypatch.setattr(response_data, 'database', memory_session)
     execute = mocker.spy(memory_session, 'execute')
 
-    assert response_data.load_series_audio_languages([], response_data.load_formatter().audio_names) == {}
-    execute.assert_not_called()
+    assert response_data.load_series_audio_languages(selected_series(), response_data.load_formatter().audio_names) == {}
+    assert execute.call_count == 1
 
 
 def test_invalid_and_empty_languages(memory_session: Session, monkeypatch: MonkeyPatch) -> None:
@@ -59,25 +64,30 @@ def test_invalid_and_empty_languages(memory_session: Session, monkeypatch: Monke
         add_episode(memory_session, episode_id, 1, languages)
     memory_session.commit()
 
-    result = response_data.load_series_audio_languages([1, 2], response_data.load_formatter().audio_names)
+    result = response_data.load_series_audio_languages(selected_series(1, 2), response_data.load_formatter().audio_names)
 
     assert set(result[1]) == {'English', None, ''}
-    assert result[2] == ()
+    assert 2 not in result
 
 
-def test_query_batches_large_series_lists(memory_session: Session, monkeypatch: MonkeyPatch,
-                                         mocker: MockerFixture) -> None:
+def test_large_series_selection_uses_one_query(memory_session: Session, monkeypatch: MonkeyPatch,
+                                             mocker: MockerFixture) -> None:
     monkeypatch.setattr(response_data, 'database', memory_session)
-    add_series(memory_session, 901)
+    memory_session.add_all([
+        TableShows(sonarrSeriesId=series_id, title='Show', path=f'/series/{series_id}')
+        for series_id in range(1, 902)
+    ])
+    memory_session.flush()
     add_episode(memory_session, 1, 901, "['French']")
     memory_session.commit()
     execute = mocker.spy(memory_session, 'execute')
 
-    result = response_data.load_series_audio_languages(list(range(1, 902)), response_data.load_formatter().audio_names)
+    result = response_data.load_series_audio_languages(select(TableShows.sonarrSeriesId),
+                                                       response_data.load_formatter().audio_names)
 
     assert result[901] == ('French',)
-    assert result[1] == ()
-    assert execute.call_count == 2
+    assert 1 not in result
+    assert execute.call_count == 1
 
 
 def test_next_request_observes_episode_updates(memory_session: Session, monkeypatch: MonkeyPatch) -> None:
@@ -85,17 +95,21 @@ def test_next_request_observes_episode_updates(memory_session: Session, monkeypa
     add_series(memory_session, 1)
     add_episode(memory_session, 1, 1, "['English']")
     memory_session.commit()
-    assert response_data.load_series_audio_languages([1], response_data.load_formatter().audio_names) == {1: ('English',)}
+    assert response_data.load_series_audio_languages(selected_series(1), response_data.load_formatter().audio_names) == {
+        1: ('English',),
+    }
 
     episode = memory_session.get(TableEpisodes, 1)
     assert episode is not None
     episode.audio_language = "['French']"
     memory_session.commit()
 
-    assert response_data.load_series_audio_languages([1], response_data.load_formatter().audio_names) == {1: ('French',)}
+    assert response_data.load_series_audio_languages(selected_series(1), response_data.load_formatter().audio_names) == {
+        1: ('French',),
+    }
 
 
-def test_series_list_batches_only_returned_fallbacks(
+def test_series_list_loads_only_returned_fallbacks(
     api_client: FlaskClient, api_key: str, memory_session: Session,
     monkeypatch: MonkeyPatch, mocker: MockerFixture,
 ) -> None:
@@ -131,7 +145,7 @@ def test_single_series_fallback_keeps_undefined_language_default(
     memory_session.commit()
 
     formatter = response_data.load_formatter()
-    languages = response_data.load_series_audio_languages([1], formatter.audio_names)
+    languages = response_data.load_series_audio_languages(selected_series(1), formatter.audio_names)
     result = formatter.series(
         {'sonarrSeriesId': 1, 'audio_language': '[]', 'tags': '[]', 'alternativeTitles': '[]', 'monitored': 'True'},
         episode_audio=languages[1],

@@ -1,10 +1,13 @@
 # coding=utf-8
 
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
+
+from sqlalchemy import Select
 
 from api.formatting import ResponseFormatter
 from app.config import base_url, settings
-from app.database import SUBTITLE_MAP_QUERY_BATCH_SIZE, TableEpisodes, database, get_desired_languages, select
+from app.database import TableEpisodes, TableMissingSubtitles, database, get_desired_languages, select
 from languages.custom_lang import CustomLanguage
 from languages.get_languages import language_from_alpha2
 from subliminal_patch import core
@@ -42,19 +45,30 @@ def load_formatter(profile_ids: Iterable[int | None] = ()) -> ResponseFormatter:
 
 
 def load_series_audio_languages(
-    series_ids: Iterable[int], parse: Callable[[str], tuple[str | None, ...]],
+    series_ids: Select[tuple[int]], parse: Callable[[str], tuple[str | None, ...]],
 ) -> dict[int, tuple[str | None, ...]]:
-    ids = list(dict.fromkeys(series_ids))
-    names: dict[int, set[str | None]] = {series_id: set() for series_id in ids}
-    for offset in range(0, len(ids), SUBTITLE_MAP_QUERY_BATCH_SIZE):
-        rows = database.execute(
-            select(TableEpisodes.sonarrSeriesId, TableEpisodes.audio_language)
-            .where(TableEpisodes.sonarrSeriesId.in_(ids[offset:offset + SUBTITLE_MAP_QUERY_BATCH_SIZE]))
-            .distinct()
-        )
-        for series_id, value in rows:
-            names[series_id].update(parse(value or '[]'))
+    names: dict[int, set[str | None]] = defaultdict(set)
+    rows = database.execute(
+        select(TableEpisodes.sonarrSeriesId, TableEpisodes.audio_language)
+        .where(TableEpisodes.sonarrSeriesId.in_(series_ids.correlate(None)))
+        .distinct()
+    )
+    for series_id, value in rows:
+        names[series_id].update(parse(value or '[]'))
     return {series_id: tuple(values) for series_id, values in names.items()}
+
+
+def load_missing_languages(media_type: str, media_ids: Select[tuple[int]]) -> dict[int, list[str]]:
+    languages: dict[int, list[str]] = defaultdict(list)
+    rows = database.execute(
+        select(TableMissingSubtitles.media_id, TableMissingSubtitles.language)
+        .where(TableMissingSubtitles.media_type == media_type)
+        .where(TableMissingSubtitles.media_id.in_(media_ids.correlate(None)))
+        .order_by(TableMissingSubtitles.id)
+    )
+    for media_id, language in rows:
+        languages[media_id].append(language)
+    return languages
 
 
 def load_history_languages(
