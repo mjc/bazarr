@@ -77,11 +77,11 @@ class Subtitle(Subtitle_):
         self.mods = mods
         self._is_valid = False
         self.use_original_format = original_format
-        self._og_format = None
+        self._og_format: str | None = None
         self.matches = set()
 
     @property
-    def format(self):
+    def format(self) -> str:
         if self.use_original_format and self._og_format is not None:
             logger.debug("Original format requested [%s]", self._og_format)
             return self._og_format
@@ -91,7 +91,7 @@ class Subtitle(Subtitle_):
 
     # Compatibility
     @format.setter
-    def format(self, val):
+    def format(self, val: str) -> None:
         self._og_format = val
 
     def __repr__(self):

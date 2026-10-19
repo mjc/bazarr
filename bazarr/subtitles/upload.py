@@ -9,7 +9,7 @@ from subzero.language import Language
 from subliminal_patch.core import save_subtitles
 from subliminal_patch.subtitle import Subtitle
 from subliminal_patch.score import MAX_SCORES
-from pysubs2.formats import get_format_identifier
+from .upload_format import configure_upload_format
 
 from languages.get_languages import language_from_alpha3, alpha2_from_alpha3, alpha3_from_alpha2
 from app.config import settings, get_array_from
@@ -135,10 +135,7 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
     if settings.general.utf8_encode:
         sub.set_encoding("utf-8")
 
-    try:
-        sub.format = (get_format_identifier(os.path.splitext(filename)[1]),)
-    except Exception:
-        pass
+    configure_upload_format(sub, filename)
 
     saved_subtitles = []
     try:
