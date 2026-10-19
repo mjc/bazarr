@@ -40,7 +40,7 @@ def test_invalid_profiles_remain_administratively_visible(raw):
     assert [profile['profileId'] for profile in profiles] == [1, 2]
     assert profiles[0]['items'] == []
     assert profiles[0]['profileError']
-    assert profiles[0]['_profileSource']['items'] == raw
+    assert profiles[0]['profileSource']['items'] == raw
     assert preserved_profile_sources(profiles, catalog)[1].items == raw
 
 

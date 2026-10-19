@@ -185,7 +185,7 @@ class ProfileSource:
                 'profileType': self.profile_type, 'items': [], 'mustContain': [], 'mustNotContain': [],
                 'originalFormat': self.original_format, 'tag': self.tag,
                 'profileError': error or 'Invalid language profile',
-                '_profileSource': {'items': self.items, 'mustContain': self.must_contain,
+                'profileSource': {'items': self.items, 'mustContain': self.must_contain,
                                    'mustNotContain': self.must_not_contain},
             }
             if self.profile_type == 'enhanced':
@@ -235,14 +235,14 @@ def preserved_profile_sources(payload: JsonValue, catalog: ProfileCatalog) -> di
     for profile in payload:
         if not isinstance(profile, dict):
             raise ValueError('A languages profile must be an object')
-        marker = profile.get('_profileSource')
+        marker = profile.get('profileSource')
         if marker is None:
             continue
         profile_id = profile.get('profileId')
         if not isinstance(profile_id, int) or isinstance(profile_id, bool):
             raise ValueError('Invalid profile id')
         source = sources.get(profile_id)
-        if source is None or source.administrative(catalog.get(source.profile_id), catalog.errors.get(source.profile_id)).get('_profileSource') != marker:
+        if source is None or source.administrative(catalog.get(source.profile_id), catalog.errors.get(source.profile_id)).get('profileSource') != marker:
             raise ValueError('The language profile changed. Reload settings before saving.')
         groups = profile.get('groups')
         items = profile.get('items')

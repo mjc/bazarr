@@ -136,22 +136,33 @@ def test_basic_profile_without_type_is_still_saved_as_basic(saved, api_client, a
 
 @pytest.mark.parametrize('raw_items,raw_contains', [('invalid JSON', None), ('[null]', "['WEB']"),
                                                      ('[]', 'invalid text list')])
-def test_invalid_profile_roundtrip_preserves_raw_fields(saved, api_client, api_key, raw_items, raw_contains):
+@pytest.mark.parametrize('profile_type', ['basic', 'enhanced'])
+def test_invalid_profile_roundtrip_preserves_raw_fields(saved, api_client, api_key, raw_items, raw_contains,
+                                                       profile_type):
     session, calls = saved
     session.add(TableLanguagesProfiles(profileId=1, name='Needs repair', items=raw_items,
-                                       mustContain=raw_contains, mustNotContain="['x265']"))
+                                       mustContain=raw_contains, mustNotContain="['x265']",
+                                       profileType=profile_type))
+    session.add(TableLanguagesProfiles(profileId=2, name='Other profile', items='[]'))
     session.commit()
     app_database.invalidate_profiles()
     listed = api_client.get('/api/system/languages/profiles', headers={'X-API-KEY': api_key})
     profiles = listed.get_json()
     assert profiles[0]['profileId'] == 1
     assert profiles[0]['items'] == []
+    assert profiles[0]['profileSource'] == {'items': raw_items, 'mustContain': raw_contains,
+                                            'mustNotContain': "['x265']"}
+    if profile_type == 'enhanced':
+        profiles[0]['items'] = {'groups': profiles[0].pop('groups')}
+    profiles[1]['name'] = 'Changed name'
     response = _post_profiles(api_client, api_key, profiles)
     assert response.status_code == 204
-    row = session.execute(select(TableLanguagesProfiles)).scalar_one()
+    row = session.execute(select(TableLanguagesProfiles).where(TableLanguagesProfiles.profileId == 1)).scalar_one()
     assert row.items == raw_items
     assert row.mustContain == raw_contains
     assert row.mustNotContain == "['x265']"
+    other = session.execute(select(TableLanguagesProfiles).where(TableLanguagesProfiles.profileId == 2)).scalar_one()
+    assert other.name == 'Changed name'
 
 
 def test_stale_invalid_profile_roundtrip_is_rejected_before_settings_write(saved, api_client, api_key):
