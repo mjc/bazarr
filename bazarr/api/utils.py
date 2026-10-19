@@ -36,40 +36,20 @@ class _PostprocessContext:
     desired_languages: dict[int | str, frozenset[str]] = field(default_factory=dict)
     language_equals: core._LanguageEquals | None = None
 
-    def parse_list(self, value: JsonValue) -> list[str | None]:
+    def parse_list(self, value: JsonValue) -> tuple[str | None, ...]:
         if not isinstance(value, str):
             raise ValueError('Expected a serialized text list')
         if value not in self.text_lists:
-            parsed: list[str | None] = []
-            for entry in parse_text_list(value):
-                if entry is not None and not isinstance(entry, str):
-                    raise ValueError('Expected strings or None in text list')
-                parsed.append(entry)
-            self.text_lists[value] = tuple(parsed)
-        return list(self.text_lists[value])
+            self.text_lists[value] = tuple(parse_text_list(value))
+        return self.text_lists[value]
 
-    def format_audio_languages(self, value: JsonValue) -> list[JsonValue]:
-        languages: list[str | None]
-        if isinstance(value, str):
-            try:
-                languages = self.parse_list(value)
-            except ValueError:
-                languages = []
-        elif isinstance(value, list):
-            languages = []
-            for language in value:
-                if language is not None and not isinstance(language, str):
-                    raise ValueError('Expected audio language names')
-                languages.append(language)
-        else:
-            raise ValueError('Expected audio language names')
-        key = tuple(languages)
-        if key not in self.audio_languages:
-            self.audio_languages[key] = [
+    def format_audio_languages(self, languages: tuple[str | None, ...]) -> list[JsonValue]:
+        if languages not in self.audio_languages:
+            self.audio_languages[languages] = [
                 {'name': language['name'], 'code2': language['code2'], 'code3': language['code3']}
                 for language in get_audio_profile_languages(languages)
             ]
-        return [dict(language) for language in self.audio_languages[key]]
+        return [dict(language) for language in self.audio_languages[languages]]
 
     def desired_language_codes(self, profile_id: JsonValue) -> frozenset[str]:
         if not isinstance(profile_id, (int, str)):
@@ -91,10 +71,7 @@ class _PostprocessContext:
                     if custom:
                         expanded_desired_lang_codes.add(custom.alpha2)
                     else:
-                        code2 = lang_obj.alpha2
-                        if not isinstance(code2, str):
-                            raise ValueError('Expected an alpha-2 language code')
-                        expanded_desired_lang_codes.add(code2)
+                        expanded_desired_lang_codes.add(str(lang_obj.alpha2))
                 else:
                     expanded_desired_lang_codes.add(str(lang_obj))
             self.desired_languages[profile_id] = frozenset(expanded_desired_lang_codes)
@@ -249,9 +226,13 @@ def postprocess(item: JsonObject, subtitles: list[JsonObject] | None = None) -> 
     if item.get('audio_language'):
         if item.get('sonarrSeriesId') and not item.get('sonarrEpisodeId') and item['audio_language'] == '[]':
             languages = get_series_audio_languages([item['sonarrSeriesId']])
-            item['audio_language'] = context.format_audio_languages(languages[item['sonarrSeriesId']])
+            item['audio_language'] = context.format_audio_languages(tuple(languages[item['sonarrSeriesId']]))
         else:
-            item['audio_language'] = context.format_audio_languages(item['audio_language'])
+            try:
+                audio_languages = context.parse_list(item['audio_language'])
+            except ValueError:
+                audio_languages = ()
+            item['audio_language'] = context.format_audio_languages(audio_languages)
 
     # Make sure profileId is a valid None value but only if it exists in item
     if item.get('profileId', False) in None_Keys:
@@ -259,7 +240,7 @@ def postprocess(item: JsonObject, subtitles: list[JsonObject] | None = None) -> 
 
     # Parse alternate titles
     if item.get('alternativeTitles'):
-        item['alternativeTitles'] = [value for value in context.parse_list(item['alternativeTitles'])]
+        item['alternativeTitles'] = list(context.parse_list(item['alternativeTitles']))
     else:
         item['alternativeTitles'] = []
 
@@ -276,13 +257,12 @@ def postprocess(item: JsonObject, subtitles: list[JsonObject] | None = None) -> 
 
             # Filter subtitles: keep if code2 is in expanded desired languages or if it has a path (external)
             subtitles = [x for x in subtitles
-                         if isinstance(x, dict) and
-                         (x.get('code2') in expanded_desired_lang_codes or x.get('path'))]
+                         if x.get('code2') in expanded_desired_lang_codes or x.get('path')]
         else:
-            subtitles = [x for x in subtitles if isinstance(x, dict) and x.get('path')]
+            subtitles = [x for x in subtitles if x.get('path')]
 
     subtitles = sorted(subtitles, key=lambda x: (x.get('name', ''), x.get('forced', False)))
-    item['subtitles'] = [subtitle for subtitle in subtitles]
+    item['subtitles'] = list(subtitles)
 
     # Parse missing subtitles
     if item.get('missing_subtitles'):
@@ -300,7 +280,7 @@ def postprocess(item: JsonObject, subtitles: list[JsonObject] | None = None) -> 
 
     # Parse tags
     if item.get('tags') is not None:
-        item['tags'] = [value for value in context.parse_list(item.get('tags', '[]'))]
+        item['tags'] = list(context.parse_list(item.get('tags', '[]')))
     else:
         item['tags'] = []
     if item.get('monitored'):

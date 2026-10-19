@@ -88,11 +88,7 @@ def test_request_lists_are_parsed_once_and_cannot_share_mutations(
 
     def record_parse(value: str) -> list[str | None]:
         calls.append(value)
-        result: list[str | None] = []
-        for entry in parse_text_list(value):
-            assert entry is None or isinstance(entry, str)
-            result.append(entry)
-        return result
+        return parse_text_list(value)
 
     monkeypatch.setattr(utils, 'parse_text_list', record_parse)
     app = Flask(__name__)
@@ -110,9 +106,9 @@ def test_request_lists_are_parsed_once_and_cannot_share_mutations(
 
 def test_audio_formatting_is_reused_without_sharing_output(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(utils, 'settings', CountingSettings())
-    calls: list[list[str | None]] = []
+    calls: list[tuple[str | None, ...]] = []
 
-    def format_audio(languages: list[str | None]) -> list[dict[str, str | None]]:
+    def format_audio(languages: tuple[str | None, ...]) -> list[dict[str, str | None]]:
         calls.append(languages)
         return [{'name': 'English', 'code2': 'en', 'code3': 'eng'}]
 
@@ -127,10 +123,10 @@ def test_audio_formatting_is_reused_without_sharing_output(monkeypatch: pytest.M
         language['name'] = 'changed'
         second = utils.postprocess({'audio_language': "['English']"}, subtitles=[])
         assert second['audio_language'] == [{'name': 'English', 'code2': 'en', 'code3': 'eng'}]
-    assert calls == [['English']]
+    assert calls == [('English',)]
     with app.test_request_context():
         utils.postprocess({'audio_language': "['English']"}, subtitles=[])
-    assert calls == [['English'], ['English']]
+    assert calls == [('English',), ('English',)]
 
 
 def test_calls_without_a_request_do_not_keep_display_settings(monkeypatch: pytest.MonkeyPatch) -> None:

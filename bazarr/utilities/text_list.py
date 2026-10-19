@@ -2,6 +2,10 @@
 
 import logging
 import unicodedata
+from typing import TypeVar, overload
+
+
+_T = TypeVar('_T')
 
 
 logger = logging.getLogger(__name__)
@@ -20,7 +24,7 @@ _STRING_ESCAPES = {
 }
 
 
-def _decode_repr_string(value):
+def _decode_repr_string(value: str) -> str:
     """
     Decode the body of a Python string literal by interpreting its backslash
     escape sequences.
@@ -95,7 +99,7 @@ def _decode_repr_string(value):
     return "".join(decoded)
 
 
-def _parse_repr_list(value):
+def _parse_repr_list(value: str) -> list[str | None]:
     """
     Parse a string containing the ``repr`` of a Python list whose elements are
     either ``None`` or string literals, and reconstruct the original list.
@@ -128,7 +132,7 @@ def _parse_repr_list(value):
     if not value.startswith('[') or not value.endswith(']'):
         raise ValueError
 
-    values = []
+    values: list[str | None] = []
     body = value[1:-1].strip()
     if not body:
         return values
@@ -179,7 +183,15 @@ def _parse_repr_list(value):
     return values
 
 
-def parse_text_list(value):
+@overload
+def parse_text_list(value: str) -> list[str | None]: ...
+
+
+@overload
+def parse_text_list(value: list[_T] | tuple[_T, ...]) -> list[_T]: ...
+
+
+def parse_text_list(value: str | list[_T] | tuple[_T, ...]) -> list[str | None] | list[_T]:
     """
     Normalize a value into a list.
 
@@ -205,12 +217,7 @@ def parse_text_list(value):
     if not isinstance(value, str):
         raise ValueError
 
-    parsed = _parse_repr_list(value)
-
-    if not isinstance(parsed, list):
-        raise ValueError
-
-    return parsed
+    return _parse_repr_list(value)
 
 
 def parse_text_list_or_default(value, default=None):
