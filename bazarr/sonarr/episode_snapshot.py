@@ -6,19 +6,7 @@ from typing import TypeGuard, TypedDict
 from typing_extensions import NotRequired
 
 from utilities.json_types import JsonValue
-
-
-class Language(TypedDict):
-    name: str | None
-
-
-class Quality(TypedDict):
-    name: str
-    resolution: NotRequired[int]
-
-
-class FileQuality(TypedDict):
-    quality: Quality
+from utilities.arr_types import Language, FileQuality
 
 
 class MediaInfo(TypedDict):

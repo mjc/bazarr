@@ -3,29 +3,47 @@
 import logging
 from hashlib import sha256
 import semver
+from dataclasses import dataclass
 
 from dogpile.cache import make_region
 from dynaconf.utils.boxing import DynaBox
 
 from app.config import settings, empty_values
-from utilities.arr import discover_arr_version, parse_arr_version
+from utilities.arr import ArrVersion, discover_arr_version, parse_arr_version
 
 region = make_region().configure('dogpile.cache.memory')
 
 
+@dataclass(frozen=True)
+class RadarrCapabilities:
+    version: ArrVersion
+
+    @property
+    def legacy(self) -> bool:
+        return self.version.numbers[0] == 0
+
+
+@dataclass(frozen=True)
+class RadarrConnection:
+    api_url: str
+    apikey: str
+    timeout: int
+    capabilities: RadarrCapabilities
+
+
 class GetRadarrInfo:
     @staticmethod
-    def version() -> str:
+    def version(configuration: DynaBox | None = None) -> str:
         if not settings.general.use_radarr:
             return ''
-        configuration = settings.radarr
-        base_url = url_radarr(configuration)
+        radarr: DynaBox = settings.radarr if configuration is None else configuration
+        base_url = url_radarr(radarr)
         cache_key = 'radarr_version:' + sha256(
-            f'{base_url}\0{configuration.apikey}'.encode()).hexdigest()
+            f'{base_url}\0{radarr.apikey}'.encode()).hexdigest()
         cached_version = region.get(cache_key, expiration_time=60)
         if isinstance(cached_version, str) and cached_version and cached_version != 'unknown':
             return cached_version
-        version = discover_arr_version(base_url, configuration.apikey, int(configuration.http_timeout))
+        version = discover_arr_version(base_url, radarr.apikey, int(radarr.http_timeout))
         result = version if version is not None else 'unknown'
         region.set(cache_key, result)
         logging.debug('BAZARR got this Radarr version from its API: %s', result)
@@ -34,6 +52,10 @@ class GetRadarrInfo:
     def semver(self) -> semver.Version | None:
         version = parse_arr_version(self.version())
         return None if version is None else version.semver()
+
+    def capabilities(self, configuration: DynaBox | None = None) -> RadarrCapabilities | None:
+        version = parse_arr_version(self.version() if configuration is None else self.version(configuration))
+        return None if version is None else RadarrCapabilities(version)
 
     def is_legacy(self) -> bool:
         """
@@ -59,6 +81,15 @@ class GetRadarrInfo:
 
 
 get_radarr_info = GetRadarrInfo()
+
+
+def get_radarr_connection(configuration: DynaBox | None = None) -> RadarrConnection | None:
+    radarr: DynaBox = settings.radarr if configuration is None else configuration
+    capabilities = get_radarr_info.capabilities(radarr)
+    if capabilities is None:
+        return None
+    api_url = url_radarr(radarr) + ('/api/' if capabilities.legacy else '/api/v3/')
+    return RadarrConnection(api_url, radarr.apikey, int(radarr.http_timeout), capabilities)
 
 
 def url_radarr(configuration: DynaBox | None = None) -> str:

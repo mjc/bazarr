@@ -102,3 +102,13 @@ def test_version_cache_reads_do_not_extend_expiration(monkeypatch, app):
     monkeypatch.setattr(cache_region, 'time', SimpleNamespace(time=lambda: now + 61))
     assert service.version() == '4.0.16.2944'
     assert discover.call_count == 2
+
+
+@pytest.mark.parametrize('version,legacy', [('0.2.0.1', True), ('3.0.0.1', False), ('5.0.0.1', False)])
+def test_radarr_capabilities_resolve_version_once(monkeypatch, version, legacy):
+    read = Mock(return_value=version)
+    monkeypatch.setattr(radarr.get_radarr_info, 'version', read)
+    capabilities = radarr.get_radarr_info.capabilities()
+    assert capabilities is not None
+    assert capabilities.legacy is legacy
+    read.assert_called_once()

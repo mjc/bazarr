@@ -171,15 +171,10 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
     if len(episodes_to_update):
         for updated_episode in episodes_to_update:
             try:
-                previous_episode_data = database.execute(
-                    select(TableEpisodes.episode_file_id, TableEpisodes.path)
-                    .where(TableEpisodes.sonarrEpisodeId == updated_episode['sonarrEpisodeId'])
-                ).first()
-
+                previous_episode_data = current_episodes_in_db.get(updated_episode['sonarrEpisodeId'])
                 previous_episode_id = updated_episode['sonarrEpisodeId']
-                previous_episode_file_id = previous_episode_data.episode_file_id if previous_episode_data else None
-                previous_episode_path = previous_episode_data.path if previous_episode_data else None
-
+                previous_episode_file_id = previous_episode_data['episode_file_id'] if previous_episode_data else None
+                previous_episode_path = previous_episode_data['path'] if previous_episode_data else None
                 updated_episode['updated_at_timestamp'] = datetime.now()
                 database.execute(update(TableEpisodes)
                                  .values(updated_episode)

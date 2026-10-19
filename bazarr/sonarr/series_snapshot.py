@@ -8,18 +8,6 @@ from typing_extensions import NotRequired
 from utilities.json_types import JsonValue
 
 
-class SeriesTag(TypedDict):
-    id: int
-    label: str
-
-
-def is_series_tags(value: JsonValue) -> TypeGuard[list[SeriesTag]]:
-    return isinstance(value, list) and all(
-        isinstance(tag, dict) and type(tag.get('id')) is int and isinstance(tag.get('label'), str)
-        for tag in value
-    )
-
-
 class SeriesImage(TypedDict):
     coverType: str
     url: str

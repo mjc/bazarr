@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from tests.helpers.arr_fixtures import radarr_connection
 from unittest.mock import Mock
 
 import pytest
@@ -33,6 +34,7 @@ def test_sync_snapshot_omits_cached_video_metadata_and_preserves_other_columns(
             episodes.sync_episodes(series_id=1)
     elif media_type == 'movie':
         model = TableMovies
+        monkeypatch.setattr(movies, 'get_radarr_connection', lambda *args: radarr_connection())
         memory_session.add(TableMovies(radarrId=1, tmdbId=1, path='/movie.mkv', title='Movie',
                                        ffprobe_cache=cached_metadata))
         monkeypatch.setattr(movies, 'database', SimpleNamespace(execute=execute))
@@ -41,9 +43,9 @@ def test_sync_snapshot_omits_cached_video_metadata_and_preserves_other_columns(
         monkeypatch.setattr(movies, 'check_radarr_rootfolder', lambda: None)
         monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: [])
         for name in ('get_profile_list', 'get_tags', 'get_language_profiles'):
-            monkeypatch.setattr(movies, name, lambda: [])
+            monkeypatch.setattr(movies, name, lambda **kwargs: [])
         monkeypatch.setattr(movies, 'jobs_queue', SimpleNamespace(
-            get_job=lambda **kwargs: None, update_job_progress=lambda **kwargs: None))
+            get_job=lambda **kwargs: SimpleNamespace(cancel_event=SimpleNamespace(is_set=lambda: False)), update_job_progress=lambda **kwargs: None))
         with pytest.raises(SnapshotFound):
             movies.update_movies(job_id=1)
     else:

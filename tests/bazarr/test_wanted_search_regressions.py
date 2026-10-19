@@ -1,4 +1,5 @@
 from languages.registry import LanguageRegistry
+from tests.helpers.arr_fixtures import sonarr_connection, radarr_connection, series_payload, movie_payload
 from tests.helpers.profile_records import profile_record
 """Exercise the runtime ORM and autocommit engine, rather than table proxies."""
 from collections.abc import Mapping, Sequence
@@ -334,10 +335,11 @@ def configure_sync(monkeypatch, module, payload):
     movie_sync = module is radarr
     service = 'radarr' if movie_sync else 'sonarr'
     monkeypatch.setattr(module, f'check_{service}_rootfolder', lambda: None)
+    monkeypatch.setattr(module, f'get_{service}_connection', lambda *args: radarr_connection() if movie_sync else sonarr_connection())
     monkeypatch.setattr(module, 'get_movies_from_radarr_api' if movie_sync else 'get_series_from_sonarr_api',
                         lambda *args, **kwargs: payload)
     for name in ['get_profile_list', 'get_tags', 'get_language_profiles']:
-        monkeypatch.setattr(module, name, lambda: [])
+        monkeypatch.setattr(module, name, lambda **kwargs: [])
     monkeypatch.setattr(module, 'event_stream', lambda *args, **kwargs: None)
     monkeypatch.setattr(module.jobs_queue, 'update_job_progress', lambda *args, **kwargs: None)
     monkeypatch.setattr(module.jobs_queue, 'update_job_name', lambda *args, **kwargs: None)
@@ -349,6 +351,9 @@ def configure_sync(monkeypatch, module, payload):
         monkeypatch.setattr(module.settings.radarr, 'sync_only_monitored_movies', False)
     else:
         monkeypatch.setattr(module.settings.sonarr, 'sync_only_monitored_series', False)
+        monkeypatch.setattr(module.settings.general, 'serie_default_enabled', False)
+        monkeypatch.setattr(module.settings.general, 'parse_embedded_audio_track', False)
+        monkeypatch.setattr(module.settings.general, 'serie_tag_enabled', False)
 
 
 @pytest.mark.parametrize('movie_file', [None, {}, {'id': 1}, {'path': '/movie.mkv'},
@@ -378,8 +383,7 @@ def test_unidentified_entries_disable_deletion_sweep(runtime_database, monkeypat
 def test_incomplete_sync_still_processes_identifiable_entries(runtime_database, monkeypatch, media_type):
     _, session = runtime_database
     table, id_column = seed_media(session, media_type)
-    good = {'id': 8, 'title': 'New media', 'hasFile': True,
-            'movieFile': {'id': 8, 'path': '/new.mkv', 'size': MINIMUM_VIDEO_SIZE + 1}}
+    good = movie_payload(8, 'New media', '/new.mkv', file_id=8, size=MINIMUM_VIDEO_SIZE + 1) if media_type == 'movie' else series_payload(8, 'New media')
     module = radarr if media_type == 'movie' else sonarr
     configure_sync(monkeypatch, module, [None, good])
     processed = []

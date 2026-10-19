@@ -4,13 +4,15 @@ import datetime
 from types import SimpleNamespace
 
 import pytest
-from tests.helpers.arr_fixtures import series_payload, sonarr_connection
+from tests.helpers.arr_fixtures import series_payload, sonarr_connection, movie_payload, radarr_connection
 
 
 @pytest.fixture(autouse=True)
 def configured_sonarr_connection(monkeypatch):
     from sonarr.sync import series
     monkeypatch.setattr(series, 'get_sonarr_connection', lambda *args: sonarr_connection())
+    from radarr.sync import movies
+    monkeypatch.setattr(movies, 'get_radarr_connection', lambda *args: radarr_connection())
 
 
 class _Result:
@@ -284,8 +286,8 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     from radarr.sync import movies as movies_sync
 
     movie_rows = [
-        {"radarrId": 1, "title": "Movie 1", "path": "/movies/one.mkv"},
-        {"radarrId": 2, "title": "Old Movie 2", "path": "/movies/two.mkv"},
+        {"radarrId": 1, "title": "Movie 1", "path": "/movies/one.mkv", "movie_file_id": 101, "monitored": "True"},
+        {"radarrId": 2, "title": "Old Movie 2", "path": "/movies/two.mkv", "movie_file_id": 102, "monitored": "True"},
     ]
     updated_movies = []
 
@@ -318,11 +320,11 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
         ),
     )
     monkeypatch.setattr(movies_sync, "check_radarr_rootfolder", lambda: None)
-    monkeypatch.setattr(movies_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(movies_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(movies_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(movies_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(movies_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(movies_sync, "movieParser", _movie_parser)
-    monkeypatch.setattr(movies_sync, "update_movie", lambda movie: updated_movies.append(movie))
+    monkeypatch.setattr(movies_sync, "update_movie", lambda movie, **kwargs: updated_movies.append(movie))
     monkeypatch.setattr(movies_sync, "event_stream", lambda **kwargs: None)
     monkeypatch.setattr(
         movies_sync,
@@ -337,21 +339,9 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     monkeypatch.setattr(
         movies_sync,
         "get_movies_from_radarr_api",
-        lambda apikey_radarr: [
-            {
-                "id": 1,
-                "title": "Movie 1",
-                "hasFile": True,
-                "monitored": True,
-                "movieFile": {"id": 101, "path": "/movies/one.mkv", "size": MINIMUM_VIDEO_SIZE + 1},
-            },
-            {
-                "id": 2,
-                "title": "New Movie 2",
-                "hasFile": True,
-                "monitored": True,
-                "movieFile": {"id": 102, "path": "/movies/two.mkv", "size": MINIMUM_VIDEO_SIZE + 1},
-            },
+        lambda apikey_radarr, **kwargs: [
+            movie_payload(1, 'Movie 1', '/movies/one.mkv', file_id=101, size=MINIMUM_VIDEO_SIZE + 1),
+            movie_payload(2, 'New Movie 2', '/movies/two.mkv', file_id=102, size=MINIMUM_VIDEO_SIZE + 1),
         ],
     )
 

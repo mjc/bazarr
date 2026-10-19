@@ -5,7 +5,8 @@ import gc
 import requests
 from dynaconf.utils.boxing import DynaBox
 from sonarr.info import SonarrConnection, get_sonarr_connection
-from sonarr.series_snapshot import SeriesSyncPlan, SeriesValues, is_series, is_series_tags
+from sonarr.series_snapshot import SeriesSyncPlan, SeriesValues, is_series
+from utilities.arr_types import is_arr_tags
 
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
@@ -73,7 +74,7 @@ def _prepare_series_sync(connection: SonarrConnection, sonarr: DynaBox,
         return SeriesSyncPlan([], set(), existing_ids, True, 0, 0)
     audio_profiles = get_profile_list(connection=connection)
     tags = get_tags(connection=connection)
-    if audio_profiles is None or not is_series_tags(tags):
+    if audio_profiles is None or not is_arr_tags(tags):
         return None
     language_profiles = get_language_profiles()
     retained: set[int] = set()
@@ -182,7 +183,7 @@ def update_one_series(series_id: int | None, action: str, is_signalr: bool = Fal
             tagsDict = get_tags(connection=connection)
         if language_profiles is None:
             language_profiles = get_language_profiles()
-        if audio_profiles is None or not is_series_tags(tagsDict):
+        if audio_profiles is None or not is_arr_tags(tagsDict):
             return
         if series_data is None:
             try:

@@ -12,7 +12,8 @@ from languages.get_languages import audio_language_from_name
 from utilities.path_mappings import path_mappings
 from utilities.video_analyzer import embedded_audio_reader
 from sonarr.info import SonarrCapabilities, get_sonarr_info
-from sonarr.series_snapshot import Series, SeriesTag, SeriesValues
+from sonarr.series_snapshot import Series, SeriesValues
+from utilities.arr_types import ArrTag
 from sonarr.episode_snapshot import Episode, EpisodeValues
 
 from .converter import SonarrFormatVideoCodec, SonarrFormatAudioCodec
@@ -28,7 +29,7 @@ def get_matching_profile(tags, language_profiles):
     return matching_profile
 
 
-def seriesParser(show: Series, action: str, tags_dict: list[SeriesTag], language_profiles, serie_default_profile: int | None, audio_profiles,
+def seriesParser(show: Series, action: str, tags_dict: list[ArrTag], language_profiles, serie_default_profile: int | None, audio_profiles,
                  *, general: DynaBox | None = None, capabilities: SonarrCapabilities | None = None) -> SeriesValues:
     overview = show['overview'] if 'overview' in show else ''
     poster = ''
@@ -139,11 +140,9 @@ def episodeParser(episode: Episode, parse_embedded_audio_track: bool | None = No
         language = file.get('language')
         languages = file.get('languages')
         if language:
-            name = language['name']
-            audio_language = [None if name is None else audio_language_from_name(name)]
+            audio_language = [audio_language_from_name(language['name'])]
         elif languages:
-            audio_language = [None if language['name'] is None else audio_language_from_name(language['name'])
-                              for language in languages]
+            audio_language = [audio_language_from_name(language['name']) for language in languages]
         else:
             series_id = episode['seriesId']
             if audio_languages is None:

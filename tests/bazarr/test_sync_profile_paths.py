@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from tests.helpers.arr_fixtures import series_payload, sonarr_connection
+from tests.helpers.arr_fixtures import series_payload, sonarr_connection, movie_payload, radarr_connection
 
 import radarr.sync.movies as radarr_movies
 import radarr.sync.utils as radarr_utils
@@ -14,6 +14,7 @@ import subtitles.sync as subtitle_sync
 @pytest.fixture(autouse=True)
 def configured_sonarr_connection(monkeypatch):
     monkeypatch.setattr(sonarr_series, 'get_sonarr_connection', lambda *args: sonarr_connection())
+    monkeypatch.setattr(radarr_movies, 'get_radarr_connection', lambda *args: radarr_connection())
 
 
 def _response(payload):
@@ -138,7 +139,7 @@ def test_radarr_movie_sync_finalizes_job_for_non_list_payload(monkeypatch, sync_
     monkeypatch.setattr(
         radarr_movies,
         "get_movies_from_radarr_api",
-        lambda apikey_radarr: {"unexpected": "payload"},
+        lambda apikey_radarr, **kwargs: {"unexpected": "payload"},
     )
     monkeypatch.setattr(
         radarr_movies.database,
@@ -170,14 +171,14 @@ def test_radarr_movie_sync_skips_file_payloads_without_movie_id(monkeypatch, syn
     monkeypatch.setattr(radarr_movies.settings.general, "enable_strm_support", False)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
     monkeypatch.setattr(radarr_movies.settings.radarr, "sync_only_monitored_movies", False)
-    monkeypatch.setattr(radarr_movies, "get_profile_list", lambda: [])
-    monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
+    monkeypatch.setattr(radarr_movies, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(radarr_movies, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
     monkeypatch.setattr(
         radarr_movies,
         "get_movies_from_radarr_api",
-        lambda apikey_radarr: [{"hasFile": True, "title": "Missing ID", "movieFile": {"size": 999999}}],
+        lambda apikey_radarr, **kwargs: [{"hasFile": True, "title": "Missing ID", "movieFile": {"size": 999999}}],
     )
     monkeypatch.setattr(radarr_movies.database, "execute",
                         lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter(())))
@@ -208,15 +209,15 @@ def test_radarr_movie_sync_handles_malformed_movie_file_fields(monkeypatch, sync
     monkeypatch.setattr(radarr_movies.settings.general, "enable_strm_support", True)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
     monkeypatch.setattr(radarr_movies.settings.radarr, "sync_only_monitored_movies", False)
-    monkeypatch.setattr(radarr_movies, "get_profile_list", lambda: [])
-    monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
+    monkeypatch.setattr(radarr_movies, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(radarr_movies, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
     monkeypatch.setattr(radarr_movies, "trace", traces.append)
     monkeypatch.setattr(
         radarr_movies,
         "get_movies_from_radarr_api",
-        lambda apikey_radarr: [
+        lambda apikey_radarr, **kwargs: [
             {"id": 1, "hasFile": True, "title": "Bad Size", "movieFile": {"size": "bad", "path": None}},
             {"id": 2, "hasFile": True, "title": "Missing Path", "movieFile": {"size": None}},
         ],
@@ -251,15 +252,15 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
     monkeypatch.setattr(radarr_movies.settings.general, "enable_strm_support", False)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
     monkeypatch.setattr(radarr_movies.settings.radarr, "sync_only_monitored_movies", False)
-    monkeypatch.setattr(radarr_movies, "get_profile_list", lambda: [])
-    monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
+    monkeypatch.setattr(radarr_movies, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(radarr_movies, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
     monkeypatch.setattr(radarr_movies, "trace", traces.append)
     monkeypatch.setattr(
         radarr_movies,
         "get_movies_from_radarr_api",
-        lambda apikey_radarr: [
+        lambda apikey_radarr, **kwargs: [
             {
                 "id": 1,
                 "hasFile": True,
@@ -310,16 +311,16 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
     monkeypatch.setattr(radarr_movies.settings.general, "enable_strm_support", False)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
     monkeypatch.setattr(radarr_movies.settings.radarr, "sync_only_monitored_movies", False)
-    monkeypatch.setattr(radarr_movies, "get_profile_list", lambda: [])
-    monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
+    monkeypatch.setattr(radarr_movies, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(radarr_movies, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
     monkeypatch.setattr(radarr_movies, "trace", traces.append)
     monkeypatch.setattr(
         radarr_movies,
         "get_movies_from_radarr_api",
-        lambda apikey_radarr: [
-            {"id": 1, "hasFile": True, "title": "Good Movie", "movieFile": {"id": 10, "size": 999999999, "path": "/movies/good.mkv"}},
+        lambda apikey_radarr, **kwargs: [
+            movie_payload(1, "Good Movie", "/movies/good.mkv"),
             {"id": 2, "hasFile": True, "title": "Bad Movie", "movieFile": {"size": "bad", "path": None}},
             {"hasFile": True, "title": "Missing ID", "movieFile": {"id": 11, "size": 999999999, "path": "/movies/missing.mkv"}},
             "bad-entry",
@@ -336,7 +337,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
         lambda movie, **kwargs: parsed_movies.append(movie["title"]) or {"radarrId": movie["id"], "title": movie["title"], "path": movie["movieFile"]["path"]},
     )
     monkeypatch.setattr(radarr_movies, "add_movie", lambda movie: parsed_movies.append(f"added:{movie['title']}"))
-    monkeypatch.setattr(radarr_movies, "update_movie", lambda movie: parsed_movies.append(f"updated:{movie['title']}"))
+    monkeypatch.setattr(radarr_movies, "update_movie", lambda movie, **kwargs: parsed_movies.append(f"updated:{movie['title']}"))
     monkeypatch.setattr(
         radarr_movies.jobs_queue,
         "update_job_progress",
