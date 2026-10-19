@@ -1,11 +1,12 @@
+from bazarr.subtitles.tools.translate.core.translation_request import TranslationRequest
 from bazarr.subtitles.tools.translate.services import lingarr_translator
 
 
 def _build_service(tmp_path):
-    return lingarr_translator.LingarrTranslatorService(
+    return lingarr_translator.LingarrTranslatorService(TranslationRequest(
         source_srt_file=str(tmp_path / "input.srt"),
         dest_srt_file=str(tmp_path / "output.srt"),
-        lang_obj=type("L", (), {"alpha2": "fr"})(),
+        target_language="fr",
         to_lang="fra",
         from_lang="en",
         media_type="movie",
@@ -16,7 +17,7 @@ def _build_service(tmp_path):
         sonarr_series_id=1,
         sonarr_episode_id=1,
         radarr_id=1,
-    )
+    ))
 
 
 def test_lingarr_request_skips_blank_lines_and_preserves_positions(mocker, tmp_path):

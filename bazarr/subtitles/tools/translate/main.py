@@ -7,6 +7,7 @@ import os
 from subliminal_patch.core import get_subtitle_path
 from subzero.language import Language
 
+from .core.translation_request import TranslationRequest
 from .core.translator_utils import validate_translation_params, convert_language_codes, get_translation_extension
 from .services.translator_factory import TranslatorFactory, resolve_translator_name
 from languages.get_languages import alpha3_from_alpha2
@@ -90,13 +91,16 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
 
         logging.debug(f'Using translator type: {translator_type}')
 
-        translator = TranslatorFactory.create_translator(
-            translator_type,
+        target_language = lang_obj.alpha2
+        target_code3 = alpha3_from_alpha2(to_lang)
+        if not isinstance(target_language, str) or target_code3 is None:
+            return None
+        request = TranslationRequest(
             source_srt_file=source_srt_file,
             dest_srt_file=dest_srt_file,
-            lang_obj=lang_obj,
+            target_language=target_language,
             from_lang=from_lang,
-            to_lang=alpha3_from_alpha2(to_lang),
+            to_lang=target_code3,
             media_type=media_type,
             video_path=video_path,
             orig_to_lang=orig_to_lang,
@@ -106,6 +110,8 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
             sonarr_episode_id=sonarr_episode_id,
             radarr_id=radarr_id
         )
+
+        translator = TranslatorFactory.create_translator(translator_type, request)
 
         logging.debug(f'Created translator instance: {translator.__class__.__name__}')
         if translator is None:

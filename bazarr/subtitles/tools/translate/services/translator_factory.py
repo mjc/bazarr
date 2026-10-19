@@ -1,6 +1,8 @@
 # coding=utf-8
 from typing import Literal, Protocol
 
+from ..core.translation_request import TranslationRequest
+
 TranslatorName = Literal['google_translate', 'gemini', 'lingarr']
 
 
@@ -22,18 +24,18 @@ def resolve_translator_name(value: object) -> TranslatorName | None:
 class TranslatorFactory:
 
     @classmethod
-    def create_translator(cls, translator_type: TranslatorName, **kwargs) -> Translator | None:
+    def create_translator(cls, translator_type: TranslatorName, request: TranslationRequest) -> Translator | None:
         if translator_type == 'google_translate':
             from .google_translator import GoogleTranslatorService
-            return GoogleTranslatorService(**kwargs)
+            return GoogleTranslatorService(request)
 
         elif translator_type == 'gemini':
             from .gemini_translator import GeminiTranslatorService
-            return GeminiTranslatorService(**kwargs)
+            return GeminiTranslatorService(request)
 
         elif translator_type == 'lingarr':
             from .lingarr_translator import LingarrTranslatorService
-            return LingarrTranslatorService(**kwargs)
+            return LingarrTranslatorService(request)
 
         else:
             return None

@@ -1,5 +1,5 @@
 [tool.basedpyright]
-include = ["bazarr/utilities", "bazarr/subtitles/tools/translate/services/translator_factory.py", "bazarr/subtitles/tools/translate/main.py"]
+include = ["bazarr/utilities", "bazarr/subtitles/tools/translate/services", "bazarr/subtitles/tools/translate/core/translation_request.py", "bazarr/subtitles/tools/translate/main.py"]
 pythonVersion = "3.10"
 pythonPlatform = "All"
 extraPaths = ["bazarr", "custom_libs", "libs"]

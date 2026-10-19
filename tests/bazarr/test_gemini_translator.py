@@ -1,3 +1,4 @@
+from bazarr.subtitles.tools.translate.core.translation_request import TranslationRequest
 import time
 
 import pytest
@@ -6,9 +7,10 @@ from bazarr.subtitles.tools.translate.services import gemini_translator
 
 
 def _build_service():
-    return gemini_translator.GeminiTranslatorService(
+    return gemini_translator.GeminiTranslatorService(TranslationRequest(
         source_srt_file="input.srt",
         dest_srt_file="output.srt",
+        target_language="en",
         to_lang="eng",
         media_type="series",
         sonarr_series_id=1,
@@ -19,7 +21,7 @@ def _build_service():
         video_path="/tmp/video.mkv",
         from_lang="en",
         orig_to_lang="eng",
-    )
+    ))
 
 
 def test_get_batch_size_uses_configured_value(mocker):

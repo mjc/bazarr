@@ -1,8 +1,9 @@
 from bazarr.subtitles.tools.translate import main
 
 
-def _translate(mocker, *, translator_result):
+def _translate(mocker, *, translator_result, target_language="fr"):
     lang_obj = mocker.Mock()
+    lang_obj.alpha2 = target_language
     lang_obj.subzero_language.return_value = "fr"
     translator = mocker.Mock()
     translator.translate.return_value = translator_result
@@ -40,4 +41,12 @@ def test_translation_skips_postprocessing_when_service_returns_none(mocker):
 
     translator.translate.assert_called_once_with(job_id=1)
     assert result is None
+    postprocess.assert_not_called()
+
+
+def test_translation_skips_service_and_postprocessing_without_target_language(mocker):
+    result, translator, postprocess = _translate(mocker, translator_result="/media/video.fr.srt",
+                                                target_language=None)
+    assert result is None
+    translator.translate.assert_not_called()
     postprocess.assert_not_called()
