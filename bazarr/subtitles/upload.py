@@ -37,11 +37,6 @@ from plex.operations import plex_set_movie_added_date_now, plex_set_episode_adde
 from jellyfin.operations import jellyfin_refresh_item
 
 
-def _get_profile_original_format(profile_id):
-    profile = get_profile(profile_id)
-    return bool(profile and profile.get("originalFormat", 0))
-
-
 def _get_audio_language_payload(audio_languages):
     empty_audio_language = {'name': '', 'code2': '', 'code3': ''}
     if not isinstance(audio_languages, list) or not audio_languages:
@@ -101,7 +96,7 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
             .first()
 
         if episode_metadata:
-            use_original_format = _get_profile_original_format(episode_metadata.profileId)
+            profile_id = episode_metadata.profileId
         else:
             return
     else:
@@ -112,10 +107,12 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
             .first()
 
         if movie_metadata:
-            use_original_format = _get_profile_original_format(movie_metadata.profileId)
+            profile_id = movie_metadata.profileId
         else:
             return
 
+    profile = get_profile(profile_id)
+    use_original_format = bool(profile and profile.get("originalFormat", 0))
     audio_language = _get_audio_language_payload(get_audio_profile_languages(audio_language))
 
     sub = Subtitle(

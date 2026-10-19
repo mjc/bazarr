@@ -8,10 +8,11 @@ from datetime import datetime, timedelta
 from functools import reduce
 from sqlalchemy import and_, or_
 
+from app.language_profiles import Profile
 from app.config import settings
 from constants import HI_EXCLUDED
 from app.database import (get_exclusion_clause, get_audio_profile_languages, TableShows, TableEpisodes, TableMovies,
-     TableHistory, TableHistoryMovie, database, select, func, get_profile, TableEpisodesSubtitles,
+     TableHistory, TableHistoryMovie, database, select, func, list_profiles, TableEpisodesSubtitles,
      TableMoviesSubtitles)
 from app.jobs_queue import jobs_queue, JobCanceled
 from app.get_providers import get_providers
@@ -48,6 +49,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
     else:
         job = jobs_queue.get_job(job_id=job_id)
 
+    profiles = {profile['profileId']: profile for profile in list_profiles()}
     episodes_to_upgrade = get_upgradable_episode_subtitles()
     episodes_data = [{
         'id': x.id,
@@ -90,7 +92,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
         .join(TableEpisodes, onclause=TableHistory.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId)
         .join(TableEpisodesSubtitles, onclause=TableHistory.sonarrEpisodeId == TableEpisodesSubtitles.sonarrEpisodeId, isouter=True)
         .where(TableEpisodesSubtitles.path.is_not(None)))
-    .all() if _language_still_desired(x.language, x.profileId) and x.video_path == x.path]
+    .all() if _language_still_desired(x.language, profiles.get(x.profileId)) and x.video_path == x.path]
 
     for item in episodes_data:
         # do not consider subtitles that do not exist on disk anymore
@@ -115,7 +117,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
         jobs_queue.update_job_progress(job_id=job_id, progress_value='max')
 
     for i, episode in enumerate(episodes_data, start=1):
-        if job.cancel_event.is_set():
+        if job is not None and job.cancel_event.is_set():
             raise JobCanceled
 
         providers_list = get_providers()
@@ -133,7 +135,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
         language, is_forced, is_hi = parse_language_string(episode['language'])
         if not language:
             continue
-        if is_hi and not _is_hi_required(language, episode['profileId']):
+        if is_hi and not _is_hi_required(language, profiles.get(episode['profileId'])):
             is_hi = 'False'
 
         audio_language = resolve_audio_language(get_audio_profile_languages(episode['audio_language']), fallback=None)
@@ -156,8 +158,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
                                          job_id=job_id))
 
         if result:
-            if isinstance(result, list) and len(result):
-                result = result[0]
+            result = result[0]
             store_subtitles(episode['sonarrEpisodeId'])
             history_log(3, episode['sonarrSeriesId'], episode['sonarrEpisodeId'], result,
                         upgraded_from_id=episode['original_id'] or episode['id'])  # we use or to handle None values on initial upgrade
@@ -175,6 +176,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
     else:
         job = jobs_queue.get_job(job_id=job_id)
 
+    profiles = {profile['profileId']: profile for profile in list_profiles()}
     movies_to_upgrade = get_upgradable_movies_subtitles()
     movies_data = [{
         'id': x.id,
@@ -208,7 +210,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
         .join(TableMovies, onclause=TableHistoryMovie.radarrId == TableMovies.radarrId)
         .join(TableMoviesSubtitles, onclause=TableHistoryMovie.radarrId == TableMoviesSubtitles.radarrId, isouter=True)
         .where(TableMoviesSubtitles.path.is_not(None)))
-    .all() if _language_still_desired(x.language, x.profileId) and x.video_path == x.path]
+    .all() if _language_still_desired(x.language, profiles.get(x.profileId)) and x.video_path == x.path]
 
     for item in movies_data:
         # do not consider subtitles that do not exist on disk anymore
@@ -233,7 +235,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
         jobs_queue.update_job_progress(job_id=job_id, progress_value='max')
 
     for i, movie in enumerate(movies_data, start=1):
-        if job.cancel_event.is_set():
+        if job is not None and job.cancel_event.is_set():
             raise JobCanceled
 
         providers_list = get_providers()
@@ -247,7 +249,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
         language, is_forced, is_hi = parse_language_string(movie['language'])
         if not language:
             continue
-        if is_hi and not _is_hi_required(language, movie['profileId']):
+        if is_hi and not _is_hi_required(language, profiles.get(movie['profileId'])):
             is_hi = 'False'
 
         audio_language = resolve_audio_language(get_audio_profile_languages(movie['audio_language']), fallback=None)
@@ -269,8 +271,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
                                              movie['subtitles_path']),
                                          job_id=job_id))
         if result:
-            if isinstance(result, list) and len(result):
-                result = result[0]
+            result = result[0]
             store_subtitles_movie(movie['radarrId'])
             history_log_movie(3, movie['radarrId'], result, upgraded_from_id=movie['original_id'] or movie['id'])  # we use or to handle None values on initial upgrade
             if hasattr(result, 'message'):
@@ -486,11 +487,7 @@ def get_upgradable_movies_subtitles(history_id_list=None):
     return upgradable_movie_subtitles
 
 
-def _language_still_desired(language, profile_id):
-    if not profile_id:
-        return False
-
-    profile = get_profile(profile_id)
+def _language_still_desired(language: str, profile: Profile | None) -> bool:
     return profile is not None and language in _language_from_items(profile['items'])
 
 
@@ -519,21 +516,10 @@ def _language_from_items(items):
     return results
 
 
-def _is_hi_required(language, profile_id):
-    profile = get_profile(profile_id=profile_id)
-    if not isinstance(language, str):
-        return False
-    if not isinstance(profile, dict):
-        return False
-
-    items = profile.get('items')
-    if not isinstance(items, list):
+def _is_hi_required(language: str | None, profile: Profile | None) -> bool:
+    if not isinstance(language, str) or profile is None:
         return False
 
     base_language = language.split(':')[0]
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if base_language == item.get('language') and str(item.get('hi')) == 'True':
-            return True
-    return False
+    return any(isinstance(item, dict) and base_language == item.get('language') and str(item.get('hi')) == 'True'
+               for item in profile['items'])

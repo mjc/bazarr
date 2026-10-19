@@ -1,5 +1,5 @@
 [tool.basedpyright]
-include = ["bazarr/utilities", "bazarr/app/language_profiles.py", "bazarr/subtitles/manual.py", "bazarr/api/utils.py", "bazarr/api/system/languages_profiles.py", "bazarr/subtitles/mass_download/movies.py", "bazarr/subtitles/mass_download/series.py", "bazarr/subtitles/indexer/profile_requirements.py"]
+include = ["bazarr/utilities", "bazarr/app/language_profiles.py", "bazarr/subtitles/manual.py", "bazarr/api/utils.py", "bazarr/api/system/languages_profiles.py", "bazarr/subtitles/mass_download/movies.py", "bazarr/subtitles/mass_download/series.py", "bazarr/subtitles/indexer/profile_requirements.py", "bazarr/subtitles/upgrade.py"]
 pythonVersion = "3.10"
 pythonPlatform = "All"
 extraPaths = ["bazarr", "custom_libs", "libs"]

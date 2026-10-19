@@ -195,14 +195,8 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
                     return 'Cannot download a hearing-impaired subtitle: this language is set to exclude HI subtitles.'
                 break
 
-    if hi == 'True':
-        subtitle.language.hi = True
-    else:
-        subtitle.language.hi = False
-    if forced == 'True':
-        subtitle.language.forced = True
-    else:
-        subtitle.language.forced = False
+    subtitle.language.hi = hi == 'True'
+    subtitle.language.forced = forced == 'True'
     if use_original_format in (1, "1", "True", True):
         subtitle.use_original_format = True
 
