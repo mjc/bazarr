@@ -63,7 +63,8 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
     if series_id:
         current_episodes_in_db: dict[int, RowMapping] = {
             row['sonarrEpisodeId']: row for row in database.execute(
-                select(*(getattr(TableEpisodes, column.name) for column in TableEpisodes.__table__.columns))
+                select(*(getattr(TableEpisodes, column.name) for column in TableEpisodes.__table__.columns
+                         if column.name != 'ffprobe_cache'))
                 .where(TableEpisodes.sonarrSeriesId == series_id)).mappings()
         }
     else:
