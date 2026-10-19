@@ -1,11 +1,31 @@
 # coding=utf-8
 
+from dataclasses import dataclass
+from typing import TypedDict
+
 import pycountry
 
 from subzero.language import Language
 
 from .custom_lang import CustomLanguage
 from app.database import TableSettingsLanguages, database, insert, update, select
+
+
+class LanguageEntry(TypedDict):
+    code2: str | None
+    code3: str
+    code3b: str | None
+    name: str
+
+
+@dataclass(frozen=True)
+class ResolvedLanguage:
+    code2: str
+    code3: str
+    name: str
+
+
+languages_dict: list[LanguageEntry] = []
 
 
 def load_language_in_db():
@@ -76,28 +96,41 @@ def audio_language_from_name(lang):
     return language_from_alpha2(alpha2_code)
 
 
-def language_from_alpha2(lang):
+def language_from_alpha2(lang: str) -> str | None:
     return next((item['name'] for item in languages_dict if item['code2'] == lang[:2]), None)
 
 
-def language_from_alpha3(lang):
+def language_from_alpha3(lang: str) -> str | None:
     return next((item['name'] for item in languages_dict if lang[:3] in [item['code3'], item['code3b']]), None)
 
 
-def alpha2_from_alpha3(lang):
+def alpha2_from_alpha3(lang: str) -> str | None:
     return next((item['code2'] for item in languages_dict if lang[:3] in [item['code3'], item['code3b']]), None)
 
 
-def alpha2_from_language(lang):
+def alpha2_from_language(lang: str) -> str | None:
     return next((item['code2'] for item in languages_dict if item['name'] == lang), None)
 
 
-def alpha3_from_alpha2(lang):
+def alpha3_from_alpha2(lang: str) -> str | None:
     return next((item['code3'] for item in languages_dict if item['code2'] == lang[:2]), None)
 
 
-def alpha3_from_language(lang):
+def alpha3_from_language(lang: str) -> str | None:
     return next((item['code3'] for item in languages_dict if item['name'] == lang), None)
+
+
+def resolve_language(code2: str | None) -> ResolvedLanguage | None:
+    if not code2:
+        return None
+    code3 = alpha3_from_alpha2(code2)
+    if code3 is None:
+        return None
+    name = language_from_alpha3(code3)
+    resolved_code2 = alpha2_from_alpha3(code3)
+    if name is None or resolved_code2 is None:
+        return None
+    return ResolvedLanguage(code2=resolved_code2, code3=code3, name=name)
 
 
 def get_language_set():

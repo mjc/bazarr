@@ -11,7 +11,7 @@ from subliminal_patch.subtitle import Subtitle
 from subliminal_patch.score import MAX_SCORES
 from pysubs2.formats import get_format_identifier
 
-from languages.get_languages import language_from_alpha3, alpha2_from_alpha3, alpha3_from_alpha2
+from languages.get_languages import resolve_language
 from app.config import settings, get_array_from
 from utilities.helper import get_target_folder, force_unicode
 from utilities.post_processing import pp_replace, set_chmod
@@ -75,7 +75,11 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
     chmod = int(settings.general.chmod, 8) if not sys.platform.startswith(
         'win') and settings.general.chmod_enabled else None
 
-    language = alpha3_from_alpha2(language)
+    resolved_language = resolve_language(language)
+    if resolved_language is None:
+        logging.debug("BAZARR skipping subtitle upload because language could not be resolved")
+        return None
+    language = resolved_language.code3
 
     custom = CustomLanguage.from_value(language, "alpha3")
     if custom is None:
@@ -90,7 +94,7 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
         lang_obj = Language.rebuild(lang_obj, forced=True)
 
     if media_type == 'series':
-        episode_metadata = database.execute(
+        media_metadata = database.execute(
             select(TableEpisodes.sonarrSeriesId,
                    TableEpisodes.sonarrEpisodeId,
                    TableEpisodes.season,
@@ -103,19 +107,19 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
             .where(TableEpisodes.sonarrEpisodeId == sonarrEpisodeId)) \
             .first()
 
-        if episode_metadata:
-            use_original_format = _get_profile_original_format(episode_metadata.profileId)
+        if media_metadata:
+            use_original_format = _get_profile_original_format(media_metadata.profileId)
         else:
             return
     else:
-        movie_metadata = database.execute(
+        media_metadata = database.execute(
             select(TableMovies.radarrId, TableMovies.profileId,
                    TableMovies.imdbId, TableMovies.tmdbId)
             .where(TableMovies.radarrId == radarrId)) \
             .first()
 
-        if movie_metadata:
-            use_original_format = _get_profile_original_format(movie_metadata.profileId)
+        if media_metadata:
+            use_original_format = _get_profile_original_format(media_metadata.profileId)
         else:
             return
 
@@ -176,8 +180,8 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
     else:
         modifier_code = ""
     uploaded_language_code3 = language + modifier_code
-    uploaded_language = language_from_alpha3(language) + modifier_string
-    uploaded_language_code2 = alpha2_from_alpha3(language) + modifier_code
+    uploaded_language = resolved_language.name + modifier_string
+    uploaded_language_code2 = resolved_language.code2 + modifier_code
 
     if use_postprocessing:
         args = pp_replace(postprocessing_cmd, path, subtitle_path, uploaded_language, uploaded_language_code2,
@@ -189,23 +193,23 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
 
     if media_type == 'series':
         sync_subtitles(video_path=path, srt_path=subtitle_path, srt_lang=uploaded_language_code2, percent_score=100,
-                       sonarr_series_id=episode_metadata.sonarrSeriesId, forced=forced, hi=hi,
-                       sonarr_episode_id=episode_metadata.sonarrEpisodeId, job_id=job_id)
+                       sonarr_series_id=media_metadata.sonarrSeriesId, forced=forced, hi=hi,
+                       sonarr_episode_id=media_metadata.sonarrEpisodeId, job_id=job_id)
         reversed_path = path_mappings.path_replace_reverse(path)
         reversed_subtitles_path = path_mappings.path_replace_reverse(subtitle_path)
-        notify_sonarr(episode_metadata.sonarrSeriesId)
-        event_stream(type='series', action='update', payload=episode_metadata.sonarrSeriesId)
-        event_stream(type='episode-wanted', action='delete', payload=episode_metadata.sonarrEpisodeId)
+        notify_sonarr(media_metadata.sonarrSeriesId)
+        event_stream(type='series', action='update', payload=media_metadata.sonarrSeriesId)
+        event_stream(type='episode-wanted', action='delete', payload=media_metadata.sonarrEpisodeId)
     else:
         sync_subtitles(video_path=path, srt_path=subtitle_path, srt_lang=uploaded_language_code2, percent_score=100,
-                       radarr_id=movie_metadata.radarrId, forced=forced, hi=hi, job_id=job_id)
+                       radarr_id=media_metadata.radarrId, forced=forced, hi=hi, job_id=job_id)
         reversed_path = path_mappings.path_replace_reverse_movie(path)
         reversed_subtitles_path = path_mappings.path_replace_reverse_movie(subtitle_path)
-        notify_radarr(movie_metadata.radarrId)
-        event_stream(type='movie', action='update', payload=movie_metadata.radarrId)
-        event_stream(type='movie-wanted', action='delete', payload=movie_metadata.radarrId)
+        notify_radarr(media_metadata.radarrId)
+        event_stream(type='movie', action='update', payload=media_metadata.radarrId)
+        event_stream(type='movie-wanted', action='delete', payload=media_metadata.radarrId)
 
-    result = ProcessSubtitlesResult(message=f"{language_from_alpha3(language)}{modifier_string} Subtitles manually "
+    result = ProcessSubtitlesResult(message=f"{resolved_language.name}{modifier_string} Subtitles manually "
                                             "uploaded.",
                                     reversed_path=reversed_path,
                                     downloaded_language_code2=uploaded_language_code2,
@@ -229,14 +233,14 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
                 send_notifications(sonarrSeriesId, sonarrEpisodeId, result.message)
             if settings.general.use_plex:
                 if settings.plex.update_series_library:
-                    plex_refresh_item(episode_metadata.imdbId, is_movie=False,
-                                      season=episode_metadata.season, episode=episode_metadata.episode)
+                    plex_refresh_item(media_metadata.imdbId, is_movie=False,
+                                      season=media_metadata.season, episode=media_metadata.episode)
                 if settings.plex.set_episode_added:
-                    plex_set_episode_added_date_now(episode_metadata)
+                    plex_set_episode_added_date_now(media_metadata)
             if settings.general.use_jellyfin and settings.jellyfin.update_series_library:
-                jellyfin_refresh_item(episode_metadata.imdbId, is_movie=False,
-                                      season=episode_metadata.season, episode=episode_metadata.episode,
-                                      tvdb_id=episode_metadata.tvdbId)
+                jellyfin_refresh_item(media_metadata.imdbId, is_movie=False,
+                                      season=media_metadata.season, episode=media_metadata.episode,
+                                      tvdb_id=media_metadata.tvdbId)
         else:
             store_subtitles_movie(radarrId)
             history_log_movie(4, radarrId, result, fake_provider=provider, fake_score=MAX_SCORES['movie'])
@@ -244,11 +248,11 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
                 send_notifications_movie(radarrId, result.message)
             if settings.general.use_plex:
                 if settings.plex.update_movie_library:
-                    plex_refresh_item(movie_metadata.imdbId, is_movie=True)
+                    plex_refresh_item(media_metadata.imdbId, is_movie=True)
                 if settings.plex.set_movie_added:
-                    plex_set_movie_added_date_now(movie_metadata)
+                    plex_set_movie_added_date_now(media_metadata)
             if settings.general.use_jellyfin and settings.jellyfin.update_movie_library:
-                jellyfin_refresh_item(movie_metadata.imdbId, is_movie=True,
-                                      tmdb_id=movie_metadata.tmdbId)
+                jellyfin_refresh_item(media_metadata.imdbId, is_movie=True,
+                                      tmdb_id=media_metadata.tmdbId)
 
     return '', 204

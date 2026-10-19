@@ -127,3 +127,30 @@ def test_manual_upload_subtitle_postprocessing_handles_partial_audio_language_di
 
     assert result == ("", 204)
     assert len(commands) == 1
+
+
+@pytest.mark.parametrize('missing_lookup', ['language_from_alpha3', 'alpha2_from_alpha3', 'alpha3_from_alpha2'])
+def test_unresolved_upload_language_stops_before_saving(
+    upload_module, movie_row_factory, monkeypatch, mocker, missing_lookup
+):
+    movie_row_factory(radarrId=7, profileId=44)
+    monkeypatch.setattr(upload_module, 'get_profiles_list', lambda profile_id: {})
+    # A lookup may fail even when the incoming language code is well formed.
+    monkeypatch.setattr(get_languages, missing_lookup, lambda code: None)
+    monkeypatch.setattr(upload_module, missing_lookup, lambda code: None, raising=False)
+    save = mocker.patch.object(upload_module, 'save_subtitles')
+    save.return_value = [SimpleNamespace(storage_path='/subs/sub.srt')]
+    result = upload_module.manual_upload_subtitle(
+        path='/movies/movie.mkv', language='en', forced=False, hi=False, media_type='movie',
+        subtitle=_subtitle_file(), filename='subtitle.srt', audio_language='[]', job_id=1, radarrId=7)
+    assert result is None
+    save.assert_not_called()
+
+
+@pytest.mark.parametrize('code', [None, '', 'xx'])
+def test_unresolved_language_has_no_record(upload_module, code):
+    assert get_languages.resolve_language(code) is None
+
+
+def test_resolved_language_has_all_upload_fields(upload_module):
+    assert get_languages.resolve_language('en') == get_languages.ResolvedLanguage('en', 'eng', 'English')
