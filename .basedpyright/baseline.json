@@ -402,46 +402,6 @@
         ],
         "./bazarr/sonarr/sync/episodes.py": [
             {
-                "code": "reportOptionalOperand",
-                "range": {
-                    "startColumn": 13,
-                    "endColumn": 37,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportPossiblyUnboundVariable",
-                "range": {
-                    "startColumn": 55,
-                    "endColumn": 73,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportPossiblyUnboundVariable",
-                "range": {
-                    "startColumn": 24,
-                    "endColumn": 37,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 27,
-                    "endColumn": 123,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportPossiblyUnboundVariable",
-                "range": {
-                    "startColumn": 29,
-                    "endColumn": 42,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportOptionalSubscript",
                 "range": {
                     "startColumn": 23,
@@ -474,14 +434,6 @@
                     "endColumn": 56,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 41,
-                    "endColumn": 55,
-                    "lineCount": 1
-                }
             }
         ],
         "./bazarr/sonarr/sync/series.py": [
@@ -506,16 +458,6 @@
                 "range": {
                     "startColumn": 68,
                     "endColumn": 71,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./bazarr/sonarr/sync/utils.py": [
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 22,
-                    "endColumn": 33,
                     "lineCount": 1
                 }
             }

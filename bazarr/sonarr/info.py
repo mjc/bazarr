@@ -33,19 +33,27 @@ class SonarrCapabilities:
         return self.legacy or self.version.numbers[0] == 3
 
 
+@dataclass(frozen=True)
+class SonarrConnection:
+    api_url: str
+    apikey: str
+    timeout: int
+    capabilities: SonarrCapabilities
+
+
 class GetSonarrInfo:
     @staticmethod
-    def version() -> str:
+    def version(configuration: DynaBox | None = None) -> str:
         if not settings.general.use_sonarr:
             return ''
-        configuration = settings.sonarr
-        base_url = url_sonarr(configuration)
+        sonarr: DynaBox = settings.sonarr if configuration is None else configuration
+        base_url = url_sonarr(sonarr)
         cache_key = 'sonarr_version:' + sha256(
-            f'{base_url}\0{configuration.apikey}'.encode()).hexdigest()
+            f'{base_url}\0{sonarr.apikey}'.encode()).hexdigest()
         cached_version = region.get(cache_key, expiration_time=60)
         if isinstance(cached_version, str) and cached_version and cached_version != 'unknown':
             return cached_version
-        version = discover_arr_version(base_url, configuration.apikey, int(configuration.http_timeout))
+        version = discover_arr_version(base_url, sonarr.apikey, int(sonarr.http_timeout))
         result = version if version is not None else 'unknown'
         region.set(cache_key, result)
         logging.debug('BAZARR got this Sonarr version from its API: %s', result)
@@ -55,8 +63,8 @@ class GetSonarrInfo:
         version = parse_arr_version(self.version())
         return None if version is None else version.semver()
 
-    def capabilities(self) -> SonarrCapabilities | None:
-        version = parse_arr_version(self.version())
+    def capabilities(self, configuration: DynaBox | None = None) -> SonarrCapabilities | None:
+        version = parse_arr_version(self.version() if configuration is None else self.version(configuration))
         return None if version is None else SonarrCapabilities(version)
 
     def is_legacy(self) -> bool:
@@ -83,6 +91,15 @@ class GetSonarrInfo:
 
 
 get_sonarr_info = GetSonarrInfo()
+
+
+def get_sonarr_connection(configuration: DynaBox | None = None) -> SonarrConnection | None:
+    sonarr: DynaBox = settings.sonarr if configuration is None else configuration
+    capabilities = get_sonarr_info.capabilities(sonarr)
+    if capabilities is None:
+        return None
+    api_url = url_sonarr(sonarr) + ('/api/' if capabilities.legacy else '/api/v3/')
+    return SonarrConnection(api_url, sonarr.apikey, int(sonarr.http_timeout), capabilities)
 
 
 def url_sonarr(configuration: DynaBox | None = None) -> str:

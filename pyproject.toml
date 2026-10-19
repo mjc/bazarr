@@ -40,6 +40,7 @@ include = [
     "bazarr/radarr/sync/movies.py",
     "bazarr/radarr/sync/parser.py",
     "bazarr/sonarr/info.py",
+    "bazarr/sonarr/episode_snapshot.py",
     "bazarr/sonarr/sync/episodes.py",
     "bazarr/sonarr/sync/parser.py",
     "bazarr/sonarr/sync/series.py",

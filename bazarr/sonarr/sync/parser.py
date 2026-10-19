@@ -12,6 +12,7 @@ from languages.get_languages import audio_language_from_name
 from utilities.path_mappings import path_mappings
 from utilities.video_analyzer import embedded_audio_reader
 from sonarr.info import get_sonarr_info
+from sonarr.episode_snapshot import Episode, EpisodeValues
 
 from .converter import SonarrFormatVideoCodec, SonarrFormatAudioCodec
 
@@ -110,90 +111,69 @@ def profile_id_to_language(id_, profiles):
     return profiles_to_return
 
 
-def episodeParser(episode, parse_embedded_audio_track=None):
+def episodeParser(episode: Episode, parse_embedded_audio_track: bool | None = None,
+                  *, general: DynaBox | None = None,
+                  audio_languages: dict[int, str | None] | None = None) -> EpisodeValues | None:
+    general_settings = settings.general if general is None else general
+    file = episode.get('episodeFile')
+    if not episode['hasFile'] or file is None:
+        return None
+    file_size = file['size']
+    if file_size <= MINIMUM_VIDEO_SIZE:
+        try:
+            file_size = os.path.getsize(path_mappings.path_replace(file['path']))
+        except OSError:
+            file_size = 0
+    if not (file_size > MINIMUM_VIDEO_SIZE or
+            (general_settings.enable_strm_support and file['path'].lower().endswith('.strm'))):
+        return None
     if parse_embedded_audio_track is None:
-        parse_embedded_audio_track = settings.general.parse_embedded_audio_track
-
-    if 'hasFile' in episode:
-        if episode['hasFile'] is True:
-            if 'episodeFile' in episode:
-                bazarr_file_size = episode['episodeFile']['size']
-                if bazarr_file_size <= MINIMUM_VIDEO_SIZE:
-                    try:
-                        bazarr_file_size = os.path.getsize(path_mappings.path_replace(episode['episodeFile']['path']))
-                    except OSError:
-                        bazarr_file_size = 0
-                if (episode['episodeFile']['size'] > MINIMUM_VIDEO_SIZE or bazarr_file_size > MINIMUM_VIDEO_SIZE or
-                        (settings.general.enable_strm_support and episode['episodeFile']['path'].lower().endswith('.strm'))):
-                    if 'sceneName' in episode['episodeFile']:
-                        sceneName = episode['episodeFile']['sceneName']
-                    else:
-                        sceneName = None
-
-                    if parse_embedded_audio_track:
-                        audio_language = embedded_audio_reader(path_mappings.path_replace(episode['episodeFile']
-                                                                                          ['path']),
-                                                               file_size=episode['episodeFile']['size'],
-                                                               episode_file_id=episode['episodeFile']['id'],
-                                                               use_cache=True)
-                    else:
-                        audio_language = []
-                        if 'language' in episode['episodeFile'] and len(episode['episodeFile']['language']):
-                            item = episode['episodeFile']['language']
-                            if isinstance(item, dict):
-                                if isinstance(item, dict) and 'name' in item:
-                                    audio_language.append(audio_language_from_name(item['name']))
-                        elif 'languages' in episode['episodeFile'] and len(episode['episodeFile']['languages']):
-                            items = episode['episodeFile']['languages']
-                            if isinstance(items, list):
-                                for item in items:
-                                    if isinstance(item, dict) and 'name' in item:
-                                        audio_language.append(audio_language_from_name(item['name']))
-                        else:
-                            audio_language = database.execute(
-                                select(TableShows.audio_language)
-                                .where(TableShows.sonarrSeriesId == episode['seriesId']))\
-                                .first().audio_language
-
-                    if 'mediaInfo' in episode['episodeFile']:
-                        if 'videoCodec' in episode['episodeFile']['mediaInfo']:
-                            videoCodec = episode['episodeFile']['mediaInfo']['videoCodec']
-                            videoCodec = SonarrFormatVideoCodec(videoCodec)
-                        else:
-                            videoCodec = None
-
-                        if 'audioCodec' in episode['episodeFile']['mediaInfo']:
-                            audioCodec = episode['episodeFile']['mediaInfo']['audioCodec']
-                            audioCodec = SonarrFormatAudioCodec(audioCodec)
-                        else:
-                            audioCodec = None
-                    else:
-                        videoCodec = None
-                        audioCodec = None
-
-                    try:
-                        video_format, video_resolution = episode['episodeFile']['quality']['quality']['name'].split('-')
-                    except Exception:
-                        video_format = episode['episodeFile']['quality']['quality']['name']
-                        try:
-                            video_resolution = f'{episode["episodeFile"]["quality"]["quality"]["resolution"]}p'
-                        except Exception:
-                            video_resolution = None
-
-                    return {'sonarrSeriesId': episode['seriesId'],
-                            'sonarrEpisodeId': episode['id'],
-                            'title': episode['title'],
-                            'path': episode['episodeFile']['path'],
-                            'season': episode['seasonNumber'],
-                            'episode': episode['episodeNumber'],
-                            'sceneName': sceneName,
-                            'monitored': str(bool(episode['monitored'])),
-                            'format': video_format,
-                            'resolution': video_resolution,
-                            'video_codec': videoCodec,
-                            'audio_codec': audioCodec,
-                            'episode_file_id': episode['episodeFile']['id'],
-                            'audio_language': str(audio_language),
-                            'file_size': episode['episodeFile']['size'],
-                            'absoluteEpisode': episode.get('absoluteEpisodeNumber'),
-                            'tvdbId': episode.get('tvdbId')}
+        parse_embedded_audio_track = general_settings.parse_embedded_audio_track
+    audio_language: list[str | None] | str | None
+    if parse_embedded_audio_track:
+        audio_language = embedded_audio_reader(path_mappings.path_replace(file['path']),
+                                               file_size=file['size'], episode_file_id=file['id'], use_cache=True)
+    else:
+        language = file.get('language')
+        languages = file.get('languages')
+        if language:
+            audio_language = [audio_language_from_name(language['name'])]
+        elif languages:
+            audio_language = [audio_language_from_name(language['name']) for language in languages]
+        else:
+            series_id = episode['seriesId']
+            if audio_languages is None:
+                audio_language = database.execute(select(TableShows.audio_language)
+                                                   .where(TableShows.sonarrSeriesId == series_id)).scalar()
+            else:
+                if series_id not in audio_languages:
+                    audio_languages[series_id] = database.execute(select(TableShows.audio_language)
+                                                                  .where(TableShows.sonarrSeriesId == series_id)).scalar()
+                audio_language = audio_languages[series_id]
+    media_info = file.get('mediaInfo')
+    video_codec = SonarrFormatVideoCodec(media_info.get('videoCodec')) if media_info else None
+    audio_codec = SonarrFormatAudioCodec(media_info.get('audioCodec')) if media_info else None
+    quality = file['quality']['quality']
+    try:
+        video_format, video_resolution = quality['name'].split('-')
+    except ValueError:
+        video_format = quality['name']
+        resolution = quality.get('resolution')
+        video_resolution = f'{resolution}p' if resolution is not None else None
+    return {'sonarrSeriesId': episode['seriesId'],
+            'sonarrEpisodeId': episode['id'],
+            'title': episode['title'],
+            'path': file['path'],
+            'season': episode['seasonNumber'],
+            'episode': episode['episodeNumber'],
+            'sceneName': file.get('sceneName'),
+            'monitored': str(episode['monitored']),
+            'format': video_format,
+            'resolution': video_resolution,
+            'video_codec': video_codec,
+            'audio_codec': audio_codec,
+            'episode_file_id': file['id'],
+            'audio_language': str(audio_language),
+            'file_size': file['size'],
+            'absoluteEpisode': episode.get('absoluteEpisodeNumber'),
+            'tvdbId': episode.get('tvdbId')}

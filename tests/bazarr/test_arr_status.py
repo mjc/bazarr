@@ -1,4 +1,6 @@
 from unittest.mock import Mock
+from types import SimpleNamespace
+from dogpile.cache import region as cache_region
 
 import pytest
 import requests
@@ -35,7 +37,7 @@ def test_status_does_not_hide_programming_errors(monkeypatch):
 
 
 @pytest.mark.parametrize('app', [sonarr, radarr])
-def test_version_cache_is_scoped_to_connection_and_expires_without_read_renewal(monkeypatch, app):
+def test_version_cache_is_scoped_to_connection(monkeypatch, app):
     name = 'sonarr' if app is sonarr else 'radarr'
     configuration = getattr(app.settings, name)
     monkeypatch.setattr(app.settings.general, f'use_{name}', True)
@@ -80,3 +82,23 @@ def test_legacy_semver_compatibility(monkeypatch):
     monkeypatch.setattr(sonarr.get_sonarr_info, 'version', version)
     assert str(sonarr.get_sonarr_info.semver()) == '2.0.0-5344'
     version.assert_called_once()
+
+
+@pytest.mark.parametrize('app', [sonarr, radarr])
+def test_version_cache_reads_do_not_extend_expiration(monkeypatch, app):
+    name = 'sonarr' if app is sonarr else 'radarr'
+    monkeypatch.setattr(app.settings.general, f'use_{name}', True)
+    region = app.make_region().configure('dogpile.cache.memory')
+    monkeypatch.setattr(app, 'region', region)
+    discover = Mock(return_value='4.0.16.2944')
+    monkeypatch.setattr(app, 'discover_arr_version', discover)
+    service = getattr(app, f'get_{name}_info')
+    assert service.version() == '4.0.16.2944'
+    set_value = Mock(wraps=region.set)
+    monkeypatch.setattr(region, 'set', set_value)
+    assert service.version() == '4.0.16.2944'
+    set_value.assert_not_called()
+    now = cache_region.time.time()
+    monkeypatch.setattr(cache_region, 'time', SimpleNamespace(time=lambda: now + 61))
+    assert service.version() == '4.0.16.2944'
+    assert discover.call_count == 2

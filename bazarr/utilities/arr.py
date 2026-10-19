@@ -38,7 +38,7 @@ def discover_arr_version(base_url: str, apikey: str, timeout: int) -> str | None
     for api_path in ('/api/system/status', '/api/v3/system/status'):
         try:
             payload = request_json(f'{base_url}{api_path}?apikey={apikey}', timeout)
-        except (requests.exceptions.RequestException, requests.exceptions.JSONDecodeError):
+        except requests.exceptions.RequestException:
             continue
         if isinstance(payload, dict):
             version = payload.get('version')

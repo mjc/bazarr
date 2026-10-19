@@ -4,7 +4,8 @@ import requests
 import logging
 
 from app.config import settings
-from sonarr.info import get_sonarr_info, url_api_sonarr
+from sonarr.info import SonarrConnection, get_sonarr_info, url_api_sonarr
+from utilities.arr import request_json
 from constants import HEADERS
 from utilities.json_types import JsonValue
 
@@ -78,132 +79,53 @@ def get_tags():
         return tagsDict.json()
 
 
-def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None) -> JsonValue:
-    url_sonarr_api_series = (f"{url_api_sonarr()}series/{sonarr_series_id if sonarr_series_id else ''}?"
-                             f"apikey={apikey_sonarr}")
+def _request_sonarr(path: str, apikey: str, connection: SonarrConnection | None = None,
+                     *, propagate_http_error: bool = False) -> JsonValue:
+    api_url = url_api_sonarr() if connection is None else connection.api_url
+    timeout = int(settings.sonarr.http_timeout) if connection is None else connection.timeout
     try:
-        r = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
-        r.raise_for_status()
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code:
-            raise requests.exceptions.HTTPError
-        logging.exception("BAZARR Error trying to get series from Sonarr. Http error.")
-        return
-    except requests.exceptions.ConnectionError:
-        logging.exception("BAZARR Error trying to get series from Sonarr. Connection Error.")
-        return
-    except requests.exceptions.Timeout:
-        logging.exception("BAZARR Error trying to get series from Sonarr. Timeout Error.")
-        return
+        return request_json(f'{api_url}{path}&apikey={apikey}', timeout)
+    except requests.exceptions.HTTPError:
+        if propagate_http_error:
+            raise
+        logging.exception('BAZARR Error trying to get %s from Sonarr. Http error.', path.split('?')[0])
     except requests.exceptions.RequestException:
-        logging.exception("BAZARR Error trying to get series from Sonarr.")
-        return
-    except Exception as e:
-        logging.exception(f"Exception raised while getting series from Sonarr API: {e}")
-        return
-    else:
-        if r.status_code == 200:
-            result: JsonValue = r.json()
-            if isinstance(result, dict):
-                return [result]
-            else:
-                return result
-        else:
-            return
+        logging.exception('BAZARR Error trying to get %s from Sonarr.', path.split('?')[0])
+    return None
 
 
-def get_episodes_from_sonarr_api(apikey_sonarr, series_id=None, episode_id=None):
+def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None,
+                                *, connection: SonarrConnection | None = None) -> JsonValue:
+    path = f"series/{sonarr_series_id if sonarr_series_id else ''}?"
+    result = _request_sonarr(path, apikey_sonarr, connection, propagate_http_error=True)
+    if sonarr_series_id and isinstance(result, dict):
+        return [result]
+    return result
+
+
+def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None,
+                                episode_id: int | None = None,
+                                *, connection: SonarrConnection | None = None) -> JsonValue:
     if series_id:
-        url_sonarr_api_episode = (f"{url_api_sonarr()}episode?seriesId={series_id}&includeEpisodeFile=true&"
-                                  f"apikey={apikey_sonarr}")
+        path = f'episode?seriesId={series_id}&includeEpisodeFile=true'
     elif episode_id:
-        url_sonarr_api_episode = f"{url_api_sonarr()}episode/{episode_id}?apikey={apikey_sonarr}"
+        path = f'episode/{episode_id}?'
     else:
-        return
-
-    try:
-        r = requests.get(url_sonarr_api_episode, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
-        r.raise_for_status()
-    except requests.exceptions.HTTPError:
-        logging.exception("BAZARR Error trying to get episodes from Sonarr. Http error.")
-        return
-    except requests.exceptions.ConnectionError:
-        logging.exception("BAZARR Error trying to get episodes from Sonarr. Connection Error.")
-        return
-    except requests.exceptions.Timeout:
-        logging.exception("BAZARR Error trying to get episodes from Sonarr. Timeout Error.")
-        return
-    except requests.exceptions.RequestException:
-        logging.exception("BAZARR Error trying to get episodes from Sonarr.")
-        return
-    except Exception as e:
-        logging.exception(f"Exception raised while getting episodes from Sonarr API: {e}")
-        return
-    else:
-        if r.status_code == 200:
-            return r.json()
-        else:
-            return
+        return None
+    return _request_sonarr(path, apikey_sonarr, connection)
 
 
-def get_episodesFiles_from_sonarr_api(apikey_sonarr, series_id=None, episode_file_id=None):
+def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None,
+                                     episode_file_id: int | None = None,
+                                     *, connection: SonarrConnection | None = None) -> JsonValue:
     if series_id:
-        url_sonarr_api_episodeFiles = f"{url_api_sonarr()}episodeFile?seriesId={series_id}&apikey={apikey_sonarr}"
+        path = f'episodeFile?seriesId={series_id}'
     elif episode_file_id:
-        url_sonarr_api_episodeFiles = f"{url_api_sonarr()}episodeFile/{episode_file_id}?apikey={apikey_sonarr}"
+        path = f'episodeFile/{episode_file_id}?'
     else:
-        return
-
-    try:
-        r = requests.get(url_sonarr_api_episodeFiles, timeout=int(settings.sonarr.http_timeout), verify=False,
-                         headers=HEADERS)
-        r.raise_for_status()
-    except requests.exceptions.HTTPError:
-        logging.exception("BAZARR Error trying to get episodeFiles from Sonarr. Http error.")
-        return
-    except requests.exceptions.ConnectionError:
-        logging.exception("BAZARR Error trying to get episodeFiles from Sonarr. Connection Error.")
-        return
-    except requests.exceptions.Timeout:
-        logging.exception("BAZARR Error trying to get episodeFiles from Sonarr. Timeout Error.")
-        return
-    except requests.exceptions.RequestException:
-        logging.exception("BAZARR Error trying to get episodeFiles from Sonarr.")
-        return
-    except Exception as e:
-        logging.exception(f"Exception raised while getting episodes from Sonarr API: {e}")
-        return
-    else:
-        if r.status_code == 200:
-            return r.json()
-        else:
-            return
+        return None
+    return _request_sonarr(path, apikey_sonarr, connection)
 
 
-def get_history_from_sonarr_api(apikey_sonarr, episode_id):
-    url_sonarr_api_history = f"{url_api_sonarr()}history?eventType=1&episodeId={episode_id}&apikey={apikey_sonarr}"
-
-    try:
-        r = requests.get(url_sonarr_api_history, timeout=int(settings.sonarr.http_timeout), verify=False,
-                         headers=HEADERS)
-        r.raise_for_status()
-    except requests.exceptions.HTTPError:
-        logging.exception("BAZARR Error trying to get history from Sonarr. Http error.")
-        return
-    except requests.exceptions.ConnectionError:
-        logging.exception("BAZARR Error trying to get history from Sonarr. Connection Error.")
-        return
-    except requests.exceptions.Timeout:
-        logging.exception("BAZARR Error trying to get history from Sonarr. Timeout Error.")
-        return
-    except requests.exceptions.RequestException:
-        logging.exception("BAZARR Error trying to get history from Sonarr.")
-        return
-    except Exception as e:
-        logging.exception(f"Exception raised while getting history from Sonarr API: {e}")
-        return
-    else:
-        if r.status_code == 200:
-            return r.json()
-        else:
-            return
+def get_history_from_sonarr_api(apikey_sonarr: str, episode_id: int) -> JsonValue:
+    return _request_sonarr(f'history?eventType=1&episodeId={episode_id}', apikey_sonarr)
