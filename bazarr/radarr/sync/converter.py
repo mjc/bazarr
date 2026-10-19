@@ -1,82 +1,63 @@
 # coding=utf-8
+from typing import TypeVar
 
-def RadarrFormatAudioCodec(audioFormat: str | None, audioCodecID: str | None, audioProfile: str | None,
-                           audioAdditionalFeatures: str | None) -> str | None:
-    if audioFormat is None:
-        return None
+CodecValue = TypeVar("CodecValue")
+
+
+def RadarrFormatAudioCodec(audioFormat: CodecValue, audioCodecID: str | None, audioProfile: str | None,
+                           audioAdditionalFeatures: str | None) -> str | CodecValue:
+    if type(audioFormat) is not str:
+        return audioFormat
     return _normalize_audio_codec(audioFormat, audioCodecID, audioProfile, audioAdditionalFeatures)
 
 
 def _normalize_audio_codec(audioFormat: str, audioCodecID: str | None, audioProfile: str | None,
                            audioAdditionalFeatures: str | None) -> str:
-    if type(audioFormat) is not str:
-        return audioFormat
-    else:
-        if audioFormat == "AC-3":
-            return "AC3"
-        elif audioFormat == "E-AC-3":
-            return "EAC3"
-        elif audioFormat == "AAC":
-            if audioCodecID == "A_AAC/MPEG4/LC/SBR":
-                return "HE-AAC"
-            else:
-                return "AAC"
-        elif audioFormat.strip() == "mp3":
+    if audioFormat == "AC-3":
+        return "AC3"
+    if audioFormat == "E-AC-3":
+        return "EAC3"
+    if audioFormat == "AAC" and audioCodecID == "A_AAC/MPEG4/LC/SBR":
+        return "HE-AAC"
+    if audioFormat.strip() == "mp3":
+        return "MP3"
+    if audioFormat == "MPEG Audio":
+        if audioCodecID in ("55", "A_MPEG/L3") or audioProfile == "Layer 3":
             return "MP3"
-        elif audioFormat == "MPEG Audio":
-            if audioCodecID == "55" or audioCodecID == "A_MPEG/L3" or audioProfile == "Layer 3":
-                return "MP3"
-            if audioCodecID == "A_MPEG/L2" or audioProfile == "Layer 2":
-                return "MP2"
-        elif audioFormat == "MLP FBA":
-            if audioAdditionalFeatures == "16-ch":
-                return "TrueHD Atmos"
-            else:
-                return "TrueHD"
-        else:
-            return audioFormat
+        if audioCodecID == "A_MPEG/L2" or audioProfile == "Layer 2":
+            return "MP2"
+    if audioFormat == "MLP FBA":
+        return "TrueHD Atmos" if audioAdditionalFeatures == "16-ch" else "TrueHD"
     return audioFormat
 
 
-def RadarrFormatVideoCodec(videoFormat: str | None, videoCodecID: str | None,
-                           videoCodecLibrary: str | None) -> str | None:
-    if videoFormat is None:
-        return None
+def RadarrFormatVideoCodec(videoFormat: CodecValue, videoCodecID: str | None,
+                           videoCodecLibrary: str | None) -> str | CodecValue:
+    if type(videoFormat) is not str:
+        return videoFormat
     return _normalize_video_codec(videoFormat, videoCodecID, videoCodecLibrary)
 
 
 def _normalize_video_codec(videoFormat: str, videoCodecID: str | None, videoCodecLibrary: str | None) -> str:
-    if type(videoFormat) is not str:
-        return videoFormat
-    else:
-        if videoFormat == "x264":
-            return "h264"
-        elif videoFormat == "AVC" or videoFormat == "V.MPEG4/ISO/AVC":
-            return "h264"
-        elif videoCodecLibrary and (videoFormat == "HEVC" or videoFormat == "V_MPEGH/ISO/HEVC"):
-            if videoCodecLibrary.startswith("x265"):
-                return "h265"
-        elif videoCodecID and videoFormat == "MPEG Video":
-            if videoCodecID == "2" or videoCodecID == "V_MPEG2":
-                return "Mpeg2"
-            else:
-                return "Mpeg"
-        elif videoFormat == "MPEG-1 Video":
-            return "Mpeg"
-        elif videoFormat == "MPEG-2 Video":
-            return "Mpeg2"
-        elif videoCodecLibrary and videoCodecID and videoFormat == "MPEG-4 Visual":
-            if videoCodecID.endswith("XVID") or videoCodecLibrary.startswith("XviD"):
-                return "XviD"
-            if videoCodecID.endswith("DIV3") or videoCodecID.endswith("DIVX") or videoCodecID.endswith(
-                    "DX50") or videoCodecLibrary.startswith("DivX"):
-                return "DivX"
-        elif videoFormat == "VC-1":
-            return "VC1"
-        elif videoFormat == "WMV2":
-            return "WMV"
-        elif videoFormat == "DivX" or videoFormat == "div3":
+    if videoFormat in ("x264", "AVC", "V.MPEG4/ISO/AVC"):
+        return "h264"
+    if videoFormat in ("HEVC", "V_MPEGH/ISO/HEVC") and videoCodecLibrary and videoCodecLibrary.startswith("x265"):
+        return "h265"
+    if videoFormat == "MPEG Video" and videoCodecID:
+        return "Mpeg2" if videoCodecID in ("2", "V_MPEG2") else "Mpeg"
+    if videoFormat == "MPEG-1 Video":
+        return "Mpeg"
+    if videoFormat == "MPEG-2 Video":
+        return "Mpeg2"
+    if videoFormat == "MPEG-4 Visual" and videoCodecLibrary and videoCodecID:
+        if videoCodecID.endswith("XVID") or videoCodecLibrary.startswith("XviD"):
+            return "XviD"
+        if videoCodecID.endswith(("DIV3", "DIVX", "DX50")) or videoCodecLibrary.startswith("DivX"):
             return "DivX"
-        else:
-            return videoFormat
+    if videoFormat == "VC-1":
+        return "VC1"
+    if videoFormat == "WMV2":
+        return "WMV"
+    if videoFormat in ("DivX", "div3"):
+        return "DivX"
     return videoFormat

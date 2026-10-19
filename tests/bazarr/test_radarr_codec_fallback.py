@@ -23,3 +23,14 @@ def test_known_codec_details_still_normalize():
 def test_missing_codec_stays_none():
     assert RadarrFormatAudioCodec(None, None, None, None) is None
     assert RadarrFormatVideoCodec(None, None, None) is None
+
+
+@pytest.mark.parametrize("codec", [0, False, [], {}])
+def test_legacy_non_string_codec_is_preserved_at_boundary(codec):
+    assert RadarrFormatAudioCodec(codec, None, None, None) is codec
+    assert RadarrFormatVideoCodec(codec, None, None) is codec
+
+
+def test_specific_codec_details_keep_precedence():
+    assert RadarrFormatAudioCodec("MPEG Audio", "55", "Layer 2", None) == "MP3"
+    assert RadarrFormatVideoCodec("MPEG-4 Visual", "XVID", "DivX") == "XviD"
