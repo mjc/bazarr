@@ -1,9 +1,28 @@
 # coding=utf-8
+from typing import Literal, Protocol
+
+TranslatorName = Literal['google_translate', 'gemini', 'lingarr']
+
+
+class Translator(Protocol):
+    def translate(self, job_id: int | str | None) -> str: ...
+
+
+def resolve_translator_name(value: object) -> TranslatorName | None:
+    if value is None or value == '':
+        return 'google_translate'
+    if value == 'google_translate':
+        return 'google_translate'
+    if value == 'gemini':
+        return 'gemini'
+    if value == 'lingarr':
+        return 'lingarr'
+    return None
 
 class TranslatorFactory:
 
     @classmethod
-    def create_translator(cls, translator_type, **kwargs):
+    def create_translator(cls, translator_type: TranslatorName, **kwargs) -> Translator | None:
         if translator_type == 'google_translate':
             from .google_translator import GoogleTranslatorService
             return GoogleTranslatorService(**kwargs)
@@ -17,6 +36,4 @@ class TranslatorFactory:
             return LingarrTranslatorService(**kwargs)
 
         else:
-            raise ValueError(
-                f"Unknown translator type: '{translator_type}'"
-            )
+            return None

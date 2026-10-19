@@ -8,7 +8,7 @@ from subliminal_patch.core import get_subtitle_path
 from subzero.language import Language
 
 from .core.translator_utils import validate_translation_params, convert_language_codes, get_translation_extension
-from .services.translator_factory import TranslatorFactory
+from .services.translator_factory import TranslatorFactory, resolve_translator_name
 from languages.get_languages import alpha3_from_alpha2
 from app.config import settings
 from app.jobs_queue import jobs_queue
@@ -57,7 +57,10 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
 
         logging.debug(f'BAZARR is translating in {lang_obj} this subtitles {source_srt_file}')
 
-        translator_type = settings.translator.translator_type or 'google'
+        translator_type = resolve_translator_name(settings.translator.translator_type)
+        if translator_type is None:
+            logging.error('BAZARR unknown translator setting')
+            return None
 
         # Preserve the source subtitle format (.ass/.vtt) when requested instead of always
         # writing .srt. Gemini only supports SRT and is handled by get_translation_extension.
@@ -105,6 +108,8 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
         )
 
         logging.debug(f'Created translator instance: {translator.__class__.__name__}')
+        if translator is None:
+            return None
         result = translator.translate(job_id=job_id)
         if result is False:
             raise RuntimeError(f'{translator.__class__.__name__} returned a failed translation result')
