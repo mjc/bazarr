@@ -7,7 +7,7 @@ import operator
 from collections.abc import Collection
 from datetime import datetime, timedelta
 from functools import reduce
-from sqlalchemy import and_, or_
+from sqlalchemy import Select, and_, or_
 
 from app.config import settings
 from constants import HI_EXCLUDED
@@ -295,6 +295,26 @@ def _upgrade_minimum_score(score, minimum_score, score_out_of):
         return None
 
 
+def _load_upgradable_ids(
+    candidates: Select[tuple[int, int | None, datetime]], history_id_list: Collection[int] | None,
+) -> dict[int, int | None]:
+    rows = candidates.cte('upgrade_candidates')
+    # Upgrades outside the requested page still exclude their original events.
+    upgraded_ids = select(rows.c.upgradedFromId).where(rows.c.upgradedFromId.is_not(None))
+    statement = select(rows.c.id, rows.c.upgradedFromId).where(rows.c.id.not_in(upgraded_ids))
+    remaining_ids: set[int] | None = None
+    if history_id_list:
+        if len(history_id_list) <= 500:
+            statement = statement.where(rows.c.id.in_(history_id_list))
+        else:
+            # Unlimited history pages can exceed SQLite's bound-parameter limit.
+            # Stream the two ID columns and keep only requested IDs in that case.
+            remaining_ids = set(history_id_list)
+    statement = statement.order_by(rows.c.timestamp.desc())
+    return {history_id: parent_id or None for history_id, parent_id in database.execute(statement)
+            if remaining_ids is None or history_id in remaining_ids}
+
+
 def get_upgradable_episode_subtitles(history_id_list: Collection[int] | None = None) -> dict[int, int | None]:
     if not settings.general.upgrade_subs:
         # return an empty set of rows
@@ -333,47 +353,18 @@ def get_upgradable_episode_subtitles(history_id_list: Collection[int] | None = N
                                       or_(and_(TableHistory.score.is_(None), TableHistory.action == 6),
                                       (TableHistory.score < TableHistory.score_out_of - 3))]
     upgradable_episodes_conditions += get_exclusion_clause('series')
-    subtitles_to_upgrade = database.execute(
+    candidates = (
         select(TableHistory.id,
-               TableHistory.video_path,
-               TableHistory.language,
-               TableHistory.upgradedFromId)
+               TableHistory.upgradedFromId,
+               TableHistory.timestamp)
         .select_from(TableHistory)
         .join(TableShows, onclause=TableHistory.sonarrSeriesId == TableShows.sonarrSeriesId)
         .join(TableEpisodes, onclause=TableHistory.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId)
         .join(max_id_timestamp, onclause=and_(TableHistory.video_path == max_id_timestamp.c.video_path,
                                               TableHistory.language == max_id_timestamp.c.language,
                                               max_id_timestamp.c.timestamp == TableHistory.timestamp))
-        .where(reduce(operator.and_, upgradable_episodes_conditions))
-        .order_by(TableHistory.timestamp.desc())) \
-        .all()
-    logging.debug(f"{len(subtitles_to_upgrade)} subtitles are candidates and we've selected the latest timestamp for "
-                  f"each of them.")
-
-    history_ids = set(history_id_list) if history_id_list else None
-    upgraded_ids = {row.upgradedFromId for row in subtitles_to_upgrade}
-    upgradable_episode_subtitles: dict[int, int | None] = {}
-    for subtitle_to_upgrade in subtitles_to_upgrade:
-        # exclude subtitles that are not in history_id_list if provided
-        if history_ids is not None and subtitle_to_upgrade.id not in history_ids:
-            continue
-
-        # exclude subtitles with ID that as been "upgraded from" and shouldn't be considered
-        if subtitle_to_upgrade.id in upgraded_ids:
-            logging.debug(f"TableHistory ID {subtitle_to_upgrade.id} is the original subtitles event and has already "
-                          f"been upgraded so we'll skip it.")
-            continue
-
-        # check if we have the original subtitles ID in database
-        if subtitle_to_upgrade.upgradedFromId:
-            upgradable_episode_subtitles[subtitle_to_upgrade.id] = subtitle_to_upgrade.upgradedFromId
-            logging.debug(f"The original subtitles ID for TableHistory ID {subtitle_to_upgrade.id} stored in DB is: "
-                          f"{subtitle_to_upgrade.upgradedFromId}")
-            continue
-        else:
-            upgradable_episode_subtitles[subtitle_to_upgrade.id] = None
-            logging.debug(f"It seems to be the first time we've seen this TableHistory ID {subtitle_to_upgrade.id}.")
-            continue
+        .where(reduce(operator.and_, upgradable_episodes_conditions)))
+    upgradable_episode_subtitles = _load_upgradable_ids(candidates, history_id_list)
 
     logging.debug(f"We've found {len(upgradable_episode_subtitles)} episode subtitles IDs to be upgradable")
     return upgradable_episode_subtitles
@@ -417,47 +408,17 @@ def get_upgradable_movies_subtitles(history_id_list: Collection[int] | None = No
                                     or_(and_(TableHistoryMovie.score.is_(None), TableHistoryMovie.action == 6),
                                     (TableHistoryMovie.score < TableHistoryMovie.score_out_of - 3))]
     upgradable_movies_conditions += get_exclusion_clause('movie')
-    subtitles_to_upgrade = database.execute(
+    candidates = (
         select(TableHistoryMovie.id,
-               TableHistoryMovie.video_path,
-               TableHistoryMovie.language,
-               TableHistoryMovie.upgradedFromId)
+               TableHistoryMovie.upgradedFromId,
+               TableHistoryMovie.timestamp)
         .select_from(TableHistoryMovie)
         .join(TableMovies, onclause=TableHistoryMovie.radarrId == TableMovies.radarrId)
         .join(max_id_timestamp, onclause=and_(TableHistoryMovie.video_path == max_id_timestamp.c.video_path,
                                               TableHistoryMovie.language == max_id_timestamp.c.language,
                                               max_id_timestamp.c.timestamp == TableHistoryMovie.timestamp))
-        .where(reduce(operator.and_, upgradable_movies_conditions))
-        .order_by(TableHistoryMovie.timestamp.desc())) \
-        .all()
-    logging.debug(f"{len(subtitles_to_upgrade)} subtitles are candidates and we've selected the latest timestamp for "
-                  f"each of them.")
-
-    history_ids = set(history_id_list) if history_id_list else None
-    upgraded_ids = {row.upgradedFromId for row in subtitles_to_upgrade}
-    upgradable_movie_subtitles: dict[int, int | None] = {}
-    for subtitle_to_upgrade in subtitles_to_upgrade:
-        # exclude subtitles that are not in history_id_list if provided
-        if history_ids is not None and subtitle_to_upgrade.id not in history_ids:
-            continue
-
-        # exclude subtitles with ID that as been "upgraded from" and shouldn't be considered
-        if subtitle_to_upgrade.id in upgraded_ids:
-            logging.debug(f"TableHistoryMovie ID {subtitle_to_upgrade.id} is the original subtitles event and has "
-                          f"already been upgraded so we'll skip it.")
-            continue
-
-        # check if we have the original subtitles ID in database
-        if subtitle_to_upgrade.upgradedFromId:
-            upgradable_movie_subtitles[subtitle_to_upgrade.id] = subtitle_to_upgrade.upgradedFromId
-            logging.debug(f"The original subtitles ID for TableHistoryMovie ID {subtitle_to_upgrade.id} stored in DB "
-                          f"is: {subtitle_to_upgrade.upgradedFromId}")
-            continue
-        else:
-            upgradable_movie_subtitles[subtitle_to_upgrade.id] = None
-            logging.debug(f"It seems to be the first time we've seen this TableHistoryMovie ID "
-                          f"{subtitle_to_upgrade.id}.")
-            continue
+        .where(reduce(operator.and_, upgradable_movies_conditions)))
+    upgradable_movie_subtitles = _load_upgradable_ids(candidates, history_id_list)
 
     logging.debug(f"We've found {len(upgradable_movie_subtitles)} movie subtitles IDs to be upgradable")
     return upgradable_movie_subtitles
