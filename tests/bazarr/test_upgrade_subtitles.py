@@ -74,17 +74,9 @@ PROFILE = {
 }
 
 
-def test_language_still_desired_false_without_profile():
-    assert upgrade._language_still_desired("en", None) is False
-
-
 def test_language_still_desired_matches_profile_item():
     assert upgrade._language_still_desired("fr", PROFILE) is True
     assert upgrade._language_still_desired("de", PROFILE) is False
-
-
-def test_language_still_desired_false_when_profile_missing():
-    assert upgrade._language_still_desired("fr", None) is False
 
 
 def test_is_hi_required_true_only_for_hi_items():
@@ -92,7 +84,6 @@ def test_is_hi_required_true_only_for_hi_items():
     assert upgrade._is_hi_required("en:hi", PROFILE) is True
     assert upgrade._is_hi_required("fr", PROFILE) is False
     assert upgrade._is_hi_required(None, PROFILE) is False
-    assert upgrade._is_hi_required("en", None) is False
 
 
 # Minimum score in the upgrade jobs
@@ -245,3 +236,23 @@ def test_upgrade_reuses_profiles_and_preserves_language_selection(
     assert job_environment.generate.call_count == 2
     assert all(call.args[1] == [("en", "True", "False")]
                for call in job_environment.generate.call_args_list)
+
+
+@pytest.mark.parametrize("runner,row_factory", [
+    (upgrade.upgrade_episodes_subtitles, _episode_row),
+    (upgrade.upgrade_movies_subtitles, _movie_row),
+])
+@pytest.mark.parametrize("profile_id", [None, 99])
+def test_upgrade_skips_missing_profiles_before_language_helpers(
+        runner, row_factory, profile_id, upgrade_settings, job_environment):
+    with mock.patch.object(upgrade, "database") as database, \
+            mock.patch.object(upgrade, "_language_still_desired", wraps=upgrade._language_still_desired) as desired, \
+            mock.patch.object(upgrade, "_is_hi_required", wraps=upgrade._is_hi_required) as hi, \
+            mock.patch.object(upgrade, "get_upgradable_episode_subtitles", return_value={1: None}), \
+            mock.patch.object(upgrade, "get_upgradable_movies_subtitles", return_value={1: None}):
+        database.execute.return_value.all.return_value = [row_factory(id=1, profileId=profile_id)]
+        runner(job_id="job-1")
+
+    desired.assert_not_called()
+    hi.assert_not_called()
+    job_environment.generate.assert_not_called()

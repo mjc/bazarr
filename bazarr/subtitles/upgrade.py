@@ -92,7 +92,8 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
         .join(TableEpisodes, onclause=TableHistory.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId)
         .join(TableEpisodesSubtitles, onclause=TableHistory.sonarrEpisodeId == TableEpisodesSubtitles.sonarrEpisodeId, isouter=True)
         .where(TableEpisodesSubtitles.path.is_not(None)))
-    .all() if _language_still_desired(x.language, profiles.get(x.profileId)) and x.video_path == x.path]
+    .all() if x.profileId in profiles
+        and _language_still_desired(x.language, profiles[x.profileId]) and x.video_path == x.path]
 
     for item in episodes_data:
         # do not consider subtitles that do not exist on disk anymore
@@ -135,7 +136,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
         language, is_forced, is_hi = parse_language_string(episode['language'])
         if not language:
             continue
-        if is_hi and not _is_hi_required(language, profiles.get(episode['profileId'])):
+        if is_hi and not _is_hi_required(language, profiles[episode['profileId']]):
             is_hi = 'False'
 
         audio_language = resolve_audio_language(get_audio_profile_languages(episode['audio_language']), fallback=None)
@@ -210,7 +211,8 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
         .join(TableMovies, onclause=TableHistoryMovie.radarrId == TableMovies.radarrId)
         .join(TableMoviesSubtitles, onclause=TableHistoryMovie.radarrId == TableMoviesSubtitles.radarrId, isouter=True)
         .where(TableMoviesSubtitles.path.is_not(None)))
-    .all() if _language_still_desired(x.language, profiles.get(x.profileId)) and x.video_path == x.path]
+    .all() if x.profileId in profiles
+        and _language_still_desired(x.language, profiles[x.profileId]) and x.video_path == x.path]
 
     for item in movies_data:
         # do not consider subtitles that do not exist on disk anymore
@@ -249,7 +251,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
         language, is_forced, is_hi = parse_language_string(movie['language'])
         if not language:
             continue
-        if is_hi and not _is_hi_required(language, profiles.get(movie['profileId'])):
+        if is_hi and not _is_hi_required(language, profiles[movie['profileId']]):
             is_hi = 'False'
 
         audio_language = resolve_audio_language(get_audio_profile_languages(movie['audio_language']), fallback=None)
@@ -487,8 +489,8 @@ def get_upgradable_movies_subtitles(history_id_list=None):
     return upgradable_movie_subtitles
 
 
-def _language_still_desired(language: str, profile: Profile | None) -> bool:
-    return profile is not None and language in _language_from_items(profile['items'])
+def _language_still_desired(language: str, profile: Profile) -> bool:
+    return language in _language_from_items(profile['items'])
 
 
 def _language_from_items(items):
@@ -516,8 +518,8 @@ def _language_from_items(items):
     return results
 
 
-def _is_hi_required(language: str | None, profile: Profile | None) -> bool:
-    if not isinstance(language, str) or profile is None:
+def _is_hi_required(language: str | None, profile: Profile) -> bool:
+    if not isinstance(language, str):
         return False
 
     base_language = language.split(':')[0]
