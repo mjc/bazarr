@@ -283,3 +283,46 @@ def test_raw_movie_graph_is_released_before_embedded_audio_probe(movie_sync, mon
     monkeypatch.setattr(sync, 'get_movies_from_radarr_api', fetch)
     monkeypatch.setattr(sync, 'embedded_audio_reader', probe)
     sync.update_movies(job_id=1)
+
+
+@pytest.mark.parametrize('changed_field', ['metadata', 'audio'])
+def test_movie_reads_current_file_after_deferred_audio_probe(movie_sync, monkeypatch, changed_field):
+    from sqlalchemy import update
+    session, _, _, store, _ = movie_sync
+    initial = movie_payload(1, 'Movie', '/movie.mkv')
+    canonical = sync.movieParser(initial, action='update', tags_dict=[], language_profiles=[],
+                                 movie_default_profile=None, audio_profiles=[], general=sync.settings.general,
+                                 capabilities=radarr_connection().capabilities)
+    session.execute(update(TableMovies).where(TableMovies.radarrId == 1).values(canonical))
+    session.commit()
+    payload = movie_payload(1, 'Updated' if changed_field == 'metadata' else 'Movie', '/movie.mkv')
+    monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', True)
+    monkeypatch.setattr(sync, 'get_movies_from_radarr_api', lambda **kwargs: [payload])
+
+    def probe(*args, **kwargs):
+        session.execute(update(TableMovies).where(TableMovies.radarrId == 1)
+                        .values(path='/other.mkv', movie_file_id=20))
+        return ['French'] if changed_field == 'audio' else ['English']
+
+    monkeypatch.setattr(sync, 'embedded_audio_reader', probe)
+    sync.update_movies(job_id=1)
+    session.expire_all()
+    assert session.get(TableMovies, 1).path == '/movie.mkv'
+    assert session.get(TableMovies, 1).title == payload['title']
+    store.assert_called_once_with(1)
+
+
+@pytest.mark.parametrize('guard', [False, True])
+def test_deferred_probe_only_reads_before_probe_when_monitored_guard_needs_it(movie_sync, monkeypatch, guard):
+    _, _, _, _, statements = movie_sync
+    payload = movie_payload(1, 'Updated', '/movie.mkv')
+    payload['monitored'] = False
+    monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', True)
+    monkeypatch.setattr(sync.settings.radarr, 'sync_only_monitored_movies', guard)
+    monkeypatch.setattr(sync, 'get_movies_from_radarr_api', lambda **kwargs: [payload])
+    monkeypatch.setattr(sync, 'embedded_audio_reader', lambda *args, **kwargs: ['English'])
+    sync.update_movies(job_id=1)
+    selects = [statement for statement in statements if statement.is_select]
+    assert len(selects) == 2 + int(guard)
+    assert all(set(statement.selected_columns.keys()) == {'movie_file_id', 'path', 'monitored'}
+               for statement in selects[1:])

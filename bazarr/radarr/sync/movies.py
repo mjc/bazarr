@@ -82,17 +82,24 @@ def _resolve_movie_audio(change: MovieChange, general: DynaBox) -> None:
 def update_movie(change: MovieChange, *, general: DynaBox,
                  sync_monitored: bool = False) -> Literal['updated', 'skipped', 'unchanged', 'failed']:
     updated_movie = change.values
-    previous_movie_data = database.execute(
-        select(TableMovies.movie_file_id, TableMovies.path, TableMovies.monitored)
-        .where(TableMovies.radarrId == updated_movie['radarrId'])).first()
-    monitored_changed = False
-    if previous_movie_data is not None:
-        if sync_monitored and bool_map.get(previous_movie_data.monitored) is False and updated_movie['monitored'] == 'False':
+    parse_audio = bool(general.parse_embedded_audio_track)
+    needs_monitored_guard = sync_monitored and updated_movie['monitored'] == 'False'
+    previous_movie_data = None
+    if needs_monitored_guard:
+        previous_movie_data = database.execute(
+            select(TableMovies.movie_file_id, TableMovies.path, TableMovies.monitored)
+            .where(TableMovies.radarrId == updated_movie['radarrId'])).first()
+        if previous_movie_data is not None and bool_map.get(previous_movie_data.monitored) is False:
             return 'skipped'
-        monitored_changed = previous_movie_data.monitored != updated_movie['monitored']
+    if parse_audio:
+        _resolve_movie_audio(change, general)
+    if parse_audio or not needs_monitored_guard:
+        previous_movie_data = database.execute(
+            select(TableMovies.movie_file_id, TableMovies.path, TableMovies.monitored)
+            .where(TableMovies.radarrId == updated_movie['radarrId'])).first()
+    monitored_changed = previous_movie_data is not None and previous_movie_data.monitored != updated_movie['monitored']
     previous_movie_file_id = previous_movie_data.movie_file_id if previous_movie_data else None
     previous_movie_path = previous_movie_data.path if previous_movie_data else None
-    _resolve_movie_audio(change, general)
     if not change.metadata_changed and not monitored_changed and updated_movie['audio_language'] == change.previous_audio_language:
         return 'unchanged'
     try:
