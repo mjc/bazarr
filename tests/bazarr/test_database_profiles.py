@@ -98,3 +98,16 @@ def test_list_and_lookup_interfaces_do_not_confuse_missing_profile(profiles_sess
     assert [profile['profileId'] for profile in database.list_profiles()] == [1]
     assert database.get_profile(1)['name'] == 'English'
     assert database.get_profile(999) is None
+
+
+@pytest.mark.parametrize('invalid_items', ['not json', '[null]'])
+def test_list_profiles_skips_invalid_rows_and_keeps_valid_profiles(profiles_session, invalid_items):
+    profiles_session.add_all([
+        database.TableLanguagesProfiles(profileId=1, name='Malformed', items=invalid_items),
+        database.TableLanguagesProfiles(profileId=2, name='Valid', items=json.dumps([_item(1, 'en')])),
+    ])
+    profiles_session.commit()
+
+    assert [profile['profileId'] for profile in database.list_profiles()] == [2]
+    assert database.get_profile(1) is None
+    assert database.get_profile(2)['name'] == 'Valid'
