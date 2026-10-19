@@ -640,7 +640,7 @@ def bind_wanted_database(transactional_session, bind_wanted_state, monkeypatch):
     del bind_wanted_state
 
     def get_profile(*unused_args, **unused_kwargs):
-        return {"items": [], "originalFormat": False}
+        return {"items": [], "cutoff": None, "originalFormat": False}
 
     def get_audio_profile_languages(audio_languages):
         if audio_languages in (None, "", "[]"):

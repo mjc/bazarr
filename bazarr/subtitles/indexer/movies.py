@@ -18,8 +18,7 @@ from utilities.video_analyzer import embedded_subs_reader
 from app.event_handler import event_stream
 from subtitles.indexer.utils import guess_external_subtitles, get_external_subtitles_path
 from subtitles.pool import get_language_equals
-from subtitles.indexer.profile_requirements import calculate_missing_subtitles, \
-    calculate_enhanced_missing_subtitles
+from subtitles.indexer.profile_requirements import calculate_missing_subtitles
 from subtitles.wanted_state import store_missing_subtitles
 from app.jobs_queue import jobs_queue, JobCanceled
 
@@ -258,41 +257,19 @@ def list_missing_subtitles_movies(
     # Get language equals configuration
     lang_equals = core._LanguageEquals(get_language_equals())
 
-    matches_audio = lambda language: any(x['code2'] == language['language'] for x in get_audio_profile_languages(
-                                movie_subtitles.audio_language))
-
     for movie_subtitles in movies_subtitles:
-        missing_subtitles_text = '[]'
-        if movie_subtitles.profileId:
-            audio_language_codes = {
-                x['code2']
-                for x in get_audio_profile_languages(movie_subtitles.audio_language)
-            }
-            matches_audio = lambda language: language['language'] in audio_language_codes
-
-            # get desired subtitles
-            desired_subtitles_temp = get_profile(profile_id=movie_subtitles.profileId)
-            profile_items = desired_subtitles_temp['items'] if desired_subtitles_temp is not None else []
-
-            # get existing subtitles
-            actual_subtitles_temp = get_subtitles(radarr_id=movie_subtitles.radarrId) or []
-            if not use_embedded_subs:
-                actual_subtitles_temp = [x for x in actual_subtitles_temp if isinstance(x, dict) and x.get('path')]
-
-            profile_groups = desired_subtitles_temp.get('groups') if desired_subtitles_temp is not None else None
-            if profile_groups is not None:
-                missing_subtitles_list = calculate_enhanced_missing_subtitles(
-                    profile_groups, desired_subtitles_temp.get('cutoff'), actual_subtitles_temp, matches_audio,
-                    lang_equals)
-            else:
-                missing_subtitles_list = calculate_missing_subtitles(
-                    profile_items, desired_subtitles_temp.get('cutoff') if desired_subtitles_temp is not None else None,
-                    actual_subtitles_temp,
-                    matches_audio, lang_equals)
-            missing_subtitles_text = str(missing_subtitles_list)
+        missing_subtitles = []
+        if movie_subtitles.profileId and (profile := get_profile(profile_id=movie_subtitles.profileId)) is not None:
+            missing_subtitles = calculate_missing_subtitles(
+                profile,
+                get_subtitles(radarr_id=movie_subtitles.radarrId) or [],
+                {language['code2'] for language in get_audio_profile_languages(movie_subtitles.audio_language)},
+                lang_equals,
+                use_embedded_subs=use_embedded_subs,
+            )
 
         store_missing_subtitles(
-            TableMovies.__table__, 'radarrId', 'movie', movie_subtitles.radarrId, missing_subtitles_text,
+            TableMovies.__table__, 'radarrId', 'movie', movie_subtitles.radarrId, str(missing_subtitles),
         )
         event_stream(type='movie', payload=movie_subtitles.radarrId)
         event_stream(type='movie-wanted', action='update', payload=movie_subtitles.radarrId)
