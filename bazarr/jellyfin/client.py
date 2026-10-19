@@ -2,10 +2,43 @@
 
 import logging
 import os
+from typing import TypedDict
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+class JellyfinItem(TypedDict):
+    Id: str
+    Name: str | None
+    Path: str | None
+    ProviderIds: dict[str, str | None] | None
+
+
+def parse_jellyfin_item(payload: object) -> JellyfinItem | None:
+    if not isinstance(payload, dict):
+        return None
+    item_id: object = payload.get('Id')
+    name: object = payload.get('Name')
+    path: object = payload.get('Path')
+    raw_ids: object = payload.get('ProviderIds')
+    if not isinstance(item_id, str) or not item_id:
+        return None
+    if name is not None and not isinstance(name, str):
+        return None
+    if path is not None and not isinstance(path, str):
+        return None
+    provider_ids: dict[str, str | None] | None = None
+    if raw_ids is not None:
+        if not isinstance(raw_ids, dict):
+            return None
+        provider_ids = {}
+        for key, value in raw_ids.items():
+            if not isinstance(key, str) or (value is not None and not isinstance(value, str)):
+                return None
+            provider_ids[key] = value
+    return {'Id': item_id, 'Name': name, 'Path': path, 'ProviderIds': provider_ids}
 
 
 class JellyfinClient:
@@ -29,12 +62,12 @@ class JellyfinClient:
     def _url(self, path: str) -> str:
         return f'{self.base_url}{path}'
 
-    def get(self, path: str, params: dict = None) -> requests.Response:
+    def get(self, path: str, params: dict | None = None) -> requests.Response:
         response = self.session.get(self._url(path), params=params, timeout=30)
         response.raise_for_status()
         return response
 
-    def post(self, path: str, json: dict = None, params: dict = None) -> requests.Response:
+    def post(self, path: str, json: dict | None = None, params: dict | None = None) -> requests.Response:
         response = self.session.post(self._url(path), json=json, params=params, timeout=30)
         response.raise_for_status()
         return response
@@ -47,10 +80,15 @@ class JellyfinClient:
         """GET /Library/VirtualFolders — returns all library folders."""
         return self.get('/Library/VirtualFolders').json()
 
-    def get_items(self, params: dict) -> list:
+    def get_items(self, params: dict) -> list[JellyfinItem] | None:
         """GET /Items — search/browse items with query parameters."""
-        data = self.get('/Items', params=params).json()
-        return data.get('Items', [])
+        data: object = self.get('/Items', params=params).json()
+        if not isinstance(data, dict):
+            return None
+        raw_items: object = data.get('Items')
+        if not isinstance(raw_items, list):
+            return None
+        return [item for raw in raw_items if (item := parse_jellyfin_item(raw)) is not None]
 
     def get_episodes(self, series_id: str, season: int) -> list:
         """GET /Shows/{seriesId}/Episodes — list episodes for a season."""

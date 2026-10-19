@@ -278,3 +278,27 @@ def test_refresh_falls_back_to_library_update_on_error(fake, settings):
         jellyfin_refresh_item(imdb_id="tt123", is_movie=False)
 
     assert fake.refresh_item_modes == [("lib-shows", "Default", "Default")]
+
+
+@pytest.mark.parametrize('nullable_field', ['ProviderIds', 'Name'])
+def test_nullable_item_does_not_hide_later_id_match(fake, settings, nullable_field):
+    settings.jellyfin.movie_library_ids = ['lib-movies']
+    settings.jellyfin.get.return_value = 'immediate'
+    first = make_movie(id='unrelated', imdb_id='tt000', tmdb_id=None)
+    first[nullable_field] = None
+    fake.items = [first, make_movie(id='match', imdb_id='tt123')]
+    # jsonschema's validator does not implement OpenAPI's nullable flag.
+    with patch.object(fake, 'get_items', return_value=fake.items):
+        jellyfin_refresh_item(imdb_id='tt123', title='Matching movie')
+    assert fake.refresh_item_calls == ['match']
+
+
+def test_null_path_still_allows_immediate_refresh(fake, settings):
+    settings.jellyfin.movie_library_ids = ['lib-movies']
+    settings.jellyfin.get.return_value = 'immediate'
+    movie = make_movie(id='match', imdb_id='tt123')
+    movie['Path'] = None
+    fake.items = [movie]
+    with patch.object(fake, 'get_items', return_value=fake.items):
+        jellyfin_refresh_item(imdb_id='tt123')
+    assert fake.refresh_item_calls == ['match']

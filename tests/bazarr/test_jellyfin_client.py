@@ -83,3 +83,23 @@ def test_report_media_updated(mock_post, client):
     })
 
 
+
+
+@pytest.mark.parametrize('payload', [None, {}, {'Id': 42}, {'Id': 'item', 'Name': []},
+                                    {'Id': 'item', 'ProviderIds': {'Imdb': []}}])
+def test_malformed_item_returns_none(payload):
+    from bazarr.jellyfin.client import parse_jellyfin_item
+    assert parse_jellyfin_item(payload) is None
+
+
+def test_item_parser_preserves_nullable_fields():
+    from bazarr.jellyfin.client import parse_jellyfin_item
+    item = {'Id': 'item', 'Name': None, 'Path': None, 'ProviderIds': None}
+    assert parse_jellyfin_item(item) == item
+
+
+def test_http_items_accept_nullable_fields(client):
+    item = {'Id': 'item', 'Name': None, 'Path': None, 'ProviderIds': None}
+    with patch.object(client, 'get') as request:
+        request.return_value.json.return_value = {'Items': [item]}
+        assert client.get_items({}) == [item]

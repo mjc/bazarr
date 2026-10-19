@@ -3,12 +3,12 @@
 import logging
 
 from app.config import settings
-from .client import JellyfinClient
+from .client import JellyfinClient, JellyfinItem
 
 logger = logging.getLogger(__name__)
 
 
-def get_jellyfin_client(url: str = None, apikey: str = None) -> JellyfinClient:
+def get_jellyfin_client(url: str | None = None, apikey: str | None = None) -> JellyfinClient:
     """Create a JellyfinClient from settings or explicit parameters."""
     url = url or settings.jellyfin.url
     apikey = apikey or settings.jellyfin.apikey
@@ -21,7 +21,7 @@ def get_jellyfin_client(url: str = None, apikey: str = None) -> JellyfinClient:
     return JellyfinClient(url, apikey)
 
 
-def jellyfin_test_connection(url: str = None, apikey: str = None) -> dict:
+def jellyfin_test_connection(url: str | None = None, apikey: str | None = None) -> dict:
     """Test connectivity to a Jellyfin server. Returns server info or error."""
     try:
         client = get_jellyfin_client(url, apikey)
@@ -39,7 +39,7 @@ def jellyfin_test_connection(url: str = None, apikey: str = None) -> dict:
         }
 
 
-def jellyfin_get_libraries(url: str = None, apikey: str = None) -> list:
+def jellyfin_get_libraries(url: str | None = None, apikey: str | None = None) -> list:
     """Get movie and series libraries from the configured Jellyfin server."""
     try:
         client = get_jellyfin_client(url, apikey)
@@ -63,8 +63,8 @@ def jellyfin_get_libraries(url: str = None, apikey: str = None) -> list:
 
 
 def _find_item(client: JellyfinClient, is_movie: bool, library_ids: list,
-               imdb_id: str = None, tmdb_id: str = None, tvdb_id: int = None,
-               title: str = None, year: int = None) -> dict | None:
+               imdb_id: str | None = None, tmdb_id: str | None = None, tvdb_id: int | None = None,
+               title: str | None = None, year: int | None = None) -> JellyfinItem | None:
     """Find a Jellyfin item by provider IDs, with title fallback.
 
     Searches by year to narrow results, matches by provider IDs first,
@@ -89,24 +89,28 @@ def _find_item(client: JellyfinClient, is_movie: bool, library_ids: list,
 
             items = client.get_items(params)
 
-            # Single pass: check IDs first, remember title match as fallback
-            title_match = None
-            for item in items:
-                provider_ids = item.get('ProviderIds', {})
-                if imdb_id and provider_ids.get('Imdb') == imdb_id:
-                    return item
-                if tmdb_id and provider_ids.get('Tmdb') == str(tmdb_id):
-                    return item
-                if tvdb_id and provider_ids.get('Tvdb') == str(tvdb_id):
-                    return item
-                if title and not title_match and item.get('Name', '').lower() == title.lower():
-                    title_match = item
+            if items is None:
+                continue
 
-            if title_match:
-                return title_match
         except Exception as e:
             logger.debug(f"Error searching library {library_id}: {e}")
             continue
+
+        # Single pass: check IDs first, remember title match as fallback
+        title_match = None
+        for item in items:
+            provider_ids = item.get('ProviderIds') or {}
+            if imdb_id and provider_ids.get('Imdb') == imdb_id:
+                return item
+            if tmdb_id and provider_ids.get('Tmdb') == str(tmdb_id):
+                return item
+            if tvdb_id and provider_ids.get('Tvdb') == str(tvdb_id):
+                return item
+            if title and not title_match and (item.get('Name') or '').lower() == title.lower():
+                title_match = item
+
+        if title_match:
+            return title_match
 
     return None
 
@@ -125,9 +129,9 @@ def _find_episode(client: JellyfinClient, series_id: str, season: int,
     return None
 
 
-def jellyfin_refresh_item(imdb_id: str = None, is_movie: bool = True, season: int = None,
-                          episode: int = None, tmdb_id: str = None, tvdb_id: int = None,
-                          title: str = None, year: int = None) -> None:
+def jellyfin_refresh_item(imdb_id: str | None = None, is_movie: bool = True, season: int | None = None,
+                          episode: int | None = None, tmdb_id: str | None = None, tvdb_id: int | None = None,
+                          title: str | None = None, year: int | None = None) -> None:
     """
     Refresh a specific item in Jellyfin after subtitle changes.
 
@@ -194,7 +198,7 @@ def jellyfin_refresh_item(imdb_id: str = None, is_movie: bool = True, season: in
 
 
 def _refresh_or_report(client: JellyfinClient, immediate: bool,
-                       item_id: str = None, path: str = None) -> None:
+                       item_id: str | None = None, path: str | None = None) -> None:
     """Execute the appropriate refresh method based on user setting."""
     if immediate and item_id:
         client.refresh_item(item_id)
@@ -204,8 +208,8 @@ def _refresh_or_report(client: JellyfinClient, immediate: bool,
         client.refresh_item(item_id)
 
 
-def jellyfin_update_library(client: JellyfinClient = None, is_movie_library: bool = True,
-                            library_ids: list = None) -> None:
+def jellyfin_update_library(client: JellyfinClient | None = None, is_movie_library: bool = True,
+                            library_ids: list | None = None) -> None:
     """
     Trigger a library refresh for configured libraries of the given type.
     Uses POST /Items/{libraryId}/Refresh to fill missing metadata and images.
