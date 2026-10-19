@@ -195,7 +195,7 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
             # Get current movies in DB
             current_movies_in_db: dict[int, RowMapping] = {
                 row['radarrId']: row for row in database.execute(
-                    select(*(getattr(TableMovies, column.name) for column in TableMovies.__table__.columns
+                    select(*(column for column in TableMovies.__table__.columns
                              if column.name != 'ffprobe_cache'))
                 ).mappings()
             }

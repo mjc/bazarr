@@ -167,8 +167,8 @@ def update_one_series(series_id, action, is_signalr=False, sync_episodes_after_u
 
     # Check if there's a row in database for this series ID
     existing_series = database.execute(
-        select(*(getattr(TableShows, column.name) for column in TableShows.__table__.columns))
-        .where(TableShows.sonarrSeriesId == series_id)).mappings().first()
+        select(*TableShows.__table__.columns)
+        .where(TableShows.__table__.c.sonarrSeriesId == series_id)).mappings().first()
 
     # Delete series from DB
     if action == 'deleted' and existing_series:
