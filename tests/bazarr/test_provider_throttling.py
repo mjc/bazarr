@@ -11,7 +11,8 @@ import requests
 
 from bazarr.app import get_providers
 from app import provider_throttling as policies
-from subliminal.exceptions import AuthenticationError, DownloadLimitExceeded, ServiceUnavailable, Unauthorized
+from subliminal.exceptions import (AuthenticationError, ConfigurationError, DownloadLimitExceeded,
+                                   ServiceUnavailable, Unauthorized)
 from subliminal_patch.exceptions import APIThrottled, MustGetBlacklisted, TooManyRequests
 
 
@@ -205,3 +206,56 @@ def test_blacklisting_keeps_original_context(monkeypatch: pytest.MonkeyPatch, ef
     blacklist.assert_called_once_with('provider', 'subtitle-id', 'series', ids, language)
     assert not get_providers.tp
     effects[0].assert_not_called()
+
+
+class InvalidProviderCredentials(AuthenticationError):
+    pass
+
+
+class InvalidProviderConfiguration(ConfigurationError):
+    pass
+
+
+@pytest.mark.parametrize('provider,error_type,reason', [
+    ('opensubtitlescom', Unauthorized, 'AuthenticationError'),
+    ('subsource', InvalidProviderCredentials, 'AuthenticationError'),
+    ('provider', InvalidProviderConfiguration, 'ConfigurationError'),
+])
+def test_credential_settings_change_resets_subclass_throttles(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, effects: tuple[Mock, Mock],
+    provider: str, error_type: type[Exception], reason: str,
+) -> None:
+    import logging
+    from dynaconf.utils.boxing import DynaBox
+    from app import config, database as app_database, get_providers as callbacks
+
+    caplog.set_level(logging.INFO)
+    get_providers.provider_throttle(provider, error_type('bad credentials'))
+    assert get_providers.tp[provider][0] == reason
+    assert len(get_providers.tp[provider]) == 3
+    effects[1].track_throttling.assert_called_once()
+    assert effects[1].track_throttling.call_args.kwargs['exception_name'] == error_type.__name__
+    assert error_type.__name__ in caplog.text
+
+    get_providers.tp['network'] = ('ReadTimeout', datetime.now() + timedelta(hours=1), '1 hour')
+    get_providers.throttled_count('pending')
+    monkeypatch.setattr(callbacks, 'reset_throttled_providers', get_providers.reset_throttled_providers)
+    monkeypatch.setattr(config, 'settings', DynaBox({
+        'general': {'subzero_mods': ''}, 'subsource': {'apikey': 'previous'},
+        'validators': SimpleNamespace(validate=Mock()),
+    }))
+    monkeypatch.setattr(config, 'validate_log_regex', Mock())
+    monkeypatch.setattr(config, 'write_config', Mock())
+    monkeypatch.setattr(app_database, 'database', Mock())
+
+    config.save_settings([('settings-subsource-apikey', 'replacement')])
+
+    assert provider not in get_providers.tp
+    assert get_providers.tp['network'][0] == 'ReadTimeout'
+    assert get_providers.throttle_count['pending']['count'] == 1
+
+
+def test_selective_reset_keeps_legacy_payment_reason_compatibility(effects: tuple[Mock, Mock]) -> None:
+    get_providers.tp['provider'] = ('PaymentRequired', datetime.now() + timedelta(hours=1), '1 hour')
+    get_providers.reset_throttled_providers(only_auth_or_conf_error=True)
+    assert 'provider' not in get_providers.tp

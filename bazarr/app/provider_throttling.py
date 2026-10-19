@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from threading import Lock
-from typing import TypedDict
+from typing import Literal, TypedDict
 from zoneinfo import ZoneInfo
 
 import requests
@@ -20,6 +20,7 @@ class ThrottlePolicy:
     failures: int = 1
     window: timedelta = timedelta(seconds=120)
     reset_timezone: str | None = None
+    reset_reason: Literal['AuthenticationError', 'ConfigurationError'] | None = None
 
     def deadline(self, now: datetime) -> tuple[datetime, str]:
         if self.reset_timezone is None:
@@ -44,10 +45,10 @@ _DEFAULT_POLICIES: dict[type[BaseException], ThrottlePolicy] = {
     ParseResponseError: ThrottlePolicy(timedelta(hours=6), '6 hours'),
     requests.exceptions.Timeout: _ONE_HOUR_RETRY,
     TimeoutError: _ONE_HOUR_RETRY,
-    ConfigurationError: ThrottlePolicy(timedelta(hours=12), '12 hours'),
+    ConfigurationError: ThrottlePolicy(timedelta(hours=12), '12 hours', reset_reason='ConfigurationError'),
     PermissionError: ThrottlePolicy(timedelta(hours=12), '12 hours'),
     requests.exceptions.ProxyError: ThrottlePolicy(timedelta(hours=1), '1 hour'),
-    AuthenticationError: ThrottlePolicy(timedelta(hours=12), '12 hours'),
+    AuthenticationError: ThrottlePolicy(timedelta(hours=12), '12 hours', reset_reason='AuthenticationError'),
 }
 
 _PROVIDER_POLICIES: dict[str, dict[type[BaseException], ThrottlePolicy]] = {
@@ -81,7 +82,7 @@ _PROVIDER_POLICIES: dict[str, dict[type[BaseException], ThrottlePolicy]] = {
     },
     'subsource': {
         APIThrottled: ThrottlePolicy(timedelta(minutes=10), '10 minutes', failures=5),
-        AuthenticationError: ThrottlePolicy(timedelta(hours=1), '1 hour'),
+        AuthenticationError: ThrottlePolicy(timedelta(hours=1), '1 hour', reset_reason='AuthenticationError'),
         ForbiddenError: ThrottlePolicy(timedelta(minutes=15), '15 minutes'),
         TooManyRequests: _ONE_HOUR_RETRY,
     },

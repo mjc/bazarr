@@ -327,7 +327,7 @@ def provider_throttle(name: str, exception: Exception, ids: dict[str, int | None
     if policy.failures == 1 or throttled_count(name, policy):
         cls_name = type(exception).__name__
         throttle_until, throttle_description = policy.deadline(datetime.datetime.now())
-        tp[name] = (cls_name, throttle_until, throttle_description)
+        tp[name] = (policy.reset_reason or cls_name, throttle_until, throttle_description)
         set_throttled_providers(str(tp))
 
         trac_info = _get_traceback_info(exception)
