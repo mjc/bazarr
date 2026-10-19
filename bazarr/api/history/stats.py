@@ -3,9 +3,11 @@
 import datetime
 import operator
 import itertools
+from collections.abc import Iterable
+from typing import TypedDict
 
 from dateutil import rrule
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 from functools import reduce
 
 from app.database import TableHistory, TableHistoryMovie, database, select
@@ -13,6 +15,23 @@ from app.database import TableHistory, TableHistoryMovie, database, select
 from ..utils import authenticate
 
 api_ns_history_stats = Namespace('History Statistics', description='Get history statistics')
+
+
+class HistoryCount(TypedDict):
+    date: str
+    count: int
+
+
+class HistoryStatsResponse(TypedDict):
+    series: list[HistoryCount]
+    movies: list[HistoryCount]
+
+
+def _history_counts(timestamps: Iterable[datetime.datetime]) -> list[HistoryCount]:
+    return [
+        {'date': date, 'count': sum(1 for _ in group)}
+        for date, group in itertools.groupby(timestamps, key=lambda timestamp: timestamp.strftime('%Y-%m-%d'))
+    ]
 
 
 @api_ns_history_stats.route('history/stats')
@@ -43,7 +62,7 @@ class HistoryStats(Resource):
     @authenticate
     @api_ns_history_stats.response(401, 'Not Authenticated')
     @api_ns_history_stats.expect(get_request_parser)
-    def get(self):
+    def get(self) -> HistoryStatsResponse:
         """Get history statistics"""
         args = self.get_request_parser.parse_args()
         timeframe = args.get('timeFrame')
@@ -85,39 +104,27 @@ class HistoryStats(Resource):
         history_where_clause = reduce(operator.and_, history_where_clauses)
         history_where_clause_movie = reduce(operator.and_, history_where_clauses_movie)
 
-        data_series = [{
-            'timestamp': x.timestamp,
-            'id': x.id,
-        } for x in database.execute(
-            select(TableHistory.timestamp, TableHistory.id)
-            .where(history_where_clause))
-            .all()]
-        data_series = [{'date': date[0], 'count': sum(1 for item in date[1])} for date in
-                       itertools.groupby(list(data_series),
-                                         key=lambda x: x['timestamp'].strftime(
-                                             '%Y-%m-%d'))]
+        data_series = _history_counts(
+            row.timestamp for row in database.execute(
+                select(TableHistory.timestamp, TableHistory.id)
+                .where(history_where_clause)))
+        data_movies = _history_counts(
+            row.timestamp for row in database.execute(
+                select(TableHistoryMovie.timestamp, TableHistoryMovie.id)
+                .where(history_where_clause_movie)))
 
-        data_movies = [{
-            'timestamp': x.timestamp,
-            'id': x.id,
-        } for x in database.execute(
-            select(TableHistoryMovie.timestamp, TableHistoryMovie.id)
-            .where(history_where_clause_movie))
-            .all()]
-        data_movies = [{'date': date[0], 'count': sum(1 for item in date[1])} for date in
-                       itertools.groupby(list(data_movies),
-                                         key=lambda x: x['timestamp'].strftime(
-                                             '%Y-%m-%d'))]
-
+        series_dates = {entry['date'] for entry in data_series}
+        movie_dates = {entry['date'] for entry in data_movies}
         for dt in rrule.rrule(rrule.DAILY,
                               dtstart=datetime.datetime.now() - datetime.timedelta(seconds=delay),
                               until=datetime.datetime.now()):
-            if not any(d['date'] == dt.strftime('%Y-%m-%d') for d in data_series):
-                data_series.append({'date': dt.strftime('%Y-%m-%d'), 'count': 0})
-            if not any(d['date'] == dt.strftime('%Y-%m-%d') for d in data_movies):
-                data_movies.append({'date': dt.strftime('%Y-%m-%d'), 'count': 0})
+            date = dt.strftime('%Y-%m-%d')
+            if date not in series_dates:
+                data_series.append({'date': date, 'count': 0})
+            if date not in movie_dates:
+                data_movies.append({'date': date, 'count': 0})
 
-        sorted_data_series = sorted(data_series, key=lambda i: i['date'])
-        sorted_data_movies = sorted(data_movies, key=lambda i: i['date'])
+        data_series.sort(key=lambda entry: entry['date'])
+        data_movies.sort(key=lambda entry: entry['date'])
 
-        return marshal({'series': sorted_data_series, 'movies': sorted_data_movies}, self.get_response_model)
+        return {'series': data_series, 'movies': data_movies}
