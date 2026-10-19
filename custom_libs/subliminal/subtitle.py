@@ -45,7 +45,7 @@ class Subtitle(object):
         self.page_link = page_link
 
         #: Content as bytes
-        self.content = None
+        self.content: bytes | None = None
 
         #: Encoding to decode with when accessing :attr:`text`
         self.encoding = None
@@ -65,7 +65,7 @@ class Subtitle(object):
         raise NotImplementedError
 
     @property
-    def text(self):
+    def text(self) -> str | None:
         """Content as string
 
         If :attr:`encoding` is None, the encoding is guessed with :meth:`guess_encoding`

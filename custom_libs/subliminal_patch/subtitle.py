@@ -7,6 +7,7 @@ import traceback
 
 import re
 import types
+from typing import TypedDict
 
 import chardet
 import pysrt
@@ -33,13 +34,19 @@ BOMS = (
 logger = logging.getLogger(__name__)
 
 
-ftfy_defaults = {
+class TextFixOptions(TypedDict):
+    uncurl_quotes: bool
+    fix_character_width: bool
+
+
+ftfy_defaults: TextFixOptions = {
     "uncurl_quotes": False,
     "fix_character_width": False,
 }
 
 
 class Subtitle(Subtitle_):
+    content: bytes | None
     storage_path = None
     release_info = None
     matches = None
@@ -99,7 +106,7 @@ class Subtitle(Subtitle_):
         return f"<{self.__class__.__name__}: {r_info} [{repr(self.language)}]>"
 
     @property
-    def text(self):
+    def text(self) -> str | None:
         """Content as string
 
         If :attr:`encoding` is None, the encoding is guessed with :meth:`guess_encoding`
@@ -108,10 +115,10 @@ class Subtitle(Subtitle_):
         if not self.content:
             return
 
-        if not isinstance(self.content, text_type):
-            return self.content.decode(self.get_encoding(), errors='replace')
-
-        return self.content
+        encoding = self.get_encoding()
+        if encoding is None:
+            return None
+        return self.content.decode(encoding, errors='replace')
 
     @property
     def numeric_id(self):
@@ -131,7 +138,7 @@ class Subtitle(Subtitle_):
         """
         return self
 
-    def get_encoding(self):
+    def get_encoding(self) -> str | None:
         return self.guess_encoding()
 
     def set_encoding(self, encoding):
@@ -140,6 +147,8 @@ class Subtitle(Subtitle_):
             return
 
         unicontent = self.text
+        if unicontent is None:
+            return None
         logger.debug("Changing encoding: to %s, from %s", encoding, ge)
         self.content = unicontent.encode(encoding)
         self._guessed_encoding = encoding
@@ -152,7 +161,7 @@ class Subtitle(Subtitle_):
         self.set_encoding("utf-8")
 
         # normalize line endings
-        if self.format == "srt":
+        if self.format == "srt" and self.content is not None:
             self.content = self.content.replace(b"\r\n", b"\n").replace(b'\r', b'\n')
 
     @staticmethod
@@ -166,6 +175,8 @@ class Subtitle(Subtitle_):
         :rtype: str
 
         """
+        if self.content is None:
+            return None
         if self._guessed_encoding:
             return self._guessed_encoding
 
@@ -280,7 +291,7 @@ class Subtitle(Subtitle_):
         self._guessed_encoding = encoding
         return encoding
 
-    def is_valid(self):
+    def is_valid(self) -> bool:
         """Check if a :attr:`text` is a valid SubRip format. Note that original format will bypass the checking
 
         :return: whether or not the subtitle is valid.
@@ -292,6 +303,9 @@ class Subtitle(Subtitle_):
 
         text = self.text
         if not text:
+            return False
+        encoding = self.get_encoding()
+        if encoding is None:
             return False
 
         # valid srt
@@ -329,9 +343,9 @@ class Subtitle(Subtitle_):
                 subs = pysubs2.SSAFile.from_string(text, fps=sub_fps)
 
             if not self.use_original_format:
-                self.content = subs.to_string(format_="srt").encode(encoding=self.get_encoding())
+                self.content = subs.to_string(format_="srt").encode(encoding=encoding)
             else:
-                self.content = subs.to_string(format_=self.format)
+                self.content = subs.to_string(format_=self.format).encode(encoding=encoding)
         except:
             logger.exception("Couldn't convert subtitle %s to .srt format: %s", self, traceback.format_exc())
             return False
@@ -339,22 +353,26 @@ class Subtitle(Subtitle_):
         self._is_valid = True
         return True
 
-    def get_modified_content(self, format="srt", debug=False):
+    def get_modified_content(self, format: str = "srt", debug: bool = False) -> bytes | None:
         """
         :return: string
         """
+        if self.content is None:
+            return None
+        encoding = self.get_encoding()
+        if encoding is None:
+            return None
         if not self.mods:
-            return fix_text(self.content.decode(encoding=self.get_encoding()), **ftfy_defaults).encode(
-                encoding=self.get_encoding())
+            return fix_text(self.content.decode(encoding=encoding), **ftfy_defaults).encode(encoding=encoding)
 
         submods = SubtitleModifications(debug=debug)
-        if submods.load(content=self.text, language=self.language, mods=self.mods):
+        if submods.load(content=self.text, language=self.language, mods=self.mods) and submods.f is not None:
             logger.info("Applying mods: %s", self.mods)
             submods.modify(*self.mods)
             self.mods = submods.mods_used
 
             content = fix_text(submods.f.to_string(format_=format),
-                               **ftfy_defaults).encode(encoding=self.get_encoding())
+                               **ftfy_defaults).encode(encoding=encoding)
             submods.f = None
             del submods
             return content
@@ -362,7 +380,9 @@ class Subtitle(Subtitle_):
 
 
 class ModifiedSubtitle(Subtitle):
-    id = None
+    @property
+    def id(self):
+        return None
 
 
 MERGED_FORMATS = {

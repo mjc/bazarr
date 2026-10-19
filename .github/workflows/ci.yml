@@ -103,7 +103,7 @@ jobs:
       - name: Install test dependencies
         run: pip install -r dev-requirements.txt
 
-      - name: Check utility types
+      - name: Check Python types
         if: matrix.python-version == '3.14'
         run: basedpyright
 
