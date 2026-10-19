@@ -8,7 +8,7 @@ import subliminal
 
 from subzero.language import Language
 from subliminal_patch.core import save_subtitles
-from subliminal_patch.core_persistent import list_all_subtitles, download_subtitles
+from subliminal_patch.core_persistent import list_all_subtitles
 from subliminal_patch.score import compute_score, DEFAULT_SCORES
 
 from languages.get_languages import alpha3_from_alpha2, alpha2_from_alpha3
@@ -45,6 +45,7 @@ def _build_release_info(subtitle):
 
 
 from .language_utils import format_episode_part, resolve_audio_language
+from .content import validate_subtitle
 
 
 def manual_search(path, profile_id: int | None, providers, sceneName, title, media_type):
@@ -219,7 +220,9 @@ def _manual_download_subtitle(path, audio_language, hi, forced, subtitle, provid
     if video:
         try:
             if provider:
-                download_subtitles([subtitle], _get_pool(media_type, profile_id))
+                if not _get_pool(media_type, profile_id).download_subtitle(subtitle):
+                    logging.error('BAZARR Error downloading Subtitles for this file %s', path)
+                    return 'Error downloading Subtitles'
                 logging.debug(f'BAZARR Subtitles file downloaded for this file: {path}')
             else:
                 logging.info("BAZARR All providers are throttled")
@@ -228,7 +231,7 @@ def _manual_download_subtitle(path, audio_language, hi, forced, subtitle, provid
             logging.exception(f'BAZARR Error downloading Subtitles for this file {path}')
             return 'Error downloading Subtitles'
         else:
-            if not subtitle.is_valid():
+            if not validate_subtitle(subtitle):
                 logging.error(f"BAZARR Downloaded subtitles isn't valid for this file: {path}")
                 return "Downloaded subtitles isn't valid. Check log."
             try:

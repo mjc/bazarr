@@ -176,7 +176,7 @@ def test_upload_reuses_custom_language_identity_in_all_outputs(
     assert history.call_args.args[2].message == f'{name}{label} Subtitles manually uploaded.'
 
 
-@pytest.mark.parametrize('format_', ['ass', 'ssa', 'vtt', 'srt'])
+@pytest.mark.parametrize('format_', ['ass', 'ssa', 'vtt', 'srt', 'microdvd'])
 @pytest.mark.parametrize('original', [False, True])
 @pytest.mark.parametrize('wrong_filename', [False, True])
 def test_upload_format_follows_content_and_original_format_setting(
@@ -191,7 +191,7 @@ def test_upload_format_follows_content_and_original_format_setting(
     monkeypatch.setattr(upload_module, 'get_target_folder', lambda path: str(tmp_path))
     document = pysubs2.SSAFile()
     document.events.append(pysubs2.SSAEvent(start=0, end=1000, text='Hello'))
-    content = document.to_string(format_).encode('utf-8')
+    content = b'{1}{1}25.0\n{0}{25}Hello\n' if format_ == 'microdvd' else document.to_string(format_).encode('utf-8')
     observed = []
 
     def save(path, subtitles, **kwargs):
@@ -203,7 +203,7 @@ def test_upload_format_follows_content_and_original_format_setting(
     extension = 'srt' if wrong_filename and format_ != 'srt' else 'ass' if wrong_filename else format_
     assert upload_module.manual_upload_subtitle('/movie.mkv', 'en', False, False, 'movie', BytesIO(content),
                                                 'subtitle.' + extension, '[]', job_id=1, radarrId=7) == ('', 204)
-    expected = format_ if original else 'srt'
+    expected = format_ if original and format_ != 'microdvd' else 'srt'
     assert observed == [(expected, (expected,))]
     files = list(tmp_path.iterdir())
     assert len(files) == 1

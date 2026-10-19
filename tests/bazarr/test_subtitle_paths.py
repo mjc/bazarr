@@ -147,6 +147,9 @@ def test_remove_hi_can_save_to_a_new_output_path(
         def is_valid(self) -> bool:
             return True
 
+        def get_encoding(self) -> str:
+            return 'utf-8'
+
         def get_modified_content(self, format: str) -> bytes:
             return b'modified'
 

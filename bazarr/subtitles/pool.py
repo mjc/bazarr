@@ -11,6 +11,7 @@ from sonarr.blacklist import get_blacklist
 from app.get_providers import get_providers, get_providers_auth, provider_throttle, provider_pool, get_language_equals
 
 from .utils import get_ban_list
+from .content import prepare_downloaded_subtitle
 
 
 # fmt: on
@@ -24,6 +25,7 @@ def _init_pool(media_type, profile_id=None, providers=None):
         ban_list=get_ban_list(profile_id),
         language_hook=None,
         language_equals=get_language_equals(),
+        post_download_hook=prepare_downloaded_subtitle,
     )
 
 

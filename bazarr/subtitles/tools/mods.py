@@ -13,6 +13,7 @@ from app.config import settings
 from languages.custom_lang import CustomLanguage
 from languages.get_languages import alpha3_from_alpha2
 from utilities.subtitle_paths import subtitle_destination
+from subtitles.content import validate_subtitle
 
 
 def _write_modified_subtitle(content: bytes, source: str, destination: str) -> None:
@@ -49,7 +50,7 @@ def subtitles_apply_mods(language: str, subtitle_path: str, mods: list[str], vid
     with open(subtitle_path, 'rb') as f:
         sub.content = f.read()
 
-    if not sub.is_valid():
+    if not validate_subtitle(sub):
         logging.exception(f'BAZARR Invalid subtitle file: {subtitle_path}')
         return
 

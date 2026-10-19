@@ -8,6 +8,7 @@ from typing import Literal, Protocol, TypedDict
 
 from subliminal_patch.core import save_subtitles
 from subliminal_patch.subtitle import Subtitle
+from subtitles.content import validate_subtitle
 from subliminal_patch.score import MAX_SCORES
 
 from languages.get_languages import resolve_language
@@ -111,7 +112,7 @@ def manual_upload_subtitle(
     sub = Subtitle(resolved.to_language(forced=forced, hi=hi), mods=get_array_from(general.subzero_mods),
                    original_format=use_original_format)
     sub.content = subtitle.getvalue()
-    if not sub.is_valid():
+    if not validate_subtitle(sub):
         logging.error('BAZARR Invalid subtitle file: %s', filename)
         return None
     if general.utf8_encode:

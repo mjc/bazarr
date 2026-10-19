@@ -61,6 +61,8 @@ include = [
     "bazarr/sonarr/sync/utils.py",
     "bazarr/subtitles/upgrade.py",
     "bazarr/subtitles/upload.py",
+    "bazarr/subtitles/content.py",
+    "bazarr/subtitles/pool.py",
     "bazarr/subtitles/tools/mods.py",
     "bazarr/subtitles/tools/translate",
     "bazarr/subtitles/utils.py",
