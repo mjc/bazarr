@@ -23,9 +23,9 @@ from subtitles.wanted_state import delete_series_and_wanted_search_state
 FEATURE_PREFIX = "SYNC_SERIES "
 
 
-def trace(message):
-    if settings.general.debug:
-        logging.debug(FEATURE_PREFIX + message)
+def trace(message: str) -> None:
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug('%s%s', FEATURE_PREFIX, message)
 
 
 def get_language_profiles():

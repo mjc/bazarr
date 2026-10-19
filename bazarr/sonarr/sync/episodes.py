@@ -29,9 +29,9 @@ from .utils import get_episodes_from_sonarr_api, get_episodesFiles_from_sonarr_a
 FEATURE_PREFIX = "SYNC_EPISODES "
 
 
-def trace(message):
-    if settings.general.debug:
-        logging.debug(FEATURE_PREFIX + message)
+def trace(message: str) -> None:
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug('%s%s', FEATURE_PREFIX, message)
 
 
 def get_episodes_monitored_table(series_id):
@@ -53,7 +53,7 @@ def check_actual_file_size(original_episode_path):
     return bazarr_file_size > MINIMUM_VIDEO_SIZE
 
 
-def sync_episodes(series_id, defer_search=False, is_signalr=False):
+def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr: bool = False) -> None:
     logging.debug(f'BAZARR Starting episodes sync from Sonarr for series ID {series_id}.')
     apikey_sonarr = settings.sonarr.apikey
 
@@ -129,7 +129,7 @@ def sync_episodes(series_id, defer_search=False, is_signalr=False):
                     if episode['id'] in current_episodes_in_db_row_as_dict:
                         parsed_episode = episodeParser(
                             episode, parse_embedded_audio_track=parse_embedded_audio_track)
-                        if not set(parsed_episode.items()).issubset(set(current_episodes_in_db_row_as_dict[episode['id']].items())):
+                        if not parsed_episode.items() <= current_episodes_in_db_row_as_dict[episode['id']].items():
                             episodes_to_update.append(parsed_episode)
                     else:
                         episodes_to_add.append(
