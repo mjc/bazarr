@@ -116,14 +116,11 @@ def test_sonarr_profile_parser_skips_missing_profile_id(configured_sonarr, monke
     assert configured_sonarr.get_profile_list() == []
 
 
-def test_get_profile_cutoff_returns_none_for_malformed_profile_id(monkeypatch):
-    monkeypatch.setattr(
-        app_database,
-        "update_profile_id_list",
-        lambda: [{"profileId": 44, "cutoff": 1, "items": [{"id": 1, "language": "en"}]}],
-    )
-
-    assert app_database.get_profile_cutoff("not-a-profile-id") is None
+def test_missing_profile_does_not_load_catalog(monkeypatch):
+    def unexpected_load():
+        pytest.fail('a missing profile id must not load profiles')
+    monkeypatch.setattr(app_database, 'load_profile_catalog', unexpected_load)
+    assert app_database.get_profile(None) is None
 
 
 def test_radarr_movie_sync_finalizes_job_for_non_list_payload(monkeypatch, sync_job):

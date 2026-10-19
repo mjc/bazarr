@@ -7,12 +7,12 @@ from sqlalchemy import Select
 
 from api.formatting import ResponseFormatter
 from app.config import base_url, settings
-from app.database import TableEpisodes, TableMissingSubtitles, database, get_desired_languages, select
+from app.database import TableEpisodes, TableMissingSubtitles, database, load_profile_catalog, select
+from app.language_profiles import ProfileCatalog
 from languages.custom_lang import CustomLanguage
 from languages.get_languages import language_from_alpha2
 from subliminal_patch import core
 from subtitles.pool import get_language_equals
-from subtitles.upgrade import _language_still_desired
 from utilities.path_mappings import path_mappings
 
 
@@ -22,10 +22,12 @@ def load_formatter(profile_ids: Iterable[int | None] = ()) -> ResponseFormatter:
     if general.embedded_subs_show_desired:
         profiles = {profile_id for profile_id in profile_ids if profile_id}
         if profiles:
+            catalog = load_profile_catalog()
             equals = core._LanguageEquals(get_language_equals())
             for profile_id in profiles:
+                profile = catalog.get(profile_id)
                 languages: set[core.Language] = set()
-                for code in get_desired_languages(profile_id) or []:
+                for code in profile.desired_languages if profile is not None else ():
                     custom = CustomLanguage.from_value(code, 'alpha2')
                     languages.add(custom.subzero_language() if custom else core.Language.fromietf(code))
                 codes: set[str] = set()
@@ -74,9 +76,13 @@ def load_missing_languages(media_type: str, media_ids: Select[tuple[int]]) -> di
 def load_history_languages(
     rows: Iterable[tuple[int, str | None, int | None]], candidates: Mapping[int, int | None],
 ) -> set[tuple[str | None, int | None]]:
+    if not candidates:
+        return set()
+    catalog: ProfileCatalog = load_profile_catalog()
     desired: dict[tuple[str | None, int | None], bool] = {}
     for history_id, language, profile_id in rows:
         key = language, profile_id
         if history_id in candidates and key not in desired:
-            desired[key] = _language_still_desired(language, profile_id)
+            profile = catalog.get(profile_id)
+            desired[key] = profile is not None and language in profile.upgrade_languages
     return {key for key, wanted in desired.items() if wanted}

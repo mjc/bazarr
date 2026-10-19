@@ -1,3 +1,4 @@
+from tests.helpers.profile_records import profile_record
 from types import SimpleNamespace
 
 import pytest
@@ -52,82 +53,39 @@ def language_dictionary(monkeypatch):
     )
 
 
-def test_get_language_obj_handles_missing_profile_payload(monkeypatch):
-    monkeypatch.setattr(manual, "get_profiles_list", lambda profile_id: None)
-
-    language_set, original_format, hi_excluded = manual._get_language_obj(profile_id=44)
-
-    assert language_set == set()
-    assert original_format is False
-    assert hi_excluded == set()
+@pytest.mark.parametrize("profile_id", [None, 44])
+def test_manual_search_rejects_missing_profile_before_provider_setup(monkeypatch, mocker, profile_id):
+    monkeypatch.setattr(manual, 'get_profile', lambda profile_id: None)
+    pool_update = mocker.patch.object(subtitle_pool, '_update_pool')
+    assert manual.manual_search('/movie.mkv', profile_id, [], None, 'Movie', 'movie') == 'Language profile not found or invalid'
+    pool_update.assert_not_called()
 
 
-def test_get_language_obj_handles_malformed_profile_items(language_dictionary, monkeypatch):
-    monkeypatch.setattr(
-        manual,
-        "get_profiles_list",
-        lambda profile_id: {
-            "items": [
-                None,
-                {"bad": "shape"},
-                {"language": None},
-                {"language": "en", "forced": True, "hi": False},
-                {"language": "fr", "forced": False, "hi": True},
-            ],
-            "originalFormat": 1,
-        },
-    )
-
-    language_set, original_format, hi_excluded = manual._get_language_obj(profile_id=44)
-
-    assert len(language_set) == 2
-    assert {language.basename for language in language_set} == {"en", "fr"}
-    assert {language.forced for language in language_set} == {False, True}
-    assert {language.hi for language in language_set} == {False, True}
-    assert original_format == 1
-    assert hi_excluded == set()
-
-
-def test_get_language_obj_handles_non_integer_profile_id(monkeypatch):
-    monkeypatch.setattr(manual, "get_profiles_list", lambda profile_id: {"items": [], "originalFormat": 1})
-
-    language_set, original_format, hi_excluded = manual._get_language_obj(profile_id="not-an-int")
-
-    assert language_set == set()
-    assert original_format is False
-    assert hi_excluded == set()
-
-
-@pytest.mark.parametrize("flag", [True, "True"])
-def test_get_language_obj_preserves_profile_flags(language_dictionary, monkeypatch, flag):
-    monkeypatch.setattr(manual, "get_profiles_list", lambda **kwargs: {
-        "items": [{"language": "en", "forced": flag, "hi": flag}], "originalFormat": 1,
-    })
-    languages, original_format, hi_excluded = manual._get_language_obj(44)
+@pytest.mark.parametrize('flag', [True, 'True'])
+def test_get_language_obj_preserves_profile_flags(language_dictionary, flag):
+    profile = profile_record({'items': [{'language': 'en', 'forced': flag, 'hi': flag}], 'originalFormat': 1})
+    languages, original_format, hi_excluded = manual._get_language_obj(profile)
     assert {(language.forced, language.hi) for language in languages} == {(True, True)}
-    assert original_format == 1
+    assert original_format is True
     assert hi_excluded == set()
 
 
-@pytest.mark.parametrize("forced", [True, "True", False, "False"])
-def test_get_language_obj_preserves_hi_exclusion(language_dictionary, monkeypatch, forced):
-    monkeypatch.setattr(manual, "get_profiles_list", lambda **kwargs: {
-        "items": [{"language": "en", "forced": forced, "hi": HI_EXCLUDED}],
-    })
-    languages, _, hi_excluded = manual._get_language_obj(44)
-    expected_forced = forced is True or forced == "True"
+@pytest.mark.parametrize('forced', [True, 'True', False, 'False'])
+def test_get_language_obj_preserves_hi_exclusion(language_dictionary, forced):
+    profile = profile_record({'items': [{'language': 'en', 'forced': forced, 'hi': HI_EXCLUDED}]})
+    languages, _, hi_excluded = manual._get_language_obj(profile)
+    expected_forced = forced is True or forced == 'True'
     assert {(language.forced, language.hi) for language in languages} == {(expected_forced, False)}
-    assert hi_excluded == {("eng", expected_forced)}
+    assert hi_excluded == {('eng', expected_forced)}
 
 
-@pytest.mark.parametrize("profile_id", [None, "invalid", 44])
-def test_manual_search_accepts_empty_profile_fallback(monkeypatch, profile_id):
-    monkeypatch.setattr(subtitle_pool, "_update_pool", _no_op)
-    monkeypatch.setattr(manual, "_get_pool", _empty_message_result)
-    monkeypatch.setattr(manual, "_set_forced_providers", _no_op)
-    monkeypatch.setattr(manual, "get_profiles_list", lambda **kwargs: None)
-    # The real caller unpacks all three values before checking provider availability.
-    assert manual.manual_search('/movie.mkv', profile_id, [], None, 'Movie', 'movie') == 'All providers are throttled'
+@pytest.mark.parametrize('hi', ['True', 'False'])
+def test_manual_download_rejects_missing_profile_before_provider_setup(monkeypatch, mocker, hi):
+    monkeypatch.setattr(manual, 'get_profile', lambda profile_id: None)
+    update = mocker.patch.object(subtitle_pool, '_update_pool')
+    assert manual.manual_download_subtitle('/video.mkv', [], hi, 'False', 'cached', 'provider', None, 'Video',
+                                          'movie', False, 999) == 'Language profile not found or invalid'
+    update.assert_not_called()
 
 
 def test_episode_manual_download_handles_none_audio_list_and_message_less_result(

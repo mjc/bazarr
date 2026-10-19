@@ -1,3 +1,5 @@
+from app.language_profiles import parse_profile_items
+from tests.helpers.profile_records import profile_record
 import json
 
 import pytest
@@ -5,30 +7,18 @@ import pytest
 from app import database
 
 
-@pytest.mark.parametrize("profile_id", [None, "null", "not-an-id", []])
-def test_profile_cutoff_rejects_invalid_id_before_loading_profiles(monkeypatch, profile_id):
+def test_missing_profile_id_does_not_load_profiles(monkeypatch):
     def unexpected_load():
-        pytest.fail("invalid IDs should not load profiles")
-    monkeypatch.setattr(database, "update_profile_id_list", unexpected_load)
-    assert database.get_profile_cutoff(profile_id) is None
+        pytest.fail('missing IDs should not load profiles')
+    monkeypatch.setattr(database, 'load_profile_catalog', unexpected_load)
+    assert database.get_profile(None) is None
 
 
-@pytest.mark.parametrize("cutoff, expected", [(1, [1]), (65535, [1, 2]), (3, []), (None, [])])
-def test_profile_cutoff_uses_named_fields(monkeypatch, cutoff, expected):
-    items = [{"id": 1, "language": "en"}, {"id": 2, "language": "fr"}]
-    # Reordered keys and additional metadata must not alter the profile contract.
-    monkeypatch.setattr(database, "update_profile_id_list", lambda: [
-        {"items": items, "extra": "metadata", "cutoff": cutoff, "profileId": 11},
-    ])
-    result = database.get_profile_cutoff("11")
-    assert [item["id"] for item in result or []] == expected
-
-
-def test_profile_cutoff_ignores_invalid_items(monkeypatch):
-    monkeypatch.setattr(database, "update_profile_id_list", lambda: [
-        {"profileId": 11, "cutoff": 65535, "items": [None, {"id": 1}]},
-    ])
-    assert database.get_profile_cutoff(11) == [{"id": 1}]
+@pytest.mark.parametrize('cutoff,expected', [(1, [1]), (65535, [1, 2]), (3, []), (None, []), (0, [])])
+def test_profile_cutoff_uses_named_fields(cutoff, expected):
+    profile = profile_record({'items': [{'id': 1, 'language': 'en'}, {'id': 2, 'language': 'fr'}],
+                              'extra': 'metadata', 'cutoff': cutoff, 'profileId': 11})
+    assert [item.item_id for item in profile.cutoff_items] == expected
 
 
 def _item(item_id, language):
@@ -52,33 +42,33 @@ def _enhanced_profile(profile_id, cutoff):
 
 def test_parse_profile_items_basic_returns_flat_list():
     raw = json.dumps([_item(1, "en")])
-    assert database.parse_profile_items("basic", raw) == ([_item(1, "en")], None)
+    items, groups = parse_profile_items("basic", raw)
+    assert [item.wire() for item in items] == [_item(1, "en")]
+    assert groups is None
 
 
 def test_parse_profile_items_enhanced_flattens_groups():
     raw = json.dumps({"groups": ENHANCED_GROUPS})
-    items, groups = database.parse_profile_items("enhanced", raw)
-    assert [item["id"] for item in items] == [1, 2, 3]
-    assert groups == ENHANCED_GROUPS
+    items, groups = parse_profile_items("enhanced", raw)
+    assert [item.item_id for item in items] == [1, 2, 3]
+    assert [group.wire() for group in groups] == ENHANCED_GROUPS
 
 
-@pytest.mark.parametrize("cutoff, expected", [(1, [1, 2]), (2, [3]), (65535, [1, 2, 3]), (9, None), (None, None)])
-def test_profile_cutoff_for_enhanced_profile_uses_group_id(monkeypatch, cutoff, expected):
-    monkeypatch.setattr(database, "update_profile_id_list", lambda: [_enhanced_profile(5, cutoff)])
-    result = database.get_profile_cutoff(5)
-    ids = None if result is None else [item["id"] for item in result]
-    assert ids == expected
+@pytest.mark.parametrize('cutoff,expected', [(1, [1, 2]), (2, [3]), (65535, [1, 2, 3]), (9, []), (None, [])])
+def test_profile_cutoff_for_enhanced_profile_uses_group_id(cutoff, expected):
+    profile = profile_record(_enhanced_profile(5, cutoff))
+    assert [item.item_id for item in profile.cutoff_items] == expected
 
 
 @pytest.fixture
 def profiles_session(memory_session, monkeypatch):
     monkeypatch.setattr(database, "database", memory_session)
-    database.update_profile_id_list.invalidate()
+    database.invalidate_profiles()
     yield memory_session
-    database.update_profile_id_list.invalidate()
+    database.invalidate_profiles()
 
 
-def test_update_profile_id_list_exposes_profile_type_and_groups(profiles_session):
+def test_admin_profile_list_exposes_profile_type_and_groups(profiles_session):
     profiles_session.add(database.TableLanguagesProfiles(
         profileId=1, name="Basic", cutoff=None, items=json.dumps([_item(1, "en")])))
     profiles_session.add(database.TableLanguagesProfiles(
@@ -86,7 +76,7 @@ def test_update_profile_id_list_exposes_profile_type_and_groups(profiles_session
         profileType="enhanced"))
     profiles_session.commit()
 
-    profiles = {profile["profileId"]: profile for profile in database.update_profile_id_list()}
+    profiles = {profile["profileId"]: profile for profile in database.list_profiles()}
 
     assert profiles[1]["profileType"] == "basic"
     assert "groups" not in profiles[1]

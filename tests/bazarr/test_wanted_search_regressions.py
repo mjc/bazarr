@@ -1,3 +1,4 @@
+from tests.helpers.profile_records import profile_record
 """Exercise the runtime ORM and autocommit engine, rather than table proxies."""
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
@@ -62,14 +63,13 @@ def seed_media(session: Session, media_type: str, missing: str | None = '[]') ->
 
 def configure_indexer(monkeypatch, media_type):
     module = movie_indexer if media_type == 'movie' else episode_indexer
-    monkeypatch.setattr(module, 'get_profiles_list', lambda **kwargs: {
+    monkeypatch.setattr(module, 'get_profile', lambda *args, **kwargs: profile_record({
         'items': [{'language': 'en', 'forced': 'False', 'hi': 'False'}],
-    })
-    monkeypatch.setattr(module, 'get_profile_cutoff', lambda **kwargs: None)
-    monkeypatch.setattr(module, 'get_subtitles', lambda **kwargs: [])
+    }))
+    monkeypatch.setattr(module, 'get_subtitles', lambda *args, **kwargs: [])
     monkeypatch.setattr(module.settings.general, 'use_embedded_subs', False)
     events = []
-    monkeypatch.setattr(module, 'event_stream', lambda **kwargs: events.append(kwargs))
+    monkeypatch.setattr(module, 'event_stream', lambda *args, **kwargs: events.append(kwargs))
     recalculate = (
         lambda: module.list_missing_subtitles_movies(no=7)
         if media_type == 'movie' else module.list_missing_subtitles(epno=7)
@@ -334,14 +334,14 @@ def configure_sync(monkeypatch, module, payload):
     service = 'radarr' if movie_sync else 'sonarr'
     monkeypatch.setattr(module, f'check_{service}_rootfolder', lambda: None)
     monkeypatch.setattr(module, 'get_movies_from_radarr_api' if movie_sync else 'get_series_from_sonarr_api',
-                        lambda **kwargs: payload)
+                        lambda *args, **kwargs: payload)
     for name in ['get_profile_list', 'get_tags', 'get_language_profiles']:
         monkeypatch.setattr(module, name, lambda: [])
-    monkeypatch.setattr(module, 'event_stream', lambda **kwargs: None)
-    monkeypatch.setattr(module.jobs_queue, 'update_job_progress', lambda **kwargs: None)
-    monkeypatch.setattr(module.jobs_queue, 'update_job_name', lambda **kwargs: None)
+    monkeypatch.setattr(module, 'event_stream', lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.jobs_queue, 'update_job_progress', lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.jobs_queue, 'update_job_name', lambda *args, **kwargs: None)
     job = SimpleNamespace(cancel_event=Event())
-    monkeypatch.setattr(module.jobs_queue, 'get_job', lambda **kwargs: job)
+    monkeypatch.setattr(module.jobs_queue, 'get_job', lambda *args, **kwargs: job)
     if movie_sync:
         monkeypatch.setattr(module.settings.general, 'movie_default_enabled', False)
         monkeypatch.setattr(module.settings.radarr, 'apikey', 'test')
@@ -388,7 +388,7 @@ def test_incomplete_sync_still_processes_identifiable_entries(runtime_database, 
         radarr.update_movies(job_id='test')
     else:
         monkeypatch.setattr(sonarr, 'update_one_series', lambda series_id, **kwargs: processed.append(series_id))
-        monkeypatch.setattr(sonarr, 'sync_episodes', lambda **kwargs: None)
+        monkeypatch.setattr(sonarr, 'sync_episodes', lambda *args, **kwargs: None)
         sonarr.update_series(job_id='test')
     assert processed == [8]
     assert session.execute(select(getattr(table, id_column))).scalars().all() == [7]
@@ -495,7 +495,7 @@ def test_series_deletion_failure_preserves_media_and_search_state(
 ) -> None:
     engine, session = series_deletion_state
     events = []
-    monkeypatch.setattr(sonarr, 'event_stream', lambda **kwargs: events.append(kwargs))
+    monkeypatch.setattr(sonarr, 'event_stream', lambda *args, **kwargs: events.append(kwargs))
 
     def fail_delete(connection, cursor, statement, parameters, context, executemany):
         if statement.startswith(f'DELETE FROM {failed_table}'):

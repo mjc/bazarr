@@ -21,7 +21,7 @@ from radarr.notify import notify_radarr
 from sonarr.history import history_log
 from sonarr.notify import notify_sonarr
 from languages.custom_lang import CustomLanguage
-from app.database import (TableEpisodes, TableMovies, TableShows, get_profiles_list, get_audio_profile_languages,
+from app.database import (TableEpisodes, TableMovies, TableShows, get_profile, get_audio_profile_languages,
                           database, select)
 from app.jobs_queue import jobs_queue
 from app.event_handler import event_stream
@@ -37,12 +37,9 @@ from plex.operations import plex_set_movie_added_date_now, plex_set_episode_adde
 from jellyfin.operations import jellyfin_refresh_item
 
 
-def _get_profile_original_format(profile_id):
-    profile = get_profiles_list(profile_id)
-    if not isinstance(profile, dict):
-        return False
-
-    return bool(profile.get("originalFormat", 0))
+def _get_profile_original_format(profile_id: int | None) -> bool:
+    profile = get_profile(profile_id)
+    return profile.original_format if profile is not None else False
 
 
 def _get_audio_language_payload(audio_languages):

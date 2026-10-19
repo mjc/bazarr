@@ -14,7 +14,7 @@ from radarr.history import history_log_movie
 from app.notifier import send_notifications_movie
 from app.get_providers import get_providers
 from app.database import (get_exclusion_clause, get_audio_profile_languages, TableMovies, database, select,
-                          get_profile_id, get_subtitles)
+                          get_subtitles)
 from app.jobs_queue import jobs_queue
 from app.event_handler import event_stream
 
@@ -134,7 +134,8 @@ def movie_download_specific_subtitles(radarr_id, language, hi, forced, job_id=No
             TableMovies.title,
             TableMovies.path,
             TableMovies.sceneName,
-            TableMovies.audio_language)
+            TableMovies.audio_language,
+            TableMovies.profileId)
         .where(TableMovies.radarrId == radarr_id)) \
         .first()
 
@@ -163,7 +164,7 @@ def movie_download_specific_subtitles(radarr_id, language, hi, forced, job_id=No
 
     try:
         result = list(generate_subtitles(moviePath, [(language, hi, forced)], audio_language,
-                                         sceneName, title, 'movie', profile_id=get_profile_id(movie_id=radarr_id),
+                                         sceneName, title, 'movie', profile_id=movieInfo.profileId,
                                          job_id=job_id))
         if isinstance(result, list) and len(result):
             result = result[0]

@@ -10,9 +10,9 @@ from functools import reduce
 from sqlalchemy import Select, and_, or_
 
 from app.config import settings
-from constants import HI_EXCLUDED
+from app.language_profiles import Profile
 from app.database import (get_exclusion_clause, get_audio_profile_languages, TableShows, TableEpisodes, TableMovies,
-     TableHistory, TableHistoryMovie, database, select, func, get_profiles_list, TableEpisodesSubtitles,
+     TableHistory, TableHistoryMovie, database, select, func, load_profile_catalog, TableEpisodesSubtitles,
      TableMoviesSubtitles)
 from app.jobs_queue import jobs_queue, JobCanceled
 from app.get_providers import get_providers
@@ -49,6 +49,7 @@ def upgrade_episodes_subtitles(job_id: int | None = None, wait_for_completion: b
     else:
         job = jobs_queue.get_job(job_id=job_id)
 
+    profiles = load_profile_catalog()
     episodes_to_upgrade = get_upgradable_episode_subtitles()
     episodes_data = [{
         'id': x.id,
@@ -93,7 +94,8 @@ def upgrade_episodes_subtitles(job_id: int | None = None, wait_for_completion: b
     .all() if x.id in episodes_to_upgrade
     and x.video_path == x.path
     and x.subtitles_path == x.external_subtitles
-    and _language_still_desired(x.language, x.profileId)]
+    and (profile := profiles.get(x.profileId)) is not None
+    and x.language in profile.upgrade_languages]
 
     count_episode_to_upgrade = len(episodes_data)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_episode_to_upgrade)
@@ -104,6 +106,10 @@ def upgrade_episodes_subtitles(job_id: int | None = None, wait_for_completion: b
     for i, episode in enumerate(episodes_data, start=1):
         if job.cancel_event.is_set():
             raise JobCanceled
+
+        profile = load_profile_catalog().get(episode['profileId'])
+        if profile is None or episode['language'] not in profile.upgrade_languages:
+            continue
 
         providers_list = get_providers()
 
@@ -120,7 +126,7 @@ def upgrade_episodes_subtitles(job_id: int | None = None, wait_for_completion: b
         language, is_forced, is_hi = parse_language_string(episode['language'])
         if not language:
             continue
-        if is_hi and not _is_hi_required(language, episode['profileId']):
+        if is_hi == 'True' and language not in profile.hi_required_languages:
             is_hi = 'False'
 
         audio_language = resolve_audio_language(get_audio_profile_languages(episode['audio_language']), fallback=None)
@@ -140,7 +146,7 @@ def upgrade_episodes_subtitles(job_id: int | None = None, wait_for_completion: b
                                          is_upgrade=True,
                                          previous_subtitles_to_delete=path_mappings.path_replace(
                                              episode['subtitles_path']),
-                                         job_id=job_id))
+                                         job_id=job_id, profile=profile))
 
         if result:
             if isinstance(result, list) and len(result):
@@ -162,6 +168,7 @@ def upgrade_movies_subtitles(job_id: int | None = None, wait_for_completion: boo
     else:
         job = jobs_queue.get_job(job_id=job_id)
 
+    profiles = load_profile_catalog()
     movies_to_upgrade = get_upgradable_movies_subtitles()
     movies_data = [{
         'id': x.id,
@@ -197,7 +204,8 @@ def upgrade_movies_subtitles(job_id: int | None = None, wait_for_completion: boo
     .all() if x.id in movies_to_upgrade
     and x.video_path == x.path
     and x.subtitles_path == x.external_subtitles
-    and _language_still_desired(x.language, x.profileId)]
+    and (profile := profiles.get(x.profileId)) is not None
+    and x.language in profile.upgrade_languages]
 
     count_movie_to_upgrade = len(movies_data)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_movie_to_upgrade)
@@ -208,6 +216,10 @@ def upgrade_movies_subtitles(job_id: int | None = None, wait_for_completion: boo
     for i, movie in enumerate(movies_data, start=1):
         if job.cancel_event.is_set():
             raise JobCanceled
+
+        profile = load_profile_catalog().get(movie['profileId'])
+        if profile is None or movie['language'] not in profile.upgrade_languages:
+            continue
 
         providers_list = get_providers()
 
@@ -220,7 +232,7 @@ def upgrade_movies_subtitles(job_id: int | None = None, wait_for_completion: boo
         language, is_forced, is_hi = parse_language_string(movie['language'])
         if not language:
             continue
-        if is_hi and not _is_hi_required(language, movie['profileId']):
+        if is_hi == 'True' and language not in profile.hi_required_languages:
             is_hi = 'False'
 
         audio_language = resolve_audio_language(get_audio_profile_languages(movie['audio_language']), fallback=None)
@@ -240,7 +252,7 @@ def upgrade_movies_subtitles(job_id: int | None = None, wait_for_completion: boo
                                          is_upgrade=True,
                                          previous_subtitles_to_delete=path_mappings.path_replace_movie(
                                              movie['subtitles_path']),
-                                         job_id=job_id))
+                                         job_id=job_id, profile=profile))
         if result:
             if isinstance(result, list) and len(result):
                 result = result[0]
@@ -422,62 +434,3 @@ def get_upgradable_movies_subtitles(history_id_list: Collection[int] | None = No
 
     logging.debug(f"We've found {len(upgradable_movie_subtitles)} movie subtitles IDs to be upgradable")
     return upgradable_movie_subtitles
-
-
-def _language_still_desired(language, profile_id):
-    if not profile_id:
-        return False
-
-    profile = get_profiles_list(profile_id)
-    if not isinstance(profile, dict):
-        return False
-
-    if language in _language_from_items(profile.get('items', [])):
-        return True
-    else:
-        return False
-
-
-def _language_from_items(items):
-    results = []
-    if not isinstance(items, list):
-        return results
-
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-
-        language = item.get('language')
-        if not isinstance(language, str) or not language.strip():
-            continue
-
-        if str(item.get('forced')) == 'True':
-            results.append(f'{language}:forced')
-        elif str(item.get('hi')) == 'True':
-            results.append(f'{language}:hi')
-        elif item.get('hi') == HI_EXCLUDED:
-            results.append(language)
-        else:
-            results.append(language)
-            results.append(f'{language}:hi')
-    return results
-
-
-def _is_hi_required(language, profile_id):
-    profile = get_profiles_list(profile_id=profile_id)
-    if not isinstance(language, str):
-        return False
-    if not isinstance(profile, dict):
-        return False
-
-    items = profile.get('items')
-    if not isinstance(items, list):
-        return False
-
-    base_language = language.split(':')[0]
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if base_language == item.get('language') and str(item.get('hi')) == 'True':
-            return True
-    return False

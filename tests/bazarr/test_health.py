@@ -11,6 +11,7 @@ import pytest
 from app.database import (TableLanguagesProfiles, TableMovies, TableMoviesRootfolder, TableShows,
                           TableShowsRootfolder)
 from utilities import health
+from app import database as app_database
 
 
 class _Section(dict):
@@ -37,13 +38,17 @@ def health_settings(monkeypatch):
 @pytest.fixture
 def db(memory_session, monkeypatch):
     monkeypatch.setattr(health, "database", memory_session)
-    return memory_session
+    monkeypatch.setattr(app_database, "database", memory_session)
+    app_database.invalidate_profiles()
+    yield memory_session
+    app_database.invalidate_profiles()
 
 
 def _profile(db, profile_id, name, items, cutoff=None):
     db.add(TableLanguagesProfiles(profileId=profile_id, name=name, cutoff=cutoff,
                                   items=json.dumps(items)))
     db.commit()
+    app_database.invalidate_profiles()
 
 
 def _issues(issues):
@@ -184,3 +189,12 @@ def test_check_health_skips_checks_for_disabled_integrations(check_env, health_s
     check_env.sonarr.assert_not_called()
     check_env.radarr.assert_not_called()
     check_env.backup.assert_called_once()
+
+
+@pytest.mark.parametrize('cutoff', [None, 1])
+def test_malformed_profile_is_reported_with_or_without_cutoff(db, health_settings, cutoff):
+    db.add(TableLanguagesProfiles(profileId=1, name='Invalid', items='not json', cutoff=cutoff))
+    db.commit()
+    app_database.invalidate_profiles()
+    assert any(issue['object'] == 'Invalid' and 'invalid' in issue['issue']
+               for issue in health.get_health_issues())

@@ -1,3 +1,4 @@
+from tests.helpers.profile_records import profile_record, profile_catalog
 import ast
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -313,30 +314,32 @@ def test_desired_languages_are_loaded_per_profile_and_refresh_between_requests(m
     settings.display.embedded_subs_show_desired = True
     monkeypatch.setattr(response_data, 'settings', settings)
     profiles = {1: ['en'], 2: ['fr']}
-    calls: list[int] = []
+    calls: list[bool] = []
     equals_calls: list[bool] = []
 
-    def desired_languages(profile_id: int) -> list[str]:
-        calls.append(profile_id)
-        return profiles[profile_id]
+    def load_catalog():
+        calls.append(True)
+        return profile_catalog(*(profile_record({'profileId': profile_id, 'items': [
+            {'id': index, 'language': code} for index, code in enumerate(codes, 1)
+        ]}) for profile_id, codes in profiles.items()))
 
     def language_equals() -> list[tuple[response_data.core.Language, response_data.core.Language]]:
         equals_calls.append(True)
         return []
 
-    monkeypatch.setattr(response_data, 'get_desired_languages', desired_languages)
+    monkeypatch.setattr(response_data, 'load_profile_catalog', load_catalog)
     monkeypatch.setattr(response_data, 'get_language_equals', language_equals)
     subtitles = [subtitle('English', 'en'), subtitle('French', 'fr'), subtitle('German', 'de', '/external.de.srt')]
     formatter = response_data.load_formatter([1, 1, 2, None])
     for _ in range(2):
         assert formatter.episode(episode_row(profile_id=1), subtitles=subtitles)['subtitles'] == subtitles[::2]
     assert formatter.episode(episode_row(profile_id=2), subtitles=subtitles)['subtitles'] == subtitles[1:]
-    assert sorted(calls) == [1, 2]
+    assert calls == [True]
     assert equals_calls == [True]
     profiles[1] = ['fr']
     next_formatter = response_data.load_formatter([1])
     assert next_formatter.episode(episode_row(profile_id=1), subtitles=subtitles)['subtitles'] == subtitles[1:]
-    assert calls[-1] == 1
+    assert calls == [True, True]
     assert equals_calls == [True, True]
 
 

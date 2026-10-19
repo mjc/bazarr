@@ -11,8 +11,8 @@ from subliminal_patch.core import save_subtitles
 from subliminal_patch.core_persistent import download_best_subtitles
 
 from app.config import settings, get_array_from
-from app.database import TableEpisodes, TableMovies, TableMissingSubtitles, database, select, get_profiles_list
-from constants import HI_EXCLUDED
+from app.language_profiles import Profile
+from app.database import TableEpisodes, TableMovies, TableMissingSubtitles, database, select, get_profile
 from utilities.path_mappings import path_mappings
 from utilities.helper import get_target_folder, force_unicode
 from languages.get_languages import alpha3_from_alpha2, alpha2_from_alpha3
@@ -25,14 +25,25 @@ from .utils import get_video, _get_lang_obj, _get_scores, _set_forced_providers
 from .processing import process_subtitle
 
 
-@update_pools
-def generate_subtitles(path, languages, audio_language, sceneName, title, media_type, profile_id,
+def generate_subtitles(path, languages, audio_language, sceneName, title, media_type, profile_id: int | None,
                        forced_minimum_score=None, is_upgrade=False, check_if_still_required=False,
                        previous_subtitles_to_delete=None, job_id=None, fallback_allowed=False,
-                       attempted_languages=None):
+                       attempted_languages=None, *, profile: Profile | None = None):
     if not languages:
-        return None
+        return
+    resolved = profile if profile is not None else get_profile(profile_id)
+    if resolved is None:
+        logging.warning('BAZARR unable to get subtitle profile (profile_id=%s)', profile_id)
+        return
+    yield from _generate_subtitles(path, languages, audio_language, sceneName, title, media_type,
+                                   resolved.profile_id, forced_minimum_score, is_upgrade, check_if_still_required,
+                                   previous_subtitles_to_delete, job_id, fallback_allowed, attempted_languages, resolved)
 
+
+@update_pools
+def _generate_subtitles(path, languages, audio_language, sceneName, title, media_type, profile_id: int,
+                        forced_minimum_score, is_upgrade, check_if_still_required,
+                        previous_subtitles_to_delete, job_id, fallback_allowed, attempted_languages, profile: Profile):
     logging.debug(f'BAZARR Searching subtitles for this file: {path}')
 
     if settings.general.utf8_encode:
@@ -48,11 +59,7 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
         languages=languages,
         language_items_by_object=language_items_by_object,
     )
-    profile = get_profiles_list(profile_id=profile_id)
-    if not profile or not isinstance(profile, dict):
-        logging.warning(f"BAZARR unable to get subtitle profile (profile_id={profile_id})")
-        return None
-    original_format = profile.get('originalFormat', '')
+    original_format = profile.original_format
     hi_required = "force HI" if all([x.hi for x in language_set]) else "don't prefer"
     also_forced = any([x.forced for x in language_set])
     forced_required = all([x.forced for x in language_set])
@@ -83,19 +90,19 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
                                   f"has been reached during this search.")
                     continue
                 else:
-                    if attempted_languages is not None:
+                    if attempted_languages is not None and language_items_by_object is not None:
                         attempted_languages.add(language_items_by_object[language])
 
                     # resolve per-language hearing_impaired mode from profile
                     lang_alpha2 = alpha2_from_alpha3(language.alpha3)
                     hi_mode = "don't prefer"
-                    for item in profile['items']:
-                        if item['language'] == lang_alpha2 \
-                                and item['forced'] == ("True" if language.forced else "False") \
-                                and (item['hi'] == "True") == bool(language.hi):
-                            if item['hi'] == "True":
+                    for item in profile.items:
+                        if item.language == lang_alpha2 \
+                                and item.forced == bool(language.forced) \
+                                and (item.hi == 'required') == bool(language.hi):
+                            if item.hi == 'required':
                                 hi_mode = "force HI"
-                            elif item['hi'] == HI_EXCLUDED:
+                            elif item.hi == 'excluded':
                                 hi_mode = "force non-HI"
                             break
 

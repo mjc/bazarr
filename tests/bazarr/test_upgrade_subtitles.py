@@ -1,3 +1,4 @@
+from tests.helpers.profile_records import profile_record, profile_catalog
 # -*- coding: utf-8 -*-
 """
 Tests for subtitle upgrade helpers and the minimum score rule in subtitles/upgrade.py.
@@ -38,65 +39,26 @@ def test_parse_language_string(language_string, expected):
     assert upgrade.parse_language_string(language_string) == expected
 
 
-# _language_from_items
-
-def test_language_from_items_forced_item_yields_forced_token():
-    items = [{"language": "en", "forced": "True", "hi": "False"}]
-
-    assert upgrade._language_from_items(items) == ["en:forced"]
-
-
-def test_language_from_items_hi_item_yields_hi_token():
-    items = [{"language": "fr", "forced": "False", "hi": "True"}]
-
-    assert upgrade._language_from_items(items) == ["fr:hi"]
+@pytest.mark.parametrize('item,expected', [
+    ({'language': 'en', 'forced': 'True', 'hi': 'False'}, {'en:forced'}),
+    ({'language': 'fr', 'forced': 'False', 'hi': 'True'}, {'fr:hi'}),
+    ({'language': 'de', 'forced': 'False', 'hi': HI_EXCLUDED}, {'de'}),
+    ({'language': 'es', 'forced': 'False', 'hi': 'False'}, {'es', 'es:hi'}),
+])
+def test_profile_precomputes_upgrade_language_tokens(item, expected):
+    assert profile_record({'items': [item]}).upgrade_languages == expected
 
 
-def test_language_from_items_hi_excluded_yields_plain_token():
-    items = [{"language": "de", "forced": "False", "hi": HI_EXCLUDED}]
-
-    assert upgrade._language_from_items(items) == ["de"]
-
-
-def test_language_from_items_default_yields_plain_and_hi_tokens():
-    items = [{"language": "es", "forced": "False", "hi": "False"}]
-
-    assert upgrade._language_from_items(items) == ["es", "es:hi"]
+PROFILE = profile_record({'profileId': 1, 'items': [
+    {'language': 'en', 'hi': 'True'}, {'language': 'fr', 'hi': 'False'},
+]})
 
 
-# _language_still_desired and _is_hi_required
-
-PROFILE = {
-    "items": [
-        {"language": "en", "forced": "False", "hi": "True"},
-        {"language": "fr", "forced": "False", "hi": "False"},
-    ]
-}
-
-
-def test_language_still_desired_false_without_profile():
-    with mock.patch.object(upgrade, "get_profiles_list") as get_profile:
-        assert upgrade._language_still_desired("en", None) is False
-
-    get_profile.assert_not_called()
-
-
-def test_language_still_desired_matches_profile_item():
-    with mock.patch.object(upgrade, "get_profiles_list", return_value=PROFILE):
-        assert upgrade._language_still_desired("fr", 1) is True
-        assert upgrade._language_still_desired("de", 1) is False
-
-
-def test_language_still_desired_false_when_profile_missing():
-    with mock.patch.object(upgrade, "get_profiles_list", return_value=None):
-        assert upgrade._language_still_desired("fr", 99) is False
-
-
-def test_is_hi_required_true_only_for_hi_items():
-    with mock.patch.object(upgrade, "get_profiles_list", return_value=PROFILE):
-        assert upgrade._is_hi_required("en", 1) is True
-        assert upgrade._is_hi_required("en:hi", 1) is True
-        assert upgrade._is_hi_required("fr", 1) is False
+def test_profile_memberships_preserve_upgrade_and_hi_rules():
+    assert 'fr' in PROFILE.upgrade_languages
+    assert 'de' not in PROFILE.upgrade_languages
+    assert 'en' in PROFILE.hi_required_languages
+    assert 'fr' not in PROFILE.hi_required_languages
 
 
 # Minimum score in the upgrade jobs
@@ -127,7 +89,7 @@ def job_environment():
         "jobs_queue": mock.patch.object(upgrade, "jobs_queue", jobs_queue),
         "providers": mock.patch.object(upgrade, "get_providers", return_value=["opensubtitles"]),
         "audio": mock.patch.object(upgrade, "get_audio_profile_languages", return_value=[]),
-        "hi": mock.patch.object(upgrade, "_is_hi_required", return_value=False),
+        "profiles": mock.patch.object(upgrade, "load_profile_catalog", return_value=profile_catalog(PROFILE)),
         "generate": mock.patch.object(upgrade, "generate_subtitles", return_value=[]),
         "store": mock.patch.object(upgrade, "store_subtitles"),
         "store_movie": mock.patch.object(upgrade, "store_subtitles_movie"),
@@ -151,7 +113,7 @@ def job_environment():
 
 def _episode_row(**overrides):
     row = dict(
-        id=10, seriesTitle="Show", season=1, episode=2, title="Pilot", language="en",
+        id=10, seriesTitle="Show", season=1, episode=2, title="Pilot", language="en:hi",
         audio_language="", video_path="/tv/show/ep.mkv", sceneName="ep", score=50,
         score_out_of=120, sonarrEpisodeId=5, sonarrSeriesId=3, subtitles_path="/tv/show/ep.en.srt",
         path="/tv/show/ep.mkv", profileId=1, external_subtitles="/tv/show/ep.en.srt",
@@ -162,7 +124,7 @@ def _episode_row(**overrides):
 
 def _movie_row(**overrides):
     row = dict(
-        id=20, title="Movie", language="en", audio_language="", video_path="/movies/m.mkv",
+        id=20, title="Movie", language="en:hi", audio_language="", video_path="/movies/m.mkv",
         sceneName="m", score=50, score_out_of=120, radarrId=7, path="/movies/m.mkv", profileId=1,
         subtitles_path="/movies/m.en.srt", external_subtitles="/movies/m.en.srt",
     )
@@ -173,7 +135,6 @@ def _movie_row(**overrides):
 def _run_job(rows, runner, upgradable_ids):
     """Run an upgrade job against the given rows, returning the forced_minimum_score it used."""
     with mock.patch.object(upgrade, "database") as database, \
-            mock.patch.object(upgrade, "_language_still_desired", return_value=True), \
             mock.patch.object(upgrade, "get_upgradable_episode_subtitles", return_value=upgradable_ids), \
             mock.patch.object(upgrade, "get_upgradable_movies_subtitles", return_value=upgradable_ids):
         database.execute.return_value.all.return_value = rows
