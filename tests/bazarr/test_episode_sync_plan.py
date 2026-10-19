@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 import requests
+from dynaconf.utils.boxing import DynaBox
 from sqlalchemy import event
 
 from app.database import TableShows, TableEpisodes
@@ -138,6 +139,69 @@ def test_snapshot_reuses_decoded_records_and_does_not_mutate_on_failed_validatio
 
 def test_empty_files_are_complete_when_episodes_have_no_media():
     assert complete_episode_snapshot([episode(has_file=False)], [], separate_files=True) is not None
+
+
+@pytest.mark.parametrize('provided_general', [False, True])
+@pytest.mark.parametrize('provided_sonarr', [False, True])
+def test_episode_sync_reuses_supplied_sections_and_refreshes_standalone_settings(
+    monkeypatch: pytest.MonkeyPatch, provided_general: bool, provided_sonarr: bool,
+) -> None:
+    class Settings:
+        general_reads = 0
+        sonarr_reads = 0
+        general_section = DynaBox({'debug': False})
+        sonarr_section = DynaBox({'sync_only_monitored_series': True, 'sync_only_monitored_episodes': False})
+
+        @property
+        def general(self) -> DynaBox:
+            self.general_reads += 1
+            return self.general_section
+
+        @property
+        def sonarr(self) -> DynaBox:
+            self.sonarr_reads += 1
+            return self.sonarr_section
+
+    settings = Settings()
+    prepared: list[tuple[DynaBox, bool]] = []
+
+    def prepare(connection: SonarrConnection, series_id: int, general: DynaBox,
+                sync_monitored: bool, *, session: requests.Session | None = None) -> None:
+        prepared.append((general, sync_monitored))
+
+    monkeypatch.setattr(sync, 'settings', settings)
+    monkeypatch.setattr(sync, '_prepare_episode_sync', prepare)
+    first_general = settings.general_section
+    for second_call in (False, True):
+        if second_call:
+            settings.general_section = DynaBox({'debug': True})
+            settings.sonarr_section = DynaBox({'sync_only_monitored_series': True,
+                                              'sync_only_monitored_episodes': True})
+        sync.sync_episodes(7, connection=connection(),
+                           general=settings.general_section if provided_general else None,
+                           sonarr=settings.sonarr_section if provided_sonarr else None)
+    assert prepared == [(first_general, False), (settings.general_section, True)]
+    assert prepared[0][0] is first_general
+    assert prepared[1][0] is settings.general_section
+    assert settings.general_reads == (0 if provided_general else 2)
+    assert settings.sonarr_reads == (0 if provided_sonarr else 2)
+
+
+def test_episode_plan_reads_audio_setting_once_for_the_batch(live_sync, monkeypatch: pytest.MonkeyPatch) -> None:
+    reads: list[None] = []
+
+    class General(DynaBox):
+        @property
+        def parse_embedded_audio_track(self) -> bool:
+            reads.append(None)
+            return False
+
+    monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api',
+                        lambda **kwargs: [episode(), dict(episode(), id=102)])
+    plan = sync._prepare_episode_sync(connection('4.0.9.2421'), 7, General(), False)
+    assert plan is not None
+    assert len(plan.additions) + len(plan.updates) == 2
+    assert len(reads) == 1
 
 
 @pytest.mark.parametrize('single', [False, True])

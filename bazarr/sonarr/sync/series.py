@@ -140,7 +140,7 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
             update_one_series(series_id, action='updated', sync_episodes_after_update=False,
                               prepared_series=series, connection=connection, general=general, session=http)
             del series
-            sync_episodes(series_id=series_id, connection=connection, session=http)
+            sync_episodes(series_id=series_id, connection=connection, session=http, general=general, sonarr=sonarr)
         if plan.complete:
             for series_id in plan.existing_ids - plan.retained_ids:
                 update_one_series(series_id, action='deleted')
@@ -215,7 +215,7 @@ def update_one_series(series_id: int | None, action: str, is_signalr: bool = Fal
             # Update existing series in DB
             if not has_changed_fields(existing_series, series):
                 if sync_episodes_after_update and not is_signalr:
-                    sync_episodes(series_id=series_id, connection=connection, session=http)
+                    sync_episodes(series_id=series_id, connection=connection, session=http, general=general_settings)
                 return
 
             try:
@@ -232,7 +232,7 @@ def update_one_series(series_id: int | None, action: str, is_signalr: bool = Fal
                     # The one that gets there doesn't include the episodeChanged flag.
                     # The episodes are synced only when this function is called from the
                     # frontend sync button in the episodes' page.
-                    sync_episodes(series_id=series_id, connection=connection, session=http)
+                    sync_episodes(series_id=series_id, connection=connection, session=http, general=general_settings)
                 event_stream(type='series', action='update', payload=int(series_id))
                 logging.debug(
                     f'BAZARR updated this series into the database:{path_mappings.path_replace(series["path"])}')

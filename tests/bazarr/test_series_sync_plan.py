@@ -5,6 +5,7 @@ from weakref import ref
 
 import pytest
 import requests
+from dynaconf.utils.boxing import DynaBox
 
 from app.database import TableShows
 from sonarr.sync import series as sync
@@ -99,6 +100,38 @@ def test_raw_catalogue_is_released_before_nested_episode_sync(series_sync, monke
     assert session.get(TableShows, 7).title == 'Updated'
     sync.get_sonarr_connection.assert_called_once()
     deleted.assert_not_called()
+
+
+def test_full_sync_passes_its_settings_sections_to_each_episode_sync(
+    series_sync, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    general_section = sync.settings.general
+    sonarr_section = sync.settings.sonarr
+
+    class Settings:
+        general_reads = 0
+        sonarr_reads = 0
+
+        @property
+        def general(self) -> DynaBox:
+            self.general_reads += 1
+            return general_section
+
+        @property
+        def sonarr(self) -> DynaBox:
+            self.sonarr_reads += 1
+            return sonarr_section
+
+    settings = Settings()
+    monkeypatch.setattr(sync, 'settings', settings)
+    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', lambda **kwargs: [
+        series_payload(7, 'Updated'), dict(series_payload(8, 'New'), path='/new')])
+    sync.update_series(job_id=1)
+    assert settings.general_reads == settings.sonarr_reads == 1
+    assert sync.sync_episodes.call_count == 2
+    for call in sync.sync_episodes.call_args_list:
+        assert call.kwargs['general'] is general_section
+        assert call.kwargs['sonarr'] is sonarr_section
 
 
 def test_incomplete_known_series_cannot_remove_unseen_series(series_sync, monkeypatch):
