@@ -19,5 +19,5 @@ class SubtitleOrder(TypedDict):
     forced: bool
 
 
-def subtitle_sort_key(subtitle: SubtitleOrder) -> tuple[str | None, bool]:
-    return subtitle['name'], subtitle['forced']
+def subtitle_sort_key(subtitle: SubtitleOrder) -> tuple[str, bool]:
+    return subtitle['name'] or '', subtitle['forced']

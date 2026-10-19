@@ -78,18 +78,33 @@ def configure_indexer(monkeypatch, media_type):
 
 
 @pytest.mark.parametrize('media_type', ['movie', 'series'])
-def test_bulk_subtitles_match_single_media_with_embedded_ids(runtime_database, media_type):
+@pytest.mark.parametrize('embedded_language', ['en', 'und'])
+@pytest.mark.parametrize('unknown_first', [False, True])
+def test_bulk_subtitles_match_single_media_with_embedded_ids(
+    runtime_database: tuple[Engine, Session], media_type: str, embedded_language: str, unknown_first: bool,
+) -> None:
     _, session = runtime_database
     seed_media(session, media_type)
     table = db.TableMoviesSubtitles if media_type == 'movie' else db.TableEpisodesSubtitles
     values = {'radarrId': 7} if media_type == 'movie' else {'sonarrEpisodeId': 7, 'sonarrSeriesId': 7}
-    session.execute(insert(table), [
-        dict(values, id=71, language='en', forced=False, hi=False, embedded_track_id=0, path=None, size=0),
-        dict(values, id=72, language='en', forced=True, hi=False, embedded_track_id=None, path='/movie.en.srt', size=123),
-    ])
+    embedded_id, external_id = (71, 72) if unknown_first else (72, 71)
+    rows = [
+        dict(values, id=embedded_id, language=embedded_language, forced=False, hi=True, embedded_track_id=0, path=None, size=0),
+        dict(values, id=external_id, language='en', forced=True, hi=False, embedded_track_id=None, path='/movie.en.srt', size=123),
+    ]
+    if unknown_first:
+        rows.reverse()
+    session.execute(insert(table), rows)
     single = db.get_subtitles(**({'radarr_id': 7} if media_type == 'movie' else {'sonarr_episode_id': 7}))
     assert db.get_subtitles_map(media_type, [7, 8])[7] == single
-    assert {subtitle['id'] for subtitle in single} == {71, 72}
+    media_ids = select(db.TableMovies.radarrId) if media_type == 'movie' else select(db.TableEpisodes.sonarrEpisodeId)
+    assert db.get_subtitles_for_query(media_type, media_ids)[7] == single
+    assert [subtitle['id'] for subtitle in single] == [embedded_id, external_id]
+    assert single[0] == {
+        'id': embedded_id, 'path': None, 'name': 'English' if embedded_language == 'en' else None,
+        'code2': embedded_language, 'code3': 'eng' if embedded_language == 'en' else None,
+        'forced': False, 'hi': True, 'file_size': 0, 'embedded_track_id': 0,
+    }
 
 
 @pytest.mark.skipif(not hasattr(sqlite3.Connection, 'setlimit'), reason='requires SQLite connection limits')

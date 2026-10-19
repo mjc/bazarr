@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
@@ -14,6 +15,7 @@ from api import response_data
 from api.formatting import ResponseFormatter
 from api.response_types import BlacklistRow, EpisodeRow, HistoryRow, MovieRow, SeriesRow
 from app import database as app_database
+from languages import get_languages
 
 
 def unchanged_path(path: str | None) -> str | None:
@@ -95,6 +97,61 @@ def test_series_preserves_boolean_count_and_timestamp_conversion(
     assert result['alternativeTitles'] == [] and result['tags'] == []
     row['created_at_timestamp'] = None
     assert formatter.series(row, episode_audio=None)['created_at_timestamp'] is None
+
+
+@pytest.mark.parametrize('kind', ['episodes', 'movies'])
+@pytest.mark.parametrize('unknown_first', [False, True])
+def test_media_responses_preserve_unknown_subtitle_languages(
+    kind: str, unknown_first: bool, api_client: FlaskClient, api_key: str,
+    memory_session: Session, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory_session.add(app_database.TableShows(sonarrSeriesId=1, path='/shows/1', title='Show'))
+    memory_session.flush()
+    memory_session.add_all([
+        app_database.TableEpisodes(sonarrEpisodeId=1, sonarrSeriesId=1, path='/shows/1/episode.mkv',
+                                   title='Episode', season=1, episode=1),
+        app_database.TableMovies(radarrId=1, path='/movie.mkv', title='Movie', tmdbId='1'),
+    ])
+    memory_session.flush()
+    unknown_id, known_id = (1, 2) if unknown_first else (2, 1)
+    if kind == 'episodes':
+        memory_session.add_all([
+            app_database.TableEpisodesSubtitles(id=unknown_id, sonarrEpisodeId=1, sonarrSeriesId=1,
+                language='und', forced=False, hi=True, path=None, size=None, embedded_track_id=0),
+            app_database.TableEpisodesSubtitles(id=known_id, sonarrEpisodeId=1, sonarrSeriesId=1,
+                language='en', forced=True, hi=False, path='/movie.en.srt', size=123, embedded_track_id=None),
+        ])
+    else:
+        memory_session.add_all([
+            app_database.TableMoviesSubtitles(id=unknown_id, radarrId=1,
+                language='und', forced=False, hi=True, path=None, size=None, embedded_track_id=0),
+            app_database.TableMoviesSubtitles(id=known_id, radarrId=1,
+                language='en', forced=True, hi=False, path='/movie.en.srt', size=123, embedded_track_id=None),
+        ])
+    memory_session.flush()
+    monkeypatch.setattr(get_languages, 'languages_dict', [
+        {'code2': 'en', 'code3': 'eng', 'code3b': None, 'name': 'English'},
+    ])
+    monkeypatch.setattr(app_database, 'database', memory_session)
+    monkeypatch.setattr(response_data, 'database', memory_session)
+    endpoint = import_module(f'api.{kind}.{kind}')
+    monkeypatch.setattr(endpoint, 'database', memory_session)
+
+    def display_formatter(profile_ids: Iterable[int | None]) -> ResponseFormatter:
+        return ResponseFormatter(False, None, '', unchanged_path, unchanged_path)
+
+    monkeypatch.setattr(endpoint, 'load_formatter', display_formatter)
+
+    query = '?episodeid[]=1' if kind == 'episodes' else ''
+    response = api_client.get(f'/api/{kind}{query}', headers={'X-API-KEY': api_key})
+
+    assert response.status_code == 200
+    assert response.get_json()['data'][0]['subtitles'] == [
+        {'id': unknown_id, 'path': None, 'name': None, 'code2': 'und', 'code3': None,
+         'forced': False, 'hi': True, 'file_size': None, 'embedded_track_id': 0},
+        {'id': known_id, 'path': '/movie.en.srt', 'name': 'English', 'code2': 'en', 'code3': 'eng',
+         'forced': True, 'hi': False, 'file_size': 123, 'embedded_track_id': None},
+    ]
 
 
 @pytest.mark.parametrize('path', ['/api/series', '/api/movies', '/api/episodes?episodeid[]=1',
