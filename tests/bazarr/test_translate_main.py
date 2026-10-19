@@ -3,6 +3,7 @@ from bazarr.subtitles.tools.translate import main
 
 def test_translation_skips_postprocessing_when_service_returns_none(mocker):
     lang_obj = mocker.Mock()
+    lang_obj.alpha2 = "fr"
     lang_obj.subzero_language.return_value = "fr"
     translator = mocker.Mock()
     translator.translate.return_value = None
