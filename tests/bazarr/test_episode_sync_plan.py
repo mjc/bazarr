@@ -4,7 +4,6 @@ from unittest.mock import Mock
 
 import pytest
 import requests
-from dynaconf.utils.boxing import DynaBox
 from sqlalchemy import event
 
 from app.database import TableShows, TableEpisodes
@@ -139,49 +138,6 @@ def test_snapshot_reuses_decoded_records_and_does_not_mutate_on_failed_validatio
 
 def test_empty_files_are_complete_when_episodes_have_no_media():
     assert complete_episode_snapshot([episode(has_file=False)], [], separate_files=True) is not None
-
-
-def test_episode_sync_refreshes_replaced_sections_after_invalidation(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Settings:
-        general = DynaBox({'debug': False})
-        sonarr = DynaBox({'sync_only_monitored_series': False, 'sync_only_monitored_episodes': False})
-
-    settings = Settings()
-    observed: list[bool] = []
-
-    def prepare(connection: SonarrConnection, series_id: int, *, session: requests.Session | None = None) -> None:
-        observed.append(sync.settings_cache.get(settings, 'general').debug)
-
-    monkeypatch.setattr(sync, 'settings', settings)
-    monkeypatch.setattr(sync, '_prepare_episode_sync', prepare)
-    sync.sync_episodes(7, connection=connection())
-    settings.general = DynaBox({'debug': True})
-    sync.settings_cache.invalidate()
-    sync.sync_episodes(7, connection=connection())
-    assert observed == [False, True]
-
-
-def test_episode_plan_observes_setting_change_between_records(live_sync, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api',
-                        lambda **kwargs: [episode(), dict(episode(), id=102)])
-    parse = sync.episodeParser
-    observed: list[bool] = []
-
-    def parse_then_change(*args, **kwargs):
-        general = kwargs['general']
-        observed.append(general.parse_embedded_audio_track)
-        # Preserve the actual parser's output, including avoiding file probing.
-        result = parse(*args, **kwargs, parse_embedded_audio_track=False)
-        if len(observed) == 1:
-            monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', True)
-            sync.settings_cache.invalidate()
-        return result
-
-    monkeypatch.setattr(sync, 'episodeParser', parse_then_change)
-    plan = sync._prepare_episode_sync(connection('4.0.9.2421'), 7)
-    assert plan is not None
-    assert len(plan.additions) + len(plan.updates) == 2
-    assert observed == [False, True]
 
 
 @pytest.mark.parametrize('single', [False, True])

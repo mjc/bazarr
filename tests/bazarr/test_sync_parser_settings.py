@@ -3,6 +3,8 @@ from importlib import import_module
 import pytest
 from dynaconf.utils.boxing import DynaBox
 
+from app.settings_cache import settings_cache
+
 
 @pytest.mark.parametrize('kind', ['series', 'movie'])
 def test_sync_parser_reuses_supplied_settings_and_reads_current_settings_when_called_alone(
@@ -42,9 +44,11 @@ def test_sync_parser_reuses_supplied_settings_and_reads_current_settings_when_ca
     assert expected['profileId'] == 7
     assert parse(*arguments, general=settings.section) == expected
     assert settings.reads == 1
+    assert parse(*arguments) == expected
+    assert settings.reads == 1
 
     settings.section = DynaBox({'parse_embedded_audio_track': False, 'serie_tag_enabled': False,
                                 'movie_tag_enabled': False, 'remove_profile_tags': []})
-    module.settings_cache.invalidate()
+    settings_cache.invalidate()
     assert parse(*arguments)['profileId'] == 99
     assert settings.reads == 2

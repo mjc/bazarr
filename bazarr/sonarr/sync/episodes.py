@@ -7,6 +7,7 @@ import requests
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import RowMapping
+from dynaconf.utils.boxing import DynaBox
 from utilities.arr import arr_session
 from utilities.json_types import JsonValue
 from datetime import datetime
@@ -73,8 +74,8 @@ def _load_episode_snapshot(connection: SonarrConnection, *, series_id: int | Non
     return snapshot
 
 
-def _prepare_episode_sync(connection: SonarrConnection, series_id: int,
-                          *, session: requests.Session | None = None) -> EpisodeSyncPlan | None:
+def _prepare_episode_sync(connection: SonarrConnection, series_id: int, general: DynaBox,
+                          sync_monitored: bool, *, session: requests.Session | None = None) -> EpisodeSyncPlan | None:
     snapshot = _load_episode_snapshot(connection, series_id=series_id, session=session)
     if snapshot is None:
         return None
@@ -91,15 +92,13 @@ def _prepare_episode_sync(connection: SonarrConnection, series_id: int,
     additions: list[EpisodeValues] = []
     updates: list[EpisodeValues] = []
     skipped_count = 0
-    monitored_by_file = {row['episode_file_id']: row['monitored'] for row in current.values()}
+    monitored_by_file = {row['episode_file_id']: row['monitored'] for row in current.values()} if sync_monitored else {}
     audio_languages: dict[int, str | None] = {}
     for episode in snapshot.episodes:
         file = episode.get('episodeFile')
         if not episode['hasFile'] or file is None:
             continue
-        sonarr = settings_cache.get(settings, 'sonarr')
-        general = settings_cache.get(settings, 'general')
-        if sonarr.sync_only_monitored_series and sonarr.sync_only_monitored_episodes:
+        if sync_monitored:
             stored_monitored = monitored_by_file.get(file['id'])
             monitored = None if stored_monitored is None else bool_map.get(stored_monitored)
             if monitored is not None and monitored == episode['monitored'] and not monitored:
@@ -120,25 +119,25 @@ def _prepare_episode_sync(connection: SonarrConnection, series_id: int,
 def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr: bool = False,
                   *, connection: SonarrConnection | None = None, session: requests.Session | None = None) -> None:
     logging.debug(f'BAZARR Starting episodes sync from Sonarr for series ID {series_id}.')
+    sonarr = settings_cache.get(settings, 'sonarr')
 
     if not series_id:
         return
-    sonarr_settings = settings_cache.get(settings, 'sonarr')
+    general = settings_cache.get(settings, 'general')
     with arr_session(session) as http:
-        connection = get_sonarr_connection(sonarr_settings, session=http) if connection is None else connection
+        connection = get_sonarr_connection(sonarr, session=http) if connection is None else connection
         if connection is None:
             logging.debug('BAZARR skipping episodes sync because Sonarr version is unknown')
             return
-        plan = _prepare_episode_sync(connection, series_id, session=http)
+        sync_monitored = bool(sonarr.sync_only_monitored_series and sonarr.sync_only_monitored_episodes)
+        plan = _prepare_episode_sync(connection, series_id, general, sync_monitored, session=http)
     del http
     if plan is None:
         logging.debug('BAZARR skipping episodes sync because Sonarr returned an incomplete snapshot')
         return
     episodes_to_add = plan.additions
     episodes_to_update = plan.updates
-    sonarr_settings = settings_cache.get(settings, 'sonarr')
-    sync_monitored = bool(sonarr_settings.sync_only_monitored_series and sonarr_settings.sync_only_monitored_episodes)
-    if sync_monitored and settings_cache.get(settings, 'general').debug:
+    if sync_monitored and general.debug:
         series_title = database.execute(select(TableShows.title).where(TableShows.sonarrSeriesId == series_id)).scalar()
         trace(f"Skipped {plan.skipped_count} unmonitored episodes out of {plan.episode_count} for {series_title}")
 
@@ -234,7 +233,7 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
                                       f'between disks?). Searching for missing subtitles is deferred until scheduled '
                                       f'task execution for this episode: {episode_title}')
                 else:
-                    if is_signalr and settings_cache.get(settings, 'general').notify_if_nothing_is_missing_for_signalr_event:
+                    if is_signalr and general.notify_if_nothing_is_missing_for_signalr_event:
                         send_notifications(series_id, episode['sonarrEpisodeId'],
                                            "There are no missing subtitles in this episode.")
                     logging.debug(f'BAZARR no missing subtitles for this episode: {episode_title}')
@@ -260,8 +259,7 @@ def sync_one_episode(episode_id: int, defer_search: bool = False, is_signalr: bo
     if snapshot is None or not snapshot.episodes:
         logging.debug('BAZARR skipping episode sync because Sonarr returned an incomplete snapshot')
         return
-    general = settings_cache.get(settings, 'general')
-    episode = episodeParser(snapshot.episodes[0], general=general)
+    episode = episodeParser(snapshot.episodes[0], general=settings_cache.get(settings, 'general'))
     del snapshot
 
     if episode is None:

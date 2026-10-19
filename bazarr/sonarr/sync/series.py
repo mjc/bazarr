@@ -60,8 +60,8 @@ def _default_series_profile(general: DynaBox) -> int | None:
         return None
 
 
-def _prepare_series_sync(connection: SonarrConnection,
-                         *, session: requests.Session | None = None) -> SeriesSyncPlan | None:
+def _prepare_series_sync(connection: SonarrConnection, sonarr: DynaBox,
+                         general: DynaBox, *, session: requests.Session | None = None) -> SeriesSyncPlan | None:
     try:
         payload = get_series_from_sonarr_api(apikey_sonarr=connection.apikey, connection=connection, session=session)
     except requests.exceptions.RequestException:
@@ -84,8 +84,6 @@ def _prepare_series_sync(connection: SonarrConnection,
     complete = True
     skipped = 0
     for raw in payload:
-        general = settings_cache.get(settings, 'general')
-        sonarr = settings_cache.get(settings, 'sonarr')
         if not is_series(raw) or raw['id'] <= 0 or raw['id'] in retained:
             complete = False
             skipped += 1
@@ -125,7 +123,7 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
         if connection is None:
             return
         check_sonarr_rootfolder(connection=connection, session=http)
-        plan = _prepare_series_sync(connection, session=http)
+        plan = _prepare_series_sync(connection, sonarr, general, session=http)
         if plan is None:
             logging.debug('BAZARR Sonarr series sync returned an invalid payload. Skipping sync.')
             jobs_queue.update_job_name(job_id=job_id, new_job_name='Synced series with Sonarr')
@@ -141,7 +139,7 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
             series_id = series['sonarrSeriesId']
             jobs_queue.update_job_progress(job_id=job_id, progress_value=processed, progress_message=series['title'])
             update_one_series(series_id, action='updated', sync_episodes_after_update=False,
-                              prepared_series=series, connection=connection, session=http)
+                              prepared_series=series, connection=connection, general=general, session=http)
             del series
             sync_episodes(series_id=series_id, connection=connection, session=http)
         if plan.complete:

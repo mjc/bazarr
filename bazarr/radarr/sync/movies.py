@@ -148,8 +148,8 @@ def _default_movie_profile(general: DynaBox) -> int | None:
     return profile
 
 
-def _prepare_movie_sync(connection: RadarrConnection,
-                        *, session: requests.Session | None = None) -> MovieSyncPlan | None:
+def _prepare_movie_sync(connection: RadarrConnection, radarr: DynaBox,
+                        general: DynaBox, *, session: requests.Session | None = None) -> MovieSyncPlan | None:
     payload = get_movies_from_radarr_api(apikey_radarr=connection.apikey, connection=connection, session=session)
     if not isinstance(payload, list):
         return None
@@ -165,15 +165,13 @@ def _prepare_movie_sync(connection: RadarrConnection,
     if audio_profiles is None or not is_arr_tags(tags):
         return None
     language_profiles = get_language_profiles()
-    default_profile = _default_movie_profile(settings_cache.get(settings, 'general'))
+    default_profile = _default_movie_profile(general)
     retained: set[int] = set()
     seen: set[int] = set()
     complete = True
     changes: list[MovieChange] = []
     missing = 0
     for position, raw in enumerate(payload, start=1):
-        general = settings_cache.get(settings, 'general')
-        radarr = settings_cache.get(settings, 'radarr')
         if not isinstance(raw, dict):
             complete = False
             continue
@@ -227,7 +225,7 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
         if connection is None:
             return
         check_radarr_rootfolder(connection=connection, session=http)
-        plan = _prepare_movie_sync(connection, session=http)
+        plan = _prepare_movie_sync(connection, radarr, general, session=http)
     del http
     if plan is None:
         logging.debug('BAZARR Radarr movie sync returned an invalid payload. Skipping sync.')
@@ -248,8 +246,6 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
         if job.cancel_event.is_set():
             raise JobCanceled
         change = plan.changes.pop()
-        general = settings_cache.get(settings, 'general')
-        radarr = settings_cache.get(settings, 'radarr')
         jobs_queue.update_job_progress(job_id=job_id, progress_value=change.position,
                                        progress_message=change.values['title'])
         if not change.existing:

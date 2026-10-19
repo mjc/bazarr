@@ -101,25 +101,6 @@ def test_raw_catalogue_is_released_before_nested_episode_sync(series_sync, monke
     deleted.assert_not_called()
 
 
-def test_full_sync_does_not_freeze_settings_for_nested_episode_sync(
-    series_sync, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', lambda **kwargs: [
-        series_payload(7, 'Updated'), dict(series_payload(8, 'New'), path='/new')])
-    observed: list[bool] = []
-
-    def nested_sync(**kwargs):
-        assert 'general' not in kwargs and 'sonarr' not in kwargs
-        observed.append(sync.settings_cache.get(sync.settings, 'general').parse_embedded_audio_track)
-        if len(observed) == 1:
-            monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', True)
-            sync.settings_cache.invalidate()
-
-    monkeypatch.setattr(sync, 'sync_episodes', nested_sync)
-    sync.update_series(job_id=1)
-    assert observed == [False, True]
-
-
 def test_incomplete_known_series_cannot_remove_unseen_series(series_sync, monkeypatch):
     session, deleted, _ = series_sync
     monkeypatch.setattr(sync, 'get_series_from_sonarr_api',
