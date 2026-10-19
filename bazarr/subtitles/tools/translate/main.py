@@ -24,7 +24,7 @@ from sonarr.history import history_log
 from utilities.helper import get_target_folder
 
 TranslationMetadata: TypeAlias = (
-    Row[tuple[str, int | None, int, int, str | None, int | None]] | Row[tuple[str, str | None, int | None]]
+    Row[tuple[str, int | None, int, int, str | None, int | None]] | Row[tuple[str, str | None, str]]
 )
 
 
