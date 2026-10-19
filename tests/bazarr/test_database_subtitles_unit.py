@@ -1,24 +1,16 @@
-from types import SimpleNamespace
-
 from app import database
 from languages import get_languages
+from utilities.subtitle_metadata import SubtitleOrder
 
 
-def test_subtitle_payload_maps_language_and_path():
+def test_subtitle_payload_maps_language_and_path() -> None:
     original_languages = getattr(get_languages, "languages_dict", None)
     get_languages.languages_dict = [{"code2": "en", "code3": "eng", "code3b": None, "name": "English"}]
-    subtitle = SimpleNamespace(
-        id=71,
-        path="/media/movie.en.srt",
-        language="en",
-        forced=False,
-        hi=True,
-        size=123,
-        embedded_track_id=None,
-    )
+    def replace_path(path: str | None) -> str | None:
+        return path.replace('/media', '/mapped') if path is not None else None
 
     try:
-        result = database._subtitle_payload(subtitle, lambda path: path.replace("/media", "/mapped"))
+        result = database._subtitle_payload('/media/movie.en.srt', 'en', False, True, 123, None, 71, replace_path)
     finally:
         if original_languages is None:
             del get_languages.languages_dict
@@ -38,8 +30,8 @@ def test_subtitle_payload_maps_language_and_path():
     }
 
 
-def test_sort_subtitles_matches_legacy_get_subtitles_order():
-    subtitles = [
+def test_sort_subtitles_matches_legacy_get_subtitles_order() -> None:
+    subtitles: list[SubtitleOrder] = [
         {"name": "French", "forced": True},
         {"name": "English", "forced": True},
         {"name": "English", "forced": False},

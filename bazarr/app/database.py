@@ -7,6 +7,8 @@ import os
 import flask_migrate
 import signal
 from collections import defaultdict
+from collections.abc import Callable
+from typing import TypeVar
 
 from dogpile.cache import make_region
 from flask import Flask
@@ -27,6 +29,8 @@ from .config import settings
 from .get_args import args
 from utilities.text_list import parse_string_list, parse_text_list_or_default
 from utilities.path_mappings import path_mappings
+from languages.formatting import LanguageInfo
+from utilities.subtitle_metadata import SubtitleFile, SubtitleOrder, subtitle_sort_key
 
 logger = logging.getLogger(__name__)
 
@@ -612,29 +616,15 @@ def get_profile_cutoff(profile_id):
     return None
 
 
-def get_audio_profile_languages(audio_languages_list_str):
-    from languages.get_languages import alpha2_from_language, alpha3_from_language, language_from_alpha2
-    audio_languages = []
+def get_audio_profile_languages(
+    audio_languages_list_str: str | list[str | None] | tuple[str | None, ...] | None,
+) -> list[LanguageInfo]:
+    from languages.formatting import format_audio_languages
+    from languages.get_languages import language_from_alpha2
 
-    und_default_language = language_from_alpha2(settings.general.default_und_audio_lang)
-
-    for language in parse_text_list_or_default(audio_languages_list_str or '[]', default=[]):
-        if language:
-            audio_languages.append(
-                {"name": language,
-                 "code2": alpha2_from_language(language) or None,
-                 "code3": alpha3_from_language(language) or None}
-            )
-        else:
-            if und_default_language:
-                logging.debug(f"Undefined language audio track treated as {und_default_language}")
-                audio_languages.append(
-                    {"name": und_default_language,
-                     "code2": alpha2_from_language(und_default_language) or None,
-                     "code3": alpha3_from_language(und_default_language) or None}
-                )
-
-    return audio_languages
+    names = parse_text_list_or_default(audio_languages_list_str or '[]', default=[])
+    undefined_name = language_from_alpha2(settings.general.default_und_audio_lang)
+    return format_audio_languages(names, undefined_name)
 
 
 def get_profile_id(series_id=None, episode_id=None, movie_id=None):
@@ -816,79 +806,37 @@ def get_media_tags(column: SQLColumnExpression[str | None]) -> list[str]:
     return sorted(tags)
 
 
-def get_subtitles(sonarr_episode_id: int | None = None, radarr_id: int | None = None) -> List[dict]:
-    """
-    Retrieves a list of subtitles based on the provided episode or movie identifiers.
-
-    If `sonarr_episode_id` is provided, subtitles for the given episode are returned. If only
-    `radarr_id` is provided, subtitles for the given movie are returned. The information includes
-    details such as file path, language, forced subtitles flag, hearing impaired flag, and file size.
-
-    :param sonarr_episode_id: The Sonarr episode identifier, used specifically for episode subtitles.
-    :type sonarr_episode_id: int, optional
-    :param radarr_id: The Radarr identifier, used specifically for movie subtitles.
-    :type radarr_id: int, optional
-    :return: A list of dictionaries, each containing information about a subtitle file, including its
-             path, language metadata (name, alpha-2 code, and alpha-3 code), forced subtitles flag,
-             hearing impaired flag, and file size.
-    :rtype: List[dict]
-    """
-    subtitles = []
+def get_subtitles(sonarr_episode_id: int | None = None, radarr_id: int | None = None) -> list[SubtitleFile]:
     if sonarr_episode_id:
-        episodes_subtitles = database.execute(
-            select(TableEpisodesSubtitles.path,
-                   TableEpisodesSubtitles.language,
-                   TableEpisodesSubtitles.forced,
-                   TableEpisodesSubtitles.hi,
-                   TableEpisodesSubtitles.size,
-                   TableEpisodesSubtitles.embedded_track_id,
-                   TableEpisodesSubtitles.id)
-            .where(TableEpisodesSubtitles.sonarrEpisodeId == sonarr_episode_id)
-        ).all()
-
-        for episode_subtitles in episodes_subtitles:
-            subtitles.append(_subtitle_payload(episode_subtitles, path_mappings.path_replace))
-    elif radarr_id:
-        movies_subtitles = database.execute(
-            select(TableMoviesSubtitles.path,
-                   TableMoviesSubtitles.language,
-                   TableMoviesSubtitles.forced,
-                   TableMoviesSubtitles.hi,
-                   TableMoviesSubtitles.size,
-                   TableMoviesSubtitles.embedded_track_id,
-                   TableMoviesSubtitles.id)
-            .where(TableMoviesSubtitles.radarrId == radarr_id)
-        ).all()
-
-        for movie_subtitles in movies_subtitles:
-            subtitles.append(_subtitle_payload(movie_subtitles, path_mappings.path_replace_movie))
-
-    return _sort_subtitles(subtitles)
+        return get_subtitles_map('series', [sonarr_episode_id]).get(sonarr_episode_id, [])
+    if radarr_id:
+        return get_subtitles_map('movie', [radarr_id]).get(radarr_id, [])
+    return []
 
 
-def _subtitle_payload(subtitle, replace_path):
-    from languages.get_languages import alpha3_from_alpha2, language_from_alpha2
+def _subtitle_payload(
+    path: str | None, language: str, forced: bool, hi: bool, size: int | None,
+    embedded_track_id: int | None, subtitle_id: int, replace_path: Callable[[str | None], str | None],
+) -> SubtitleFile:
+    from languages.formatting import language_info_from_code
 
-    return {"id": subtitle.id,
-            "path": replace_path(subtitle.path),
-            "name": language_from_alpha2(subtitle.language),
-            "code2": subtitle.language,
-            "code3": alpha3_from_alpha2(subtitle.language),
-            "forced": subtitle.forced,
-            "hi": subtitle.hi,
-            "file_size": subtitle.size,
-            "embedded_track_id": subtitle.embedded_track_id}
+    return {**language_info_from_code(language),
+            'id': subtitle_id, 'path': replace_path(path), 'forced': forced, 'hi': hi,
+            'file_size': size, 'embedded_track_id': embedded_track_id}
 
 
-def _sort_subtitles(subtitles):
-    return sorted(subtitles, key=lambda i: (i['name'], i['forced']))
+_Subtitle = TypeVar('_Subtitle', bound=SubtitleOrder)
 
 
-def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, List[dict]]:
+def _sort_subtitles(subtitles: list[_Subtitle]) -> list[_Subtitle]:
+    return sorted(subtitles, key=subtitle_sort_key)
+
+
+def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, list[SubtitleFile]]:
     if not media_ids:
         return {}
 
-    subtitles_by_media_id = defaultdict(list)
+    subtitles_by_media_id: dict[int, list[SubtitleFile]] = defaultdict(list)
     if media_type == "series":
         media_id_column = TableEpisodesSubtitles.sonarrEpisodeId
         subtitle_columns = (
@@ -924,6 +872,7 @@ def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, List[d
         rows = database.execute(
             select(*subtitle_columns).where(media_id_column.in_(media_id_chunk))
         ).all()
-        for row in rows:
-            subtitles_by_media_id[row[0]].append(_subtitle_payload(row, replace_path))
+        for media_id, path, language, forced, hi, size, embedded_id, subtitle_id in rows:
+            subtitles_by_media_id[media_id].append(
+                _subtitle_payload(path, language, forced, hi, size, embedded_id, subtitle_id, replace_path))
     return {media_id: _sort_subtitles(subtitles) for media_id, subtitles in subtitles_by_media_id.items()}
