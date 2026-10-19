@@ -54,7 +54,8 @@ def seriesParser(show, action, tags_dict, language_profiles, serie_default_profi
     original_language = show['originalLanguage'].get('name') if isinstance(show.get('originalLanguage'), dict) else None
 
     audio_language = []
-    if not settings.general.parse_embedded_audio_track:
+    general = settings.general
+    if not general.parse_embedded_audio_track:
         if get_sonarr_info.is_legacy():
             audio_language = profile_id_to_language(show['qualityProfileId'], audio_profiles)
         else:
@@ -87,11 +88,11 @@ def seriesParser(show, action, tags_dict, language_profiles, serie_default_profi
     if action == 'insert':
         parsed_series['profileId'] = serie_default_profile
     
-    if settings.general.serie_tag_enabled:
+    if general.serie_tag_enabled:
         tag_profile = get_matching_profile(tags, language_profiles)
         if tag_profile:
             parsed_series['profileId'] = tag_profile
-        remove_profile_tags_list = settings.general.remove_profile_tags
+        remove_profile_tags_list = general.remove_profile_tags
         if len(remove_profile_tags_list) > 0:
             if set(tags) & set(remove_profile_tags_list):
                 parsed_series['profileId'] = None

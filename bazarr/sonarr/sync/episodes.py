@@ -56,7 +56,8 @@ def check_actual_file_size(original_episode_path):
 
 def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr: bool = False) -> None:
     logging.debug(f'BAZARR Starting episodes sync from Sonarr for series ID {series_id}.')
-    apikey_sonarr = settings.sonarr.apikey
+    sonarr = settings.sonarr
+    apikey_sonarr = sonarr.apikey
 
     # Get current episodes id in DB
     if series_id:
@@ -71,7 +72,8 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
     current_episodes_sonarr = []
     episodes_to_update = []
     episodes_to_add = []
-    parse_embedded_audio_track = settings.general.parse_embedded_audio_track
+    general = settings.general
+    parse_embedded_audio_track: bool = general.parse_embedded_audio_track
 
     # Get episodes data for a series from Sonarr
     episodes = get_episodes_from_sonarr_api(apikey_sonarr=apikey_sonarr, series_id=series_id)
@@ -93,7 +95,7 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
                         if item:
                             episode['episodeFile'] = item[0]
 
-        sync_monitored = settings.sonarr.sync_only_monitored_series and settings.sonarr.sync_only_monitored_episodes
+        sync_monitored = sonarr.sync_only_monitored_series and sonarr.sync_only_monitored_episodes
         if sync_monitored:
             episodes_monitored = get_episodes_monitored_table(series_id)
             skipped_count = 0
@@ -121,7 +123,7 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
 
                 if (episode['episodeFile']['size'] > MINIMUM_VIDEO_SIZE or
                         check_actual_file_size(episode['episodeFile']['path']) or
-                        (settings.general.enable_strm_support and episode['episodeFile']['path'].lower().endswith('.strm'))):
+                        (general.enable_strm_support and episode['episodeFile']['path'].lower().endswith('.strm'))):
                     # Add episodes in sonarr to current episode list
                     current_episodes_sonarr.append(episode['id'])
 
@@ -140,7 +142,7 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
 
     if sync_monitored:
         # try to avoid unnecessary database calls
-        if settings.general.debug:
+        if general.debug:
             series_title = database.execute(select(TableShows.title).where(TableShows.sonarrSeriesId == series_id)).first()[0]
             trace(f"Skipped {skipped_count} unmonitored episodes out of {len(episodes)} for {series_title}")
 
@@ -237,7 +239,7 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
                                       f'between disks?). Searching for missing subtitles is deferred until scheduled '
                                       f'task execution for this episode: {episode_title}')
                 else:
-                    if is_signalr and settings.general.notify_if_nothing_is_missing_for_signalr_event:
+                    if is_signalr and general.notify_if_nothing_is_missing_for_signalr_event:
                         send_notifications(series_id, episode['sonarrEpisodeId'],
                                            "There are no missing subtitles in this episode.")
                     logging.debug(f'BAZARR no missing subtitles for this episode: {episode_title}')

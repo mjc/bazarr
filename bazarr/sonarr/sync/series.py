@@ -54,7 +54,8 @@ def update_series(job_id=None, wait_for_completion=False):
 
     # Get shows data from Sonarr
     try:
-        series = get_series_from_sonarr_api(apikey_sonarr=settings.sonarr.apikey)
+        sonarr = settings.sonarr
+        series = get_series_from_sonarr_api(apikey_sonarr=sonarr.apikey)
     except Exception as e:
         logging.exception(f"BAZARR Error trying to get series from Sonarr: {e}")
         return
@@ -77,8 +78,9 @@ def update_series(job_id=None, wait_for_completion=False):
         series_count = len(series)
         skipped_count = 0
 
+        sync_only_monitored: bool = sonarr.sync_only_monitored_series
         series_monitored = None
-        if settings.sonarr.sync_only_monitored_series:
+        if sync_only_monitored:
             # Get current series monitored status in DB
             series_monitored = get_series_monitored_table()
 
@@ -106,7 +108,7 @@ def update_series(job_id=None, wait_for_completion=False):
             jobs_queue.update_job_progress(job_id=job_id, progress_value=i,
                                            progress_message=show_title if isinstance(show_title, str) else 'Unknown')
 
-            if settings.sonarr.sync_only_monitored_series:
+            if sync_only_monitored:
                 try:
                     monitored_status_db = bool_map[series_monitored.get(show.get('id'))]
                 except (KeyError, TypeError):
@@ -149,7 +151,7 @@ def update_series(job_id=None, wait_for_completion=False):
             # Remove series from DB
             update_one_series(series, action='deleted')
 
-        if settings.sonarr.sync_only_monitored_series:
+        if sync_only_monitored:
             trace(f"skipped {skipped_count} unmonitored series out of {series_count}")
 
         logging.debug('BAZARR All series synced from Sonarr into database.')
@@ -175,8 +177,9 @@ def update_one_series(series_id, action, is_signalr=False, sync_episodes_after_u
         event_stream(type='series', action='delete', payload=int(series_id))
         return
 
-    if settings.general.serie_default_enabled is True:
-        serie_default_profile = settings.general.serie_default_profile
+    general = settings.general
+    if general.serie_default_enabled is True:
+        serie_default_profile = general.serie_default_profile
         if serie_default_profile == '':
             serie_default_profile = None
     else:

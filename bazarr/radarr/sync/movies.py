@@ -156,12 +156,14 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
 
     check_radarr_rootfolder()
     logging.debug('BAZARR Starting movie sync from Radarr.')
-    apikey_radarr = settings.radarr.apikey
+    radarr = settings.radarr
+    apikey_radarr = radarr.apikey
 
-    movie_default_enabled = settings.general.movie_default_enabled
+    general = settings.general
+    movie_default_enabled: bool = general.movie_default_enabled
 
     if movie_default_enabled is True:
-        movie_default_profile = settings.general.movie_default_profile
+        movie_default_profile = general.movie_default_profile
         if movie_default_profile == '':
             movie_default_profile = None
     else:
@@ -231,7 +233,7 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
 
             # Add new movies and update movies that Radarr says have media files
             # Any new movies added to Radarr that don't have media files yet will not be added to DB
-            sync_monitored = settings.radarr.sync_only_monitored_movies
+            sync_monitored = radarr.sync_only_monitored_movies
             if sync_monitored:
                 skipped_count = 0
             files_missing = 0
@@ -331,10 +333,11 @@ def update_one_movie(movie_id, action, defer_search=False, is_signalr=False):
                         f'{path_mappings.path_replace_movie(existing_movie.path)}')
         return
 
-    movie_default_enabled = settings.general.movie_default_enabled
+    general = settings.general
+    movie_default_enabled: bool = general.movie_default_enabled
 
     if movie_default_enabled is True:
-        movie_default_profile = settings.general.movie_default_profile
+        movie_default_profile = general.movie_default_profile
         if movie_default_profile == '':
             movie_default_profile = None
     else:
@@ -440,7 +443,7 @@ def update_one_movie(movie_id, action, defer_search=False, is_signalr=False):
                                                    kwargs={'no': movie_id},
                                                    is_signalr=is_signalr)
             else:
-                if is_signalr and settings.general.notify_if_nothing_is_missing_for_signalr_event:
+                if is_signalr and general.notify_if_nothing_is_missing_for_signalr_event:
                     send_notifications_movie(movie_id, "There are no missing subtitles in this movie.")
                 logging.debug(f'BAZARR no missing subtitles for this movie: {movie["title"]} ({movie["year"]})')
         else:

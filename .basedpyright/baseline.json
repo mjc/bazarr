@@ -518,6 +518,24 @@
                 }
             }
         ],
+        "./bazarr/sonarr/sync/parser.py": [
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 48,
+                    "endColumn": 56,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 41,
+                    "endColumn": 55,
+                    "lineCount": 1
+                }
+            }
+        ],
         "./bazarr/sonarr/sync/series.py": [
             {
                 "code": "reportOptionalMemberAccess",
