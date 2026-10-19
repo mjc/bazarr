@@ -59,7 +59,7 @@ def test_series_audio_does_not_use_literal_eval(
 
     result = utils.postprocess({'sonarrSeriesId': 1, 'audio_language': '[]'}, subtitles=[])
 
-    assert result['audio_language'] == [{'name': 'English', 'code2': 'en', 'code3': 'eng'}]
+    assert result.get('audio_language') == [{'name': 'English', 'code2': 'en', 'code3': 'eng'}]
 
 
 def test_display_setting_is_read_once_per_request(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,7 +95,6 @@ def test_request_lists_are_parsed_once_and_cannot_share_mutations(
     with app.test_request_context():
         first = utils.postprocess({'tags': "['shared']"}, subtitles=[])
         tags = first['tags']
-        assert isinstance(tags, list)
         tags.append('changed')
         assert utils.postprocess({'tags': "['shared']"}, subtitles=[])['tags'] == ['shared']
     assert calls == ["['shared']"]
@@ -116,13 +115,13 @@ def test_audio_formatting_is_reused_without_sharing_output(monkeypatch: pytest.M
     app = Flask(__name__)
     with app.test_request_context():
         first = utils.postprocess({'audio_language': "['English']"}, subtitles=[])
-        languages = first['audio_language']
+        languages = first.get('audio_language')
         assert isinstance(languages, list)
         language = languages[0]
         assert isinstance(language, dict)
         language['name'] = 'changed'
         second = utils.postprocess({'audio_language': "['English']"}, subtitles=[])
-        assert second['audio_language'] == [{'name': 'English', 'code2': 'en', 'code3': 'eng'}]
+        assert second.get('audio_language') == [{'name': 'English', 'code2': 'en', 'code3': 'eng'}]
     assert calls == [('English',)]
     with app.test_request_context():
         utils.postprocess({'audio_language': "['English']"}, subtitles=[])
@@ -145,7 +144,7 @@ def test_invalid_audio_languages_keep_the_empty_default(
 ) -> None:
     monkeypatch.setattr(utils, 'settings', CountingSettings())
     result = utils.postprocess({'audio_language': audio_language}, subtitles=[])
-    assert result['audio_language'] == []
+    assert result.get('audio_language') == []
 
 
 def test_desired_languages_are_reused_per_profile_and_refresh_between_requests(

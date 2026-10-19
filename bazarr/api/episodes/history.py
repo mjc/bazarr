@@ -4,6 +4,7 @@ import operator
 import ast
 from functools import reduce
 
+from api.response_types import MediaResponse, MediaRow
 from api.swaggerui import subtitles_language_model
 from app.database import (TableEpisodes, TableShows, TableHistory, TableBlacklist, database, select,
                           TableEpisodesSubtitles, func)
@@ -112,75 +113,79 @@ class EpisodesHistory(Resource):
             .order_by(TableHistory.timestamp.desc())
         if length > 0:
             stmt = stmt.limit(length).offset(start)
-        episode_history = [{
-            'id': x.id,
-            'seriesTitle': x.seriesTitle,
-            'monitored': x.monitored,
-            'episode_number': x.episode_number,
-            'episodeTitle': x.episodeTitle,
-            'timestamp': x.timestamp,
-            'subs_id': x.subs_id,
-            'description': x.description,
-            'sonarrSeriesId': x.sonarrSeriesId,
-            'path': x.path,
-            'language': x.language,
-            'profileId': x.profileId,
-            'score': x.score,
-            'score_out_of': x.score_out_of,
-            'tags': x.tags,
-            'action': x.action,
-            'video_path': x.video_path,
-            'subtitles_path': x.subtitles_path,
-            'sonarrEpisodeId': x.sonarrEpisodeId,
-            'provider': x.provider,
-            'matches': x.matched,
-            'dont_matches': x.not_matched,
-            'external_subtitles': x.external_subtitles,
-            'blacklisted': bool(x.blacklisted),
-        } for x in database.execute(stmt).all()]
+        episode_rows = database.execute(stmt).all()
 
-        upgradable_episodes_not_perfect = get_upgradable_episode_subtitles(history_id_list=[x['id'] for x in
-                                                                                            episode_history])
+        upgradable_episodes_not_perfect = get_upgradable_episode_subtitles(history_id_list=[x.id for x in
+                                                                                            episode_rows])
 
-        for item in episode_history:
+        episode_history: list[MediaResponse] = []
+        for x in episode_rows:
+            record: MediaRow = {
+                'id': x.id,
+                'seriesTitle': x.seriesTitle,
+                'monitored': x.monitored,
+                'episode_number': x.episode_number,
+                'episodeTitle': x.episodeTitle,
+                'timestamp': x.timestamp,
+                'subs_id': x.subs_id,
+                'description': x.description,
+                'sonarrSeriesId': x.sonarrSeriesId,
+                'path': x.path,
+                'language': x.language,
+                'profileId': x.profileId,
+                'score': x.score,
+                'score_out_of': x.score_out_of,
+                'tags': x.tags,
+                'action': x.action,
+                'video_path': x.video_path,
+                'subtitles_path': x.subtitles_path,
+                'sonarrEpisodeId': x.sonarrEpisodeId,
+                'provider': x.provider,
+                'matches': x.matched,
+                'dont_matches': x.not_matched,
+                'external_subtitles': x.external_subtitles,
+                'blacklisted': bool(x.blacklisted),
+            }
             # is this language still desired or should we simply skip this subtitles from upgrade logic?
-            still_desired = _language_still_desired(item['language'], item['profileId'])
+            still_desired = _language_still_desired(x.language, x.profileId)
 
-            item.update(postprocess(item))
+            item = postprocess(record)
 
             # Mark upgradable and get original_id
-            item.update({'original_id': upgradable_episodes_not_perfect.get(item['id'])})
-            item.update({'upgradable': item['id'] in upgradable_episodes_not_perfect.keys()})
+            item['original_id'] = upgradable_episodes_not_perfect.get(x.id)
+            item['upgradable'] = x.id in upgradable_episodes_not_perfect
 
             # Mark not upgradable if video/subtitles file doesn't exist anymore or if language isn't desired anymore
             if item['upgradable']:
-                if (item['subtitles_path'] != item['external_subtitles'] or item['video_path'] != item['path'] or
+                if (item.get('subtitles_path') != item.get('external_subtitles') or item.get('video_path') != item.get('path') or
                         not still_desired):
-                    item.update({"upgradable": False})
+                    item['upgradable'] = False
 
             del item['path']
             del item['video_path']
             del item['external_subtitles']
             del item['profileId']
 
-            if item['score']:
-                item['score'] = f"{round((int(item['score']) * 100 / item['score_out_of']), 2)}%"
+            if x.score:
+                item['score'] = f"{round((int(x.score) * 100 / x.score_out_of), 2)}%"
 
             # Make timestamp pretty
-            if item['timestamp']:
-                item["parsed_timestamp"] = item['timestamp'].strftime('%x %X')
-                item['timestamp'] = pretty.date(item["timestamp"])
+            if x.timestamp:
+                item["parsed_timestamp"] = x.timestamp.strftime('%x %X')
+                item['timestamp'] = pretty.date(x.timestamp)
 
             # Parse matches and dont_matches
-            if item['matches']:
-                item.update({'matches': ast.literal_eval(item['matches'])})
+            if x.matched:
+                item['matches'] = ast.literal_eval(x.matched)
             else:
-                item.update({'matches': []})
+                item['matches'] = []
 
-            if item['dont_matches']:
-                item.update({'dont_matches': ast.literal_eval(item['dont_matches'])})
+            if x.not_matched:
+                item['dont_matches'] = ast.literal_eval(x.not_matched)
             else:
-                item.update({'dont_matches': []})
+                item['dont_matches'] = []
+
+            episode_history.append(item)
 
         count = database.execute(
             select(func.count())

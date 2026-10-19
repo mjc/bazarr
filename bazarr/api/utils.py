@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from functools import wraps
-from typing import TypeAlias
+from typing import Literal
 from flask import request, abort, has_request_context
 
 from languages.custom_lang import CustomLanguage
@@ -20,8 +20,8 @@ from subtitles.serialization import parse_missing_subtitles
 from utilities.path_mappings import path_mappings
 from utilities.text_list import parse_text_list, parse_text_list_or_default
 
-JsonValue: TypeAlias = str | int | float | bool | None | list['JsonValue'] | dict[str, 'JsonValue']
-JsonObject: TypeAlias = dict[str, JsonValue]
+from api.response_types import (JsonObject, JsonValue, LanguageInfo, MediaResponse, MediaRow,
+                                SubtitleLanguage)
 
 None_Keys = ['null', 'undefined', '', None]
 
@@ -32,32 +32,28 @@ False_Keys = ['False', 'false', '0']
 class _PostprocessContext:
     show_desired_subtitles: bool
     text_lists: dict[str, tuple[str | None, ...]] = field(default_factory=dict)
-    audio_languages: dict[tuple[str | None, ...], list[JsonObject]] = field(default_factory=dict)
+    audio_languages: dict[tuple[str | None, ...], list[LanguageInfo]] = field(default_factory=dict)
     desired_languages: dict[int | str, frozenset[str]] = field(default_factory=dict)
     language_equals: core._LanguageEquals | None = None
 
-    def parse_list(self, value: JsonValue) -> tuple[str | None, ...]:
-        if not isinstance(value, str):
-            raise ValueError('Expected a serialized text list')
+    def parse_list(self, value: str) -> tuple[str | None, ...]:
         if value not in self.text_lists:
             self.text_lists[value] = tuple(parse_text_list(value))
         return self.text_lists[value]
 
-    def format_audio_languages(self, languages: tuple[str | None, ...]) -> list[JsonValue]:
+    def format_audio_languages(self, languages: tuple[str | None, ...]) -> list[LanguageInfo]:
         if languages not in self.audio_languages:
             self.audio_languages[languages] = [
                 {'name': language['name'], 'code2': language['code2'], 'code3': language['code3']}
                 for language in get_audio_profile_languages(languages)
             ]
-        return [dict(language) for language in self.audio_languages[languages]]
+        return [language.copy() for language in self.audio_languages[languages]]
 
-    def desired_language_codes(self, profile_id: JsonValue) -> frozenset[str]:
-        if not isinstance(profile_id, (int, str)):
-            raise ValueError('Expected a language profile ID')
+    def desired_language_codes(self, profile_id: int | str) -> frozenset[str]:
         if profile_id not in self.desired_languages:
             if self.language_equals is None:
                 self.language_equals = core._LanguageEquals(get_language_equals())
-            desired_lang_objects = set()
+            desired_lang_objects: set[core.Language] = set()
             for lang_code in get_desired_languages(profile_id) or []:
                 custom = CustomLanguage.from_value(lang_code, 'alpha2')
                 if custom:
@@ -65,27 +61,22 @@ class _PostprocessContext:
                 else:
                     desired_lang_objects.add(core.Language.fromietf(lang_code))
             expanded_desired_lang_codes: set[str] = set()
-            for lang_obj in self.language_equals.translate(desired_lang_objects):
-                if isinstance(lang_obj, core.Language):
-                    custom = CustomLanguage.from_value(lang_obj, 'language')
-                    if custom:
-                        expanded_desired_lang_codes.add(custom.alpha2)
-                    else:
-                        expanded_desired_lang_codes.add(str(lang_obj.alpha2))
-                else:
-                    expanded_desired_lang_codes.add(str(lang_obj))
+            expanded_languages: set[core.Language] = self.language_equals.translate(desired_lang_objects)
+            for lang_obj in expanded_languages:
+                custom = CustomLanguage.from_value(lang_obj, 'language')
+                expanded_desired_lang_codes.add(custom.alpha2 if custom else str(lang_obj.alpha2))
             self.desired_languages[profile_id] = frozenset(expanded_desired_lang_codes)
         return self.desired_languages[profile_id]
 
 
 def _postprocess_context() -> _PostprocessContext:
+    context: _PostprocessContext | None = None
     if has_request_context():
         context = request.environ.get('bazarr.postprocess')
-        if isinstance(context, _PostprocessContext):
-            return context
-    context = _PostprocessContext(bool(settings.general.embedded_subs_show_desired))
-    if has_request_context():
-        request.environ['bazarr.postprocess'] = context
+    if context is None:
+        context = _PostprocessContext(bool(settings.general.embedded_subs_show_desired))
+        if has_request_context():
+            request.environ['bazarr.postprocess'] = context
     return context
 
 
@@ -167,14 +158,8 @@ def apply_sort(stmt, sort_columns, default_column, sort_by, sort_order):
     # values fall back to the default column.
     sort_column = sort_columns.get(sort_by, default_column)
     return stmt.order_by(sort_column.asc() if sort_order == 'asc' else sort_column.desc())
-def normalize_flag_token(value):
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized == "true":
-            return "True"
-        if normalized == "false":
-            return "False"
-    return "False"
+def normalize_flag_token(value: JsonValue) -> Literal['True', 'False']:
+    return 'True' if isinstance(value, str) and value.strip().lower() == 'true' else 'False'
 
 
 def authenticate(actual_method):
@@ -212,122 +197,95 @@ def get_series_audio_languages(series_ids: list[int]) -> dict[int, list[str | No
     return {series_id: list(names) for series_id, names in languages.items()}
 
 
-def postprocess(item: JsonObject, subtitles: list[JsonObject] | None = None) -> JsonObject:
+def postprocess(item: MediaRow, subtitles: list[JsonObject] | None = None) -> MediaResponse:
     context = _postprocess_context()
-    # Remove ffprobe_cache
-    if item.get('radarrId'):
-        path_replace = path_mappings.path_replace_movie
-    else:
-        path_replace = path_mappings.path_replace
-    if item.get('ffprobe_cache'):
-        del item['ffprobe_cache']
+    path_replace = path_mappings.path_replace_movie if item.get('radarrId') else path_mappings.path_replace
+    profile_id = item.get('profileId')
+    if profile_id in None_Keys:
+        profile_id = None
 
-    # Parse audio language
-    if item.get('audio_language'):
-        if item.get('sonarrSeriesId') and not item.get('sonarrEpisodeId') and item['audio_language'] == '[]':
-            languages = get_series_audio_languages([item['sonarrSeriesId']])
-            item['audio_language'] = context.format_audio_languages(tuple(languages[item['sonarrSeriesId']]))
+    if subtitles is None:
+        subtitles = get_subtitles(sonarr_episode_id=item.get('sonarrEpisodeId'), radarr_id=item.get('radarrId'))
+    if context.show_desired_subtitles:
+        if profile_id:
+            desired_codes = context.desired_language_codes(profile_id)
+            subtitles = [subtitle for subtitle in subtitles
+                         if subtitle.get('code2') in desired_codes or subtitle.get('path')]
+        else:
+            subtitles = [subtitle for subtitle in subtitles if subtitle.get('path')]
+
+    missing_subtitles: list[SubtitleLanguage] = []
+    for subs in parse_missing_subtitles(item.get('missing_subtitles') or []):
+        language = subs.split(':')
+        missing_subtitles.append({
+            'name': language_from_alpha2(language[0]),
+            'code2': language[0],
+            'code3': alpha3_from_alpha2(language[0]),
+            'forced': len(language) > 1 and language[1] == 'forced',
+            'hi': len(language) > 1 and language[1] == 'hi',
+        })
+
+    alternative_titles = item.get('alternativeTitles')
+    tags = item.get('tags')
+    result: MediaResponse = {
+        **item,
+        'alternativeTitles': list(context.parse_list(alternative_titles)) if alternative_titles else [],
+        'tags': list(context.parse_list(tags)) if tags is not None else [],
+        'subtitles': sorted(subtitles, key=lambda subtitle: (subtitle.get('name', ''), subtitle.get('forced', False))),
+        'missing_subtitles': missing_subtitles,
+        'monitored': item.get('monitored') == 'True',
+        'hearing_impaired': item.get('hearing_impaired') == 'True',
+    }
+    if result.get('ffprobe_cache'):
+        del result['ffprobe_cache']
+    if 'profileId' in item:
+        result['profileId'] = profile_id
+
+    series_id = item.get('sonarrSeriesId')
+    audio_language = item.get('audio_language')
+    if audio_language:
+        if series_id and not item.get('sonarrEpisodeId') and audio_language == '[]':
+            audio_languages = tuple(get_series_audio_languages([series_id])[series_id])
         else:
             try:
-                audio_languages = context.parse_list(item['audio_language'])
+                audio_languages = context.parse_list(audio_language)
             except ValueError:
                 audio_languages = ()
-            item['audio_language'] = context.format_audio_languages(audio_languages)
-
-    # Make sure profileId is a valid None value but only if it exists in item
-    if item.get('profileId', False) in None_Keys:
-        item['profileId'] = None
-
-    # Parse alternate titles
-    if item.get('alternativeTitles'):
-        item['alternativeTitles'] = list(context.parse_list(item['alternativeTitles']))
-    else:
-        item['alternativeTitles'] = []
-
-    # Add subtitles
-    if subtitles is None:
-        episode_id = item.get('sonarrEpisodeId')
-        movie_id = item.get('radarrId')
-        subtitles = get_subtitles(sonarr_episode_id=episode_id if isinstance(episode_id, int) else None,
-                                  radarr_id=movie_id if isinstance(movie_id, int) else None)
-
-    if context.show_desired_subtitles:
-        if item.get('profileId'):
-            expanded_desired_lang_codes = context.desired_language_codes(item['profileId'])
-
-            # Filter subtitles: keep if code2 is in expanded desired languages or if it has a path (external)
-            subtitles = [x for x in subtitles
-                         if x.get('code2') in expanded_desired_lang_codes or x.get('path')]
-        else:
-            subtitles = [x for x in subtitles if x.get('path')]
-
-    subtitles = sorted(subtitles, key=lambda x: (x.get('name', ''), x.get('forced', False)))
-    item['subtitles'] = list(subtitles)
-
-    # Parse missing subtitles
-    if item.get('missing_subtitles'):
-        missing_subtitles: list[JsonValue] = []
-        for subs in parse_missing_subtitles(item['missing_subtitles']):
-            language = subs.split(':')
-            missing_subtitles.append({"name": language_from_alpha2(language[0]),
-                                      "code2": language[0],
-                                      "code3": alpha3_from_alpha2(language[0]),
-                                      "forced": len(language) > 1 and language[1] == 'forced',
-                                      "hi": len(language) > 1 and language[1] == 'hi'})
-        item['missing_subtitles'] = missing_subtitles
-    else:
-        item['missing_subtitles'] = []
-
-    # Parse tags
-    if item.get('tags') is not None:
-        item['tags'] = list(context.parse_list(item.get('tags', '[]')))
-    else:
-        item['tags'] = []
-    if item.get('monitored'):
-        item['monitored'] = item.get('monitored') == 'True'
-    else:
-        item['monitored'] = False
-    if item.get('hearing_impaired'):
-        item['hearing_impaired'] = item.get('hearing_impaired') == 'True'
-    else:
-        item['hearing_impaired'] = False
+        result['audio_language'] = context.format_audio_languages(audio_languages)
 
     subtitle_language = item.get('language')
-    if isinstance(subtitle_language, str) and subtitle_language:
+    if subtitle_language:
         if subtitle_language == 'None':
-            item['language'] = None
+            result['language'] = None
         else:
-            splitted_language = subtitle_language.split(':')
-            item['language'] = {
-                "name": language_from_alpha2(splitted_language[0]),
-                "code2": splitted_language[0],
-                "code3": alpha3_from_alpha2(splitted_language[0]),
-                "forced": subtitle_language.endswith(':forced'),
-                "hi": subtitle_language.endswith(':hi'),
+            language = subtitle_language.split(':')
+            result['language'] = {
+                'name': language_from_alpha2(language[0]),
+                'code2': language[0],
+                'code3': alpha3_from_alpha2(language[0]),
+                'forced': subtitle_language.endswith(':forced'),
+                'hi': subtitle_language.endswith(':hi'),
             }
 
-    if item.get('path'):
-        item['path'] = path_replace(item['path'])
+    path = item.get('path')
+    if path:
+        result['path'] = path_replace(path)
+    video_path = item.get('video_path')
+    if video_path:
+        result['video_path'] = path_replace(video_path)
+    subtitles_path = item.get('subtitles_path')
+    if subtitles_path:
+        result['subtitles_path'] = path_replace(subtitles_path)
+    external_subtitles = item.get('external_subtitles')
+    if external_subtitles:
+        result['external_subtitles'] = path_replace(external_subtitles)
 
-    if item.get('video_path'):
-        # Provide mapped video path for history
-        item['video_path'] = path_replace(item['video_path'])
+    media_type = 'movies' if item.get('radarrId') else 'series'
+    poster = item.get('poster')
+    if poster is not None:
+        result['poster'] = f"{base_url}/images/{media_type}{poster}" if poster else None
+    fanart = item.get('fanart')
+    if fanart is not None:
+        result['fanart'] = f"{base_url}/images/{media_type}{fanart}" if fanart else None
 
-    if item.get('subtitles_path'):
-        # Provide mapped subtitles path
-        item['subtitles_path'] = path_replace(item['subtitles_path'])
-
-    if item.get('external_subtitles'):
-        # Provide mapped external subtitles paths for history
-        item['external_subtitles'] = path_replace(item['external_subtitles'])
-
-    # map poster and fanart to server proxy
-    if item.get('poster') is not None:
-        poster = item['poster']
-        item['poster'] = f"{base_url}/images/{'movies' if item.get('radarrId') else 'series'}{poster}" if poster else None
-
-    if item.get('fanart') is not None:
-        fanart = item['fanart']
-        item['fanart'] = f"{base_url}/images/{'movies' if item.get('radarrId') else 'series'}{fanart}" if fanart else None
-
-    return item
+    return result
