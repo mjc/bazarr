@@ -3,16 +3,14 @@
 import operator
 from functools import reduce
 
-from api.response_types import HistoryRow, MarshalledRow, PageResponse
+from api.response_types import HistoryResponse, HistoryRow
 from api.response_data import load_formatter, load_history_languages
 from api.swaggerui import subtitles_language_model
 from app.database import (TableEpisodes, TableShows, TableHistory, TableBlacklist, database, select,
                           TableEpisodesSubtitles, func)
 from subtitles.upgrade import get_upgradable_episode_subtitles
 
-from flask_restx import Resource, Namespace, reqparse, fields
-
-from api.marshalling import marshal_row
+from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from ..utils import authenticate
 
 api_ns_episodes_history = Namespace('Episodes History', description='List episodes history events')
@@ -58,7 +56,7 @@ class EpisodesHistory(Resource):
     @authenticate
     @api_ns_episodes_history.response(401, 'Not Authenticated')
     @api_ns_episodes_history.expect(get_request_parser)
-    def get(self) -> PageResponse:
+    def get(self):
         """List episodes history events"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -123,7 +121,7 @@ class EpisodesHistory(Resource):
         desired_languages = load_history_languages(
             ((x.id, x.language, x.profileId) for x in episode_rows), upgradable_episodes_not_perfect)
 
-        episode_history: list[MarshalledRow] = []
+        episode_history: list[HistoryResponse] = []
         for x in episode_rows:
             record: HistoryRow = {
                 'id': x.id,
@@ -155,7 +153,7 @@ class EpisodesHistory(Resource):
                 record, can_upgrade=x.id in upgradable_episodes_not_perfect
                 and (x.language, x.profileId) in desired_languages)
 
-            episode_history.append(marshal_row(item, self.data_model))
+            episode_history.append(item)
 
         count = database.execute(
             select(func.count())
@@ -164,4 +162,4 @@ class EpisodesHistory(Resource):
             .where(TableEpisodes.title.is_not(None))) \
             .scalar()
 
-        return {'data': episode_history, 'total': count}
+        return marshal({'data': episode_history, 'total': count}, self.get_response_model)

@@ -1,10 +1,6 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields
-
-from api.marshalling import marshal_row
-
-from api.response_types import MarshalledRow, ListResponse
+from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from subliminal_patch.core import guessit
 
 from ..utils import authenticate
@@ -31,11 +27,11 @@ class SubtitleNameInfo(Resource):
     @api_ns_subtitles_info.response(200, 'Success')
     @api_ns_subtitles_info.response(401, 'Not Authenticated')
     @api_ns_subtitles_info.expect(get_request_parser)
-    def get(self) -> ListResponse:
+    def get(self):
         """Guessit over subtitles filename"""
         args = self.get_request_parser.parse_args()
         names = args.get('filenames[]')
-        results: list[MarshalledRow] = []
+        results = []
         for name in names:
             opts = dict()
             opts['type'] = 'episode'
@@ -72,6 +68,6 @@ class SubtitleNameInfo(Resource):
             else:
                 result['season'] = 0
 
-            results.append(marshal_row(result, self.get_response_model))
+            results.append(result)
 
-        return {'data': results}
+        return marshal(results, self.get_response_model, envelope='data')

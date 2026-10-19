@@ -2,10 +2,7 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields
-
-from api.response_types import PageResponse
-from api.marshalling import marshal_rows
+from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
 from app.database import get_exclusion_clause, TableMovies, TableMissingSubtitles, database, select, func
@@ -45,7 +42,7 @@ class MoviesWanted(Resource):
     @authenticate
     @api_ns_movies_wanted.response(401, 'Not Authenticated')
     @api_ns_movies_wanted.expect(get_request_parser)
-    def get(self) -> PageResponse:
+    def get(self):
         """List movies wanted subtitles"""
         args = self.get_request_parser.parse_args()
         radarrid = args.get("radarrid[]")
@@ -77,13 +74,13 @@ class MoviesWanted(Resource):
         missing_languages = get_missing_languages_map('movie', [x.radarrId for x in movies])
         formatter = load_formatter()
 
-        results = (formatter.wanted({
+        results = [formatter.wanted({
             'title': x.title,
             'missing_subtitles': missing_languages[x.radarrId],
             'radarrId': x.radarrId,
             'sceneName': x.sceneName,
             'tags': x.tags,
-        }) for x in movies)
+        }) for x in movies]
 
         count = database.execute(
             select(func.count())
@@ -91,4 +88,4 @@ class MoviesWanted(Resource):
             .where(wanted_condition)) \
             .scalar()
 
-        return {'data': marshal_rows(results, self.data_model), 'total': count}
+        return marshal({'data': results, 'total': count}, self.get_response_model)

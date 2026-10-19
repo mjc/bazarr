@@ -1,9 +1,10 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields
+from typing import cast
 
-from api.marshalling import marshal_rows
-from api.response_types import PageResponse
+from api.utils import JsonObject
+
+from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from app.database import TableMissingSubtitles, TableMovies, database, update, select, func, get_subtitles_map
 from radarr.sync.movies import update_one_movie
 from subtitles.indexer.movies import list_missing_subtitles_movies, movies_scan_subtitles
@@ -63,7 +64,7 @@ class Movies(Resource):
     @api_ns_movies.expect(get_request_parser)
     @api_ns_movies.response(200, 'Success')
     @api_ns_movies.response(401, 'Not Authenticated')
-    def get(self) -> PageResponse:
+    def get(self) -> JsonObject:
         """List movies metadata for specific movies"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -133,7 +134,7 @@ class Movies(Resource):
         subtitles_map = get_subtitles_map('movie', [x.radarrId for x in movies])
         formatter = load_formatter(x.profileId for x in movies)
 
-        results = (formatter.movie({
+        results = [formatter.movie({
             'alternativeTitles': x.alternativeTitles,
             'audio_language': x.audio_language,
             'created_at_timestamp': x.created_at_timestamp,
@@ -150,7 +151,7 @@ class Movies(Resource):
             'tags': x.tags,
             'title': x.title,
             'year': x.year,
-        }, subtitles=subtitles_map.get(x.radarrId, [])) for x in movies)
+        }, subtitles=subtitles_map.get(x.radarrId, [])) for x in movies]
 
         count_stmt = select(func.count()).select_from(TableMovies)
         if where_clauses:
@@ -158,7 +159,7 @@ class Movies(Resource):
 
         count = database.execute(count_stmt).scalar()
 
-        return {'data': marshal_rows(results, self.data_model), 'total': count}
+        return cast(JsonObject, marshal({'data': results, 'total': count}, self.get_response_model))
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('radarrid', type=int, action='append', required=False, default=[],

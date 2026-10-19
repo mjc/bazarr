@@ -2,10 +2,7 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields
-
-from api.response_types import PageResponse
-from api.marshalling import marshal_rows
+from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
 from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableMissingSubtitles, database, select, \
@@ -70,7 +67,7 @@ class Series(Resource):
     @api_ns_series.expect(get_request_parser)
     @api_ns_series.response(200, 'Success')
     @api_ns_series.response(401, 'Not Authenticated')
-    def get(self) -> PageResponse:
+    def get(self):
         """List series metadata for specific series"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -169,7 +166,7 @@ class Series(Resource):
         formatter = load_formatter()
         audio_by_series = load_series_audio_languages(
             (x.sonarrSeriesId for x in series if x.audio_language == '[]'), formatter.audio_names)
-        results = (formatter.series({
+        results = [formatter.series({
             'tvdbId': x.tvdbId,
             'alternativeTitles': x.alternativeTitles,
             'audio_language': x.audio_language,
@@ -190,7 +187,7 @@ class Series(Resource):
             'lastAired': x.lastAired,
             'episodeFileCount': x.episodeFileCount,
             'episodeMissingCount': x.episodeMissingCount,
-        }, episode_audio=audio_by_series.get(x.sonarrSeriesId)) for x in series)
+        }, episode_audio=audio_by_series.get(x.sonarrSeriesId)) for x in series]
 
         count_stmt = select(func.count()) \
             .select_from(TableShows) \
@@ -201,7 +198,7 @@ class Series(Resource):
 
         count = database.execute(count_stmt).scalar()
 
-        return {'data': marshal_rows(results, self.data_model), 'total': count}
+        return marshal({'data': results, 'total': count}, self.get_response_model)
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('seriesid', type=int, action='append', required=False, default=[],

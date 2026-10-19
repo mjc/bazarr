@@ -1,9 +1,6 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields
-
-from api.response_types import ListResponse
-from api.marshalling import marshal_rows
+from flask_restx import Resource, Namespace, reqparse, fields, marshal
 
 from app.database import TableEpisodes, TableShows, database, select, get_subtitles_map
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
@@ -46,7 +43,7 @@ class Episodes(Resource):
     @api_ns_episodes.response(200, 'Success')
     @api_ns_episodes.response(401, 'Not Authenticated')
     @api_ns_episodes.response(404, 'Series or Episode ID not provided')
-    def get(self) -> ListResponse | tuple[str, int]:
+    def get(self):
         """List episodes metadata for specific series or episodes"""
         args = self.get_request_parser.parse_args()
         seriesId = args.get('seriesid[]')
@@ -83,7 +80,7 @@ class Episodes(Resource):
         subtitles_map = get_subtitles_map('series', [x.sonarrEpisodeId for x in stmt_query])
         formatter = load_formatter(x.profileId for x in stmt_query)
 
-        results = (formatter.episode({
+        return marshal([formatter.episode({
                 'audio_language': x.audio_language,
                 'episode': x.episode,
                 'missing_subtitles': missing_languages[x.sonarrEpisodeId],
@@ -95,5 +92,4 @@ class Episodes(Resource):
                 'title': x.title,
                 'sceneName': x.sceneName,
                 'profileId': x.profileId,  # required to filter desired subtitles when settings.general.embedded_subs_show_desired
-                }, subtitles=subtitles_map.get(x.sonarrEpisodeId, [])) for x in stmt_query)
-        return {'data': marshal_rows(results, self.get_response_model)}
+                }, subtitles=subtitles_map.get(x.sonarrEpisodeId, [])) for x in stmt_query], self.get_response_model, envelope='data')

@@ -2,15 +2,13 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields
-
-from api.marshalling import marshal_row
+from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
 from app.database import (TableMovies, TableHistoryMovie, TableBlacklistMovie, database, select, func,
                           TableMoviesSubtitles)
 from subtitles.upgrade import get_upgradable_movies_subtitles
-from api.response_types import HistoryRow, MarshalledRow, PageResponse
+from api.response_types import HistoryResponse, HistoryRow
 from api.response_data import load_formatter, load_history_languages
 from api.swaggerui import subtitles_language_model
 
@@ -57,7 +55,7 @@ class MoviesHistory(Resource):
     @authenticate
     @api_ns_movies_history.response(401, 'Not Authenticated')
     @api_ns_movies_history.expect(get_request_parser)
-    def get(self) -> PageResponse:
+    def get(self):
         """List movies history events"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -117,7 +115,7 @@ class MoviesHistory(Resource):
         desired_languages = load_history_languages(
             ((x.id, x.language, x.profileId) for x in movie_rows), upgradable_movies_not_perfect)
 
-        movie_history: list[MarshalledRow] = []
+        movie_history: list[HistoryResponse] = []
         for x in movie_rows:
             record: HistoryRow = {
                 'id': x.id,
@@ -146,7 +144,7 @@ class MoviesHistory(Resource):
                 record, can_upgrade=x.id in upgradable_movies_not_perfect
                 and (x.language, x.profileId) in desired_languages)
 
-            movie_history.append(marshal_row(item, self.data_model))
+            movie_history.append(item)
 
         count = database.execute(
             select(func.count())
@@ -155,4 +153,4 @@ class MoviesHistory(Resource):
             .where(TableMovies.title.is_not(None))) \
             .scalar()
 
-        return {'data': movie_history, 'total': count}
+        return marshal({'data': movie_history, 'total': count}, self.get_response_model)

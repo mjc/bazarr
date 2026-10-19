@@ -1,9 +1,6 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields
-
-from api.response_types import MarshalledRow
-from api.marshalling import marshal_rows
+from flask_restx import Resource, Namespace, reqparse, fields, marshal
 
 from utilities.filesystem import browse_bazarr_filesystem
 
@@ -26,16 +23,17 @@ class BrowseBazarrFS(Resource):
     @authenticate
     @api_ns_files.response(401, 'Not Authenticated')
     @api_ns_files.expect(get_request_parser)
-    def get(self) -> list[MarshalledRow]:
+    def get(self):
         """List Bazarr file system content"""
         args = self.get_request_parser.parse_args()
         path = args.get('path')
+        data = []
         try:
             result = browse_bazarr_filesystem(path)
             if result is None:
                 raise ValueError
         except Exception:
             return []
-        return marshal_rows(
-            ({'name': item['name'], 'children': True, 'path': item['path']} for item in result['directories']),
-            self.get_response_model)
+        for item in result['directories']:
+            data.append({'name': item['name'], 'children': True, 'path': item['path']})
+        return marshal(data, self.get_response_model)

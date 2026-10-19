@@ -1,9 +1,6 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields
-
-from api.response_types import ListResponse
-from api.marshalling import marshal_rows
+from flask_restx import Resource, Namespace, reqparse, fields, marshal
 
 from app.database import TableMovies, TableBlacklistMovie, database, select, TableMoviesSubtitles
 from subtitles.tools.delete import delete_subtitles
@@ -41,7 +38,7 @@ class MoviesBlacklist(Resource):
     @authenticate
     @api_ns_movies_blacklist.response(401, 'Not Authenticated')
     @api_ns_movies_blacklist.expect(get_request_parser)
-    def get(self) -> ListResponse:
+    def get(self):
         """List blacklisted movies subtitles"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -60,15 +57,14 @@ class MoviesBlacklist(Resource):
             stmt = stmt.limit(length).offset(start)
 
         formatter = load_formatter()
-        results = (formatter.blacklist({
+        return marshal([formatter.blacklist({
             'title': x.title,
             'radarrId': x.radarrId,
             'provider': x.provider,
             'subs_id': x.subs_id,
             'language': x.language,
             'timestamp': x.timestamp,
-        }) for x in database.execute(stmt).all())
-        return {'data': marshal_rows(results, self.get_response_model)}
+        }) for x in database.execute(stmt).all()], self.get_response_model, envelope='data')
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('radarrid', type=int, required=True, help='Radarr ID')
