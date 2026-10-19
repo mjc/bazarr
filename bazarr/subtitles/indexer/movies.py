@@ -8,7 +8,7 @@ from subliminal_patch import core, search_external_subtitles
 from sqlalchemy import not_, tuple_
 
 from languages.custom_lang import CustomLanguage
-from app.database import get_profiles_list, get_profile_cutoff, TableMovies, get_audio_profile_languages, database, \
+from app.database import get_profile, get_profile_cutoff, TableMovies, get_audio_profile_languages, database, \
     update, select, TableMoviesSubtitles, get_subtitles, delete, insert
 from languages.get_languages import alpha2_from_alpha3, get_language_set
 from app.config import settings
@@ -271,7 +271,7 @@ def list_missing_subtitles_movies(
             matches_audio = lambda language: language['language'] in audio_language_codes
 
             # get desired subtitles
-            desired_subtitles_temp = get_profiles_list(profile_id=movie_subtitles.profileId)
+            desired_subtitles_temp = get_profile(profile_id=movie_subtitles.profileId)
             profile_items = desired_subtitles_temp.get('items', []) if isinstance(desired_subtitles_temp, dict) else []
             if not isinstance(profile_items, (list, tuple)):
                 profile_items = []

@@ -649,7 +649,7 @@ def bind_wanted_database(transactional_session, bind_wanted_state, monkeypatch):
 
         return transactional_session.execute(statement).scalar_one_or_none()
 
-    def get_profiles_list(*unused_args, **unused_kwargs):
+    def get_profile(*unused_args, **unused_kwargs):
         return {"items": [], "originalFormat": False}
 
     def get_audio_profile_languages(audio_languages):
@@ -692,7 +692,7 @@ def bind_wanted_database(transactional_session, bind_wanted_state, monkeypatch):
         monkeypatch.setattr(module, "select", select, raising=False)
         monkeypatch.setattr(module, "update", update, raising=False)
         monkeypatch.setattr(module, "get_profile_id", get_profile_id, raising=False)
-        monkeypatch.setattr(module, "get_profiles_list", get_profiles_list, raising=False)
+        monkeypatch.setattr(module, "get_profile", get_profile, raising=False)
         monkeypatch.setattr(module, "get_audio_profile_languages", get_audio_profile_languages, raising=False)
         monkeypatch.setattr(module, "get_subtitles", get_subtitles, raising=False)
         monkeypatch.setattr(module, "TableMissingSubtitles", _TableProxy(_missing_subtitle_rows), raising=False)

@@ -75,25 +75,25 @@ PROFILE = {
 
 
 def test_language_still_desired_false_without_profile():
-    with mock.patch.object(upgrade, "get_profiles_list") as get_profile:
+    with mock.patch.object(upgrade, "get_profile") as get_profile:
         assert upgrade._language_still_desired("en", None) is False
 
     get_profile.assert_not_called()
 
 
 def test_language_still_desired_matches_profile_item():
-    with mock.patch.object(upgrade, "get_profiles_list", return_value=PROFILE):
+    with mock.patch.object(upgrade, "get_profile", return_value=PROFILE):
         assert upgrade._language_still_desired("fr", 1) is True
         assert upgrade._language_still_desired("de", 1) is False
 
 
 def test_language_still_desired_false_when_profile_missing():
-    with mock.patch.object(upgrade, "get_profiles_list", return_value=None):
+    with mock.patch.object(upgrade, "get_profile", return_value=None):
         assert upgrade._language_still_desired("fr", 99) is False
 
 
 def test_is_hi_required_true_only_for_hi_items():
-    with mock.patch.object(upgrade, "get_profiles_list", return_value=PROFILE):
+    with mock.patch.object(upgrade, "get_profile", return_value=PROFILE):
         assert upgrade._is_hi_required("en", 1) is True
         assert upgrade._is_hi_required("en:hi", 1) is True
         assert upgrade._is_hi_required("fr", 1) is False

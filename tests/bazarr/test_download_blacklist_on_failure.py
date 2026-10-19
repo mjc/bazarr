@@ -105,7 +105,7 @@ def _run_generate_subtitles(save_error):
 
     with mock.patch('subtitles.download.settings', settings), \
          mock.patch('subtitles.download.get_array_from', return_value=[]), \
-         mock.patch('subtitles.download.get_profiles_list',
+         mock.patch('subtitles.download.get_profile',
                     return_value={'originalFormat': False, 'items': []}), \
          mock.patch('subtitles.download._get_pool') as pool, \
          mock.patch('subtitles.download._get_language_obj', return_value=[Language('eng')]), \

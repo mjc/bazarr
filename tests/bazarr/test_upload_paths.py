@@ -57,7 +57,7 @@ def test_manual_upload_subtitle_series_handles_missing_profile_key_and_none_audi
 ):
     episode_row_factory(sonarrSeriesId=5, sonarrEpisodeId=11, profileId=44)
 
-    monkeypatch.setattr(upload_module, "get_profiles_list", lambda profile_id: {})
+    monkeypatch.setattr(upload_module, "get_profile", lambda profile_id: {})
     monkeypatch.setattr(upload_module, "get_audio_profile_languages", lambda audio_language: None)
 
     result = upload_module.manual_upload_subtitle(
@@ -82,7 +82,7 @@ def test_manual_upload_subtitle_movie_handles_missing_profile_key_and_none_audio
 ):
     movie_row_factory(radarrId=7, profileId=44)
 
-    monkeypatch.setattr(upload_module, "get_profiles_list", lambda profile_id: {})
+    monkeypatch.setattr(upload_module, "get_profile", lambda profile_id: {})
     monkeypatch.setattr(upload_module, "get_audio_profile_languages", lambda audio_language: None)
 
     result = upload_module.manual_upload_subtitle(
@@ -108,7 +108,7 @@ def test_manual_upload_subtitle_postprocessing_handles_partial_audio_language_di
     commands = []
 
     monkeypatch.setattr(upload_module.settings.general, "use_postprocessing", True)
-    monkeypatch.setattr(upload_module, "get_profiles_list", lambda profile_id: {})
+    monkeypatch.setattr(upload_module, "get_profile", lambda profile_id: {})
     monkeypatch.setattr(upload_module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
     monkeypatch.setattr(upload_module, "pp_replace", lambda *args, **kwargs: commands.append(args) or "cmd")
 

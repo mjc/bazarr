@@ -18,7 +18,7 @@ from app.config import settings, get_array_from
 from constants import HI_EXCLUDED
 from utilities.helper import get_target_folder, force_unicode
 from utilities.path_mappings import path_mappings
-from app.database import (database, get_profiles_list, get_profile, select, TableEpisodes, TableShows, get_audio_profile_languages,
+from app.database import (database, get_profile, select, TableEpisodes, TableShows, get_audio_profile_languages,
                           get_profile_id, TableMovies)
 from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications, send_notifications_movie
@@ -371,7 +371,7 @@ def _get_language_obj(profile_id):
     except (TypeError, ValueError):
         return language_set, False, hi_excluded_keys
 
-    profile = get_profiles_list(profile_id=normalized_profile_id)
+    profile = get_profile(profile_id=normalized_profile_id)
     if not isinstance(profile, dict):
         return language_set, False, hi_excluded_keys
 

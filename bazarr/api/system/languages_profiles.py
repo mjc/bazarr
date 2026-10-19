@@ -2,7 +2,7 @@
 
 from flask_restx import Resource, Namespace
 
-from app.database import get_profiles_list
+from app.database import list_profiles
 
 from ..utils import authenticate
 
@@ -17,4 +17,4 @@ class LanguagesProfiles(Resource):
     @api_ns_system_languages_profiles.response(401, 'Not Authenticated')
     def get(self):
         """List languages profiles"""
-        return get_profiles_list()
+        return list_profiles()

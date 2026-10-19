@@ -62,7 +62,7 @@ def seed_media(session: Session, media_type: str, missing: str | None = '[]') ->
 
 def configure_indexer(monkeypatch, media_type):
     module = movie_indexer if media_type == 'movie' else episode_indexer
-    monkeypatch.setattr(module, 'get_profiles_list', lambda **kwargs: {
+    monkeypatch.setattr(module, 'get_profile', lambda **kwargs: {
         'items': [{'language': 'en', 'forced': 'False', 'hi': 'False'}],
     })
     monkeypatch.setattr(module, 'get_profile_cutoff', lambda **kwargs: None)

@@ -53,7 +53,7 @@ def language_dictionary(monkeypatch):
 
 
 def test_get_language_obj_handles_missing_profile_payload(monkeypatch):
-    monkeypatch.setattr(manual, "get_profiles_list", lambda profile_id: None)
+    monkeypatch.setattr(manual, "get_profile", lambda profile_id: None)
 
     language_set, original_format, hi_excluded = manual._get_language_obj(profile_id=44)
 
@@ -65,7 +65,7 @@ def test_get_language_obj_handles_missing_profile_payload(monkeypatch):
 def test_get_language_obj_handles_malformed_profile_items(language_dictionary, monkeypatch):
     monkeypatch.setattr(
         manual,
-        "get_profiles_list",
+        "get_profile",
         lambda profile_id: {
             "items": [
                 None,
@@ -89,7 +89,7 @@ def test_get_language_obj_handles_malformed_profile_items(language_dictionary, m
 
 
 def test_get_language_obj_handles_non_integer_profile_id(monkeypatch):
-    monkeypatch.setattr(manual, "get_profiles_list", lambda profile_id: {"items": [], "originalFormat": 1})
+    monkeypatch.setattr(manual, "get_profile", lambda profile_id: {"items": [], "originalFormat": 1})
 
     language_set, original_format, hi_excluded = manual._get_language_obj(profile_id="not-an-int")
 
@@ -100,7 +100,7 @@ def test_get_language_obj_handles_non_integer_profile_id(monkeypatch):
 
 @pytest.mark.parametrize("flag", [True, "True"])
 def test_get_language_obj_preserves_profile_flags(language_dictionary, monkeypatch, flag):
-    monkeypatch.setattr(manual, "get_profiles_list", lambda **kwargs: {
+    monkeypatch.setattr(manual, "get_profile", lambda **kwargs: {
         "items": [{"language": "en", "forced": flag, "hi": flag}], "originalFormat": 1,
     })
     languages, original_format, hi_excluded = manual._get_language_obj(44)
@@ -111,7 +111,7 @@ def test_get_language_obj_preserves_profile_flags(language_dictionary, monkeypat
 
 @pytest.mark.parametrize("forced", [True, "True", False, "False"])
 def test_get_language_obj_preserves_hi_exclusion(language_dictionary, monkeypatch, forced):
-    monkeypatch.setattr(manual, "get_profiles_list", lambda **kwargs: {
+    monkeypatch.setattr(manual, "get_profile", lambda **kwargs: {
         "items": [{"language": "en", "forced": forced, "hi": HI_EXCLUDED}],
     })
     languages, _, hi_excluded = manual._get_language_obj(44)
@@ -125,7 +125,7 @@ def test_manual_search_accepts_empty_profile_fallback(monkeypatch, profile_id):
     monkeypatch.setattr(subtitle_pool, "_update_pool", _no_op)
     monkeypatch.setattr(manual, "_get_pool", _empty_message_result)
     monkeypatch.setattr(manual, "_set_forced_providers", _no_op)
-    monkeypatch.setattr(manual, "get_profiles_list", lambda **kwargs: None)
+    monkeypatch.setattr(manual, "get_profile", lambda **kwargs: None)
     # The real caller unpacks all three values before checking provider availability.
     assert manual.manual_search('/movie.mkv', profile_id, [], None, 'Movie', 'movie') == 'All providers are throttled'
 

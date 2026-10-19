@@ -61,7 +61,7 @@ def test_parse_language_string_handles_non_string_input():
 def test_language_profile_helpers_handle_malformed_items(monkeypatch):
     monkeypatch.setattr(
         upgrade,
-        "get_profiles_list",
+        "get_profile",
         lambda *args, **kwargs: {"items": [None, {"bad": "shape"}, {"language": "en", "hi": "True"}]},
     )
 
@@ -95,7 +95,7 @@ def test_upgrade_movies_subtitles_handles_none_audio_list_and_result_without_mes
     generate_calls = []
 
     monkeypatch.setattr(upgrade_module, "get_upgradable_movies_subtitles", lambda history_id_list=None: {10: None})
-    monkeypatch.setattr(upgrade_module, "get_profiles_list", lambda *args, **kwargs: _profile_with_language())
+    monkeypatch.setattr(upgrade_module, "get_profile", lambda *args, **kwargs: _profile_with_language())
     monkeypatch.setattr(upgrade_module, "get_audio_profile_languages", lambda audio_language: None)
     monkeypatch.setattr(
         upgrade_module,
@@ -156,7 +156,7 @@ def test_upgrade_episodes_subtitles_handles_none_score(
     progress_messages = []
 
     monkeypatch.setattr(upgrade_module, "get_upgradable_episode_subtitles", lambda history_id_list=None: {10: None})
-    monkeypatch.setattr(upgrade_module, "get_profiles_list", lambda *args, **kwargs: _profile_with_language())
+    monkeypatch.setattr(upgrade_module, "get_profile", lambda *args, **kwargs: _profile_with_language())
     monkeypatch.setattr(upgrade_module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
     monkeypatch.setattr(
         upgrade_module,
@@ -208,7 +208,7 @@ def test_upgrade_movies_subtitles_skips_empty_parsed_language(
     generate_calls = []
 
     monkeypatch.setattr(upgrade_module, "get_upgradable_movies_subtitles", lambda history_id_list=None: {10: None})
-    monkeypatch.setattr(upgrade_module, "get_profiles_list", lambda *args, **kwargs: _profile_with_language())
+    monkeypatch.setattr(upgrade_module, "get_profile", lambda *args, **kwargs: _profile_with_language())
     monkeypatch.setattr(upgrade_module, "get_audio_profile_languages", lambda audio_language: [{"name": "English"}])
     monkeypatch.setattr(upgrade_module, "parse_language_string", lambda value: ["", "False", "False"])
     monkeypatch.setattr(

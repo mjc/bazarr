@@ -11,7 +11,7 @@ from collections import defaultdict
 from dogpile.cache import make_region
 from flask import Flask
 from datetime import datetime
-from typing import List, overload
+from typing import List
 
 from sqlalchemy import create_engine, inspect, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, text, \
     BigInteger, Boolean, Index
@@ -552,30 +552,13 @@ def update_profile_id_list() -> list[Profile]:
     return profiles
 
 
-@overload
-def get_profiles_list(profile_id: None = None) -> list[Profile]: ...
-
-
-@overload
-def get_profiles_list(profile_id: int | str) -> Profile | list[Profile] | None: ...
-
-
-def get_profiles_list(profile_id=None) -> Profile | list[Profile] | None:
-    profile_id_list = update_profile_id_list()
-
-    if profile_id and profile_id != 'null':
-        for profile in profile_id_list:
-            if profile['profileId'] == profile_id:
-                return profile
-    else:
-        return profile_id_list
-
-
 def list_profiles() -> list[Profile]:
     return update_profile_id_list()
 
 
-def get_profile(profile_id: int) -> Profile | None:
+def get_profile(profile_id: int | None) -> Profile | None:
+    if profile_id is None:
+        return None
     return find_profile(list_profiles(), profile_id)
 
 
@@ -585,9 +568,8 @@ def get_desired_languages(profile_id: int) -> list[str] | None:
 
 
 def get_profile_id_name(profile_id):
-    for profile in update_profile_id_list():
-        if profile['profileId'] == profile_id:
-            return profile['name']
+    profile = get_profile(profile_id)
+    return profile['name'] if profile is not None else None
 
 
 def get_profile_cutoff(profile_id):
@@ -596,23 +578,19 @@ def get_profile_cutoff(profile_id):
     except (TypeError, ValueError):
         return None
 
-    for profile in update_profile_id_list():
-        if profile.get('profileId') != profile_id:
-            continue
-        cutoff = profile.get('cutoff')
-        items = profile.get('items')
-        if not cutoff or not isinstance(items, list):
-            return None
-        items = [item for item in items if isinstance(item, dict)]
-        if cutoff == 65535:
-            return items or None
-        if profile.get('groups') is not None:
-            # Enhanced profiles: the cutoff is a group id, so the cutoff items are all items of that group.
-            group = next((group for group in profile['groups'] if group.get('id') == cutoff), None)
-            group_items = [item for item in ((group or {}).get('items') or []) if isinstance(item, dict)]
-            return group_items or None
-        return next(([item] for item in items if item.get('id') == cutoff), None)
-    return None
+    profile = get_profile(profile_id)
+    if profile is None:
+        return None
+    cutoff = profile['cutoff']
+    if not cutoff:
+        return None
+    items = [item for item in profile['items'] if isinstance(item, dict)]
+    if cutoff == 65535:
+        return items or None
+    if profile.get('groups') is not None:
+        group = next((group for group in profile['groups'] if group['id'] == cutoff), None)
+        return group['items'] or None if group is not None else None
+    return next(([item] for item in items if item['id'] == cutoff), None)
 
 
 def get_audio_profile_languages(audio_languages_list_str):

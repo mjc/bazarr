@@ -11,7 +11,7 @@ from sqlalchemy import and_, or_
 from app.config import settings
 from constants import HI_EXCLUDED
 from app.database import (get_exclusion_clause, get_audio_profile_languages, TableShows, TableEpisodes, TableMovies,
-     TableHistory, TableHistoryMovie, database, select, func, get_profiles_list, TableEpisodesSubtitles,
+     TableHistory, TableHistoryMovie, database, select, func, get_profile, TableEpisodesSubtitles,
      TableMoviesSubtitles)
 from app.jobs_queue import jobs_queue, JobCanceled
 from app.get_providers import get_providers
@@ -490,7 +490,7 @@ def _language_still_desired(language, profile_id):
     if not profile_id:
         return False
 
-    profile = get_profiles_list(profile_id)
+    profile = get_profile(profile_id)
     if not isinstance(profile, dict):
         return False
 
@@ -526,7 +526,7 @@ def _language_from_items(items):
 
 
 def _is_hi_required(language, profile_id):
-    profile = get_profiles_list(profile_id=profile_id)
+    profile = get_profile(profile_id=profile_id)
     if not isinstance(language, str):
         return False
     if not isinstance(profile, dict):

@@ -27,7 +27,7 @@ def _hi_modes_searched(items, languages):
         return {}
 
     with mock.patch('subtitles.download.settings', settings), \
-         mock.patch('subtitles.download.get_profiles_list',
+         mock.patch('subtitles.download.get_profile',
                     return_value={'originalFormat': False, 'items': items}), \
          mock.patch('subtitles.download._get_pool') as pool, \
          mock.patch('subtitles.download._get_language_obj', return_value=languages), \

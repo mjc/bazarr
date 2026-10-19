@@ -11,7 +11,7 @@ from subliminal_patch.core import save_subtitles
 from subliminal_patch.core_persistent import download_best_subtitles
 
 from app.config import settings, get_array_from
-from app.database import TableEpisodes, TableMovies, TableMissingSubtitles, database, select, get_profiles_list
+from app.database import TableEpisodes, TableMovies, TableMissingSubtitles, database, select, get_profile
 from constants import HI_EXCLUDED
 from utilities.path_mappings import path_mappings
 from utilities.helper import get_target_folder, force_unicode
@@ -48,7 +48,7 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
         languages=languages,
         language_items_by_object=language_items_by_object,
     )
-    profile = get_profiles_list(profile_id=profile_id)
+    profile = get_profile(profile_id=profile_id)
     if not profile or not isinstance(profile, dict):
         logging.warning(f"BAZARR unable to get subtitle profile (profile_id={profile_id})")
         return None
