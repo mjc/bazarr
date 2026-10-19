@@ -132,8 +132,10 @@ def test_history_does_not_load_unused_subtitles(
     def reject_subtitle_lookup(sonarr_episode_id: int | None = None, radarr_id: int | None = None) -> None:
         pytest.fail('History responses do not include subtitle lists')
 
-    monkeypatch.setattr(app_database, 'get_subtitles', reject_subtitle_lookup)
-    monkeypatch.setattr(app_database, 'get_subtitles_map', reject_subtitle_lookup)
+    history_module = import_module(f'api.{kind}.history')
+    for module in (app_database, history_module):
+        monkeypatch.setattr(module, 'get_subtitles', reject_subtitle_lookup, raising=False)
+        monkeypatch.setattr(module, 'get_subtitles_map', reject_subtitle_lookup, raising=False)
     monkeypatch.setattr(ast, 'literal_eval', reject_literal_eval)
 
     response = api_client.get(f'/api/{kind}/history', headers={'X-API-KEY': api_key})
