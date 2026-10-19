@@ -62,7 +62,7 @@ class LingarrTranslatorService:
             'pb': 'pt-BR',
         }
 
-    def translate(self, job_id=None):
+    def translate(self, job_id: int | None = None) -> str | None:
         try:
             jobs_queue.update_job_progress(job_id=job_id, progress_max=1, progress_message=self.source_srt_file)
 

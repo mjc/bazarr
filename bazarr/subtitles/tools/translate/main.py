@@ -106,6 +106,8 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
 
         logging.debug(f'Created translator instance: {translator.__class__.__name__}')
         result = translator.translate(job_id=job_id)
+        if result is None:
+            return None
         if result is False:
             raise RuntimeError(f'{translator.__class__.__name__} returned a failed translation result')
         logging.debug(f'BAZARR saved translated subtitles to {dest_srt_file}')
