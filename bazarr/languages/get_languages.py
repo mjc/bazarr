@@ -8,14 +8,15 @@ import pycountry
 from subzero.language import Language
 
 from .custom_lang import CustomLanguage
+from .formatting import language_info_from_code
 from app.database import TableSettingsLanguages, database, insert, update, select
 
 
 class LanguageEntry(TypedDict):
     code2: str | None
-    code3: str
+    code3: str | None
     code3b: str | None
-    name: str
+    name: str | None
 
 
 @dataclass(frozen=True)
@@ -123,14 +124,10 @@ def alpha3_from_language(lang: str) -> str | None:
 def resolve_language(code2: str | None) -> ResolvedLanguage | None:
     if not code2:
         return None
-    code3 = alpha3_from_alpha2(code2)
-    if code3 is None:
+    language = language_info_from_code(code2)
+    if language['name'] is None or language['code3'] is None:
         return None
-    name = language_from_alpha3(code3)
-    resolved_code2 = alpha2_from_alpha3(code3)
-    if name is None or resolved_code2 is None:
-        return None
-    return ResolvedLanguage(code2=resolved_code2, code3=code3, name=name)
+    return ResolvedLanguage(code2=code2[:2], code3=language['code3'], name=language['name'])
 
 
 def get_language_set():
