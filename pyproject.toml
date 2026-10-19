@@ -43,6 +43,8 @@ include = [
     "bazarr/languages/formatting.py",
     "bazarr/languages/get_languages.py",
     "bazarr/languages/registry.py",
+    "bazarr/jellyfin/client.py",
+    "bazarr/jellyfin/operations.py",
     "bazarr/radarr/info.py",
     "bazarr/radarr/movie_snapshot.py",
     "bazarr/radarr/sync/movies.py",

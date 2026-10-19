@@ -83,3 +83,70 @@ def test_report_media_updated(mock_post, client):
     })
 
 
+@pytest.mark.parametrize('method', ['items', 'episodes', 'libraries'])
+@pytest.mark.parametrize('payload', [None, {}, {'Items': None}, {'Items': {}}, 'invalid'])
+def test_invalid_collection_response_is_distinct_from_empty(client, method, payload):
+    with patch.object(client, 'get') as request:
+        request.return_value.json.return_value = payload
+        result = (client.get_items({}) if method == 'items' else
+                  client.get_episodes('series', 1) if method == 'episodes' else client.get_libraries())
+    assert result is None
+
+
+@pytest.mark.parametrize('method', ['items', 'episodes', 'libraries'])
+def test_valid_empty_collection(client, method):
+    with patch.object(client, 'get') as request:
+        request.return_value.json.return_value = [] if method == 'libraries' else {'Items': []}
+        result = (client.get_items({}) if method == 'items' else
+                  client.get_episodes('series', 1) if method == 'episodes' else client.get_libraries())
+    assert result == []
+
+
+def test_items_reuse_nullable_records_and_provider_mapping(client):
+    providers = {'Imdb': None, 'Tmdb': '123'}
+    movie = {'Id': 'movie', 'Name': None, 'Path': None, 'ProviderIds': providers}
+    with patch.object(client, 'get') as request:
+        request.return_value.json.return_value = {'Items': [movie]}
+        items = client.get_items({})
+    assert items is not None and items[0] is movie
+    assert items[0]['ProviderIds'] is providers
+
+
+@pytest.mark.parametrize('field,value', [('Name', None), ('Path', None), ('ProviderIds', None),
+                                        ('ProviderIds', {'Imdb': None})])
+def test_fake_accepts_openapi_nullable_values(field, value):
+    fake = FakeJellyfinClient()
+    movie = make_movie()
+    movie[field] = value
+    fake.items = [movie]
+    assert fake.get_items({}) == [movie]
+
+
+@pytest.mark.parametrize('field,value', [('Name', []), ('Path', 12), ('ProviderIds', []),
+                                        ('ProviderIds', {'Imdb': 12})])
+def test_fake_rejects_invalid_non_null_values(field, value):
+    from jsonschema import ValidationError
+    fake = FakeJellyfinClient()
+    movie = make_movie()
+    movie[field] = value
+    fake.items = [movie]
+    with pytest.raises(ValidationError):
+        fake.get_items({})
+
+
+def test_fake_accepts_nullable_virtual_folder_type():
+    fake = FakeJellyfinClient()
+    fake.libraries = [{'Name': 'Mixed', 'ItemId': 'mixed', 'CollectionType': None}]
+    assert fake.get_libraries() == fake.libraries
+
+
+@pytest.mark.parametrize('method', ['episodes', 'libraries'])
+def test_other_collection_boundaries_reuse_valid_records(client, method):
+    record = (make_episode() if method == 'episodes' else
+              {'Name': 'Movies', 'ItemId': 'movies', 'CollectionType': 'movies'})
+    with patch.object(client, 'get') as request:
+        request.return_value.json.return_value = ({'Items': [None, record]} if method == 'episodes' else [None, record])
+        result = client.get_episodes('series', 1) if method == 'episodes' else client.get_libraries()
+    assert result is not None and result[0] is record
+
+
