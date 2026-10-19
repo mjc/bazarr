@@ -4,6 +4,8 @@ import os
 import requests
 import logging
 
+from sqlalchemy import func
+
 from app.config import settings
 from app.database import TableShowsRootfolder, TableShows, database, insert, update, delete, select
 from utilities.path_mappings import path_mappings
@@ -15,7 +17,7 @@ from constants import HEADERS
 
 def get_sonarr_rootfolder(*, connection: SonarrConnection | None = None,
                           session: requests.Session | None = None) -> list[JsonValue] | None:
-    sonarr_rootfolder = []
+    sonarr_rootfolder: list[tuple[int, str]] = []
 
     # Get root folder data from Sonarr
     with arr_session(session) as http:
@@ -37,37 +39,38 @@ def get_sonarr_rootfolder(*, connection: SonarrConnection | None = None,
             logging.exception("BAZARR Error trying to get rootfolder from Sonarr.")
             return []
         else:
-            folders = response.json()
+            folders: JsonValue = response.json()
             del response
 
+    if not isinstance(folders, list):
+        return []
+    collation = 'C' if database.get_bind().dialect.name == 'postgresql' else 'BINARY'
     for folder in folders:
-        if any(item.path.startswith(folder['path']) for item in database.execute(
-                select(TableShows.path))
-                .all()):
-            sonarr_rootfolder.append({'id': folder['id'], 'path': folder['path']})
-    db_rootfolder = database.execute(
-        select(TableShowsRootfolder.id, TableShowsRootfolder.path))\
-        .all()
-    rootfolder_to_remove = [x for x in db_rootfolder if not
-                            next((item for item in sonarr_rootfolder if item['id'] == x.id), False)]
-    rootfolder_to_update = [x for x in sonarr_rootfolder if
-                            next((item for item in db_rootfolder if item.id == x['id']), False)]
-    rootfolder_to_insert = [x for x in sonarr_rootfolder if not
-                            next((item for item in db_rootfolder if item.id == x['id']), False)]
-
-    for item in rootfolder_to_remove:
-        database.execute(
-            delete(TableShowsRootfolder)
-            .where(TableShowsRootfolder.id == item.id))
-    for item in rootfolder_to_update:
-        database.execute(
-            update(TableShowsRootfolder)
-            .values(path=item['path'])
-            .where(TableShowsRootfolder.id == item['id']))
-    for item in rootfolder_to_insert:
-        database.execute(
-            insert(TableShowsRootfolder)
-            .values(id=item['id'], path=item['path']))
+        if not isinstance(folder, dict):
+            return []
+        root_id, root_path = folder.get('id'), folder.get('path')
+        if type(root_id) is not int or not isinstance(root_path, str) or '\x00' in root_path:
+            return []
+        has_media = database.execute(select(
+            select(1).select_from(TableShows)
+            .where(func.substr(TableShows.path, 1, len(root_path)).collate(collation) == root_path)
+            .exists())).scalar_one()
+        if has_media:
+            sonarr_rootfolder.append((root_id, root_path))
+    del folders
+    existing_ids = set(database.execute(select(TableShowsRootfolder.id)).scalars())
+    desired_ids = {root_id for root_id, _ in sonarr_rootfolder}
+    for root_id in existing_ids - desired_ids:
+        database.execute(delete(TableShowsRootfolder).where(TableShowsRootfolder.id == root_id))
+    # Preserve response order and the existing update-before-insert behavior,
+    # including duplicate IDs in the source response.
+    for root_id, root_path in sonarr_rootfolder:
+        if root_id in existing_ids:
+            database.execute(update(TableShowsRootfolder).values(path=root_path)
+                             .where(TableShowsRootfolder.id == root_id))
+    for root_id, root_path in sonarr_rootfolder:
+        if root_id not in existing_ids:
+            database.execute(insert(TableShowsRootfolder).values(id=root_id, path=root_path))
 
 
 def check_sonarr_rootfolder(*, connection: SonarrConnection | None = None,

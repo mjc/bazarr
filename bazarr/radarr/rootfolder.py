@@ -4,6 +4,8 @@ import os
 import requests
 import logging
 
+from sqlalchemy import func
+
 from app.config import settings
 from utilities.path_mappings import path_mappings
 from app.database import TableMoviesRootfolder, TableMovies, database, delete, update, insert, select
@@ -15,7 +17,7 @@ from constants import HEADERS
 
 def get_radarr_rootfolder(*, connection: RadarrConnection | None = None,
                           session: requests.Session | None = None) -> list[JsonValue] | None:
-    radarr_rootfolder = []
+    radarr_rootfolder: list[tuple[int, str]] = []
 
     # Get root folder data from Radarr
     with arr_session(session) as http:
@@ -37,37 +39,38 @@ def get_radarr_rootfolder(*, connection: RadarrConnection | None = None,
             logging.exception("BAZARR Error trying to get rootfolder from Radarr.")
             return []
         else:
-            folders = response.json()
+            folders: JsonValue = response.json()
             del response
 
+    if not isinstance(folders, list):
+        return []
+    collation = 'C' if database.get_bind().dialect.name == 'postgresql' else 'BINARY'
     for folder in folders:
-        if any(item.path.startswith(folder['path']) for item in database.execute(
-                select(TableMovies.path))
-                .all()):
-            radarr_rootfolder.append({'id': folder['id'], 'path': folder['path']})
-    db_rootfolder = database.execute(
-        select(TableMoviesRootfolder.id, TableMoviesRootfolder.path))\
-        .all()
-    rootfolder_to_remove = [x for x in db_rootfolder if not
-                            next((item for item in radarr_rootfolder if item['id'] == x.id), False)]
-    rootfolder_to_update = [x for x in radarr_rootfolder if
-                            next((item for item in db_rootfolder if item.id == x['id']), False)]
-    rootfolder_to_insert = [x for x in radarr_rootfolder if not
-                            next((item for item in db_rootfolder if item.id == x['id']), False)]
-
-    for item in rootfolder_to_remove:
-        database.execute(
-            delete(TableMoviesRootfolder)
-            .where(TableMoviesRootfolder.id == item.id))
-    for item in rootfolder_to_update:
-        database.execute(
-            update(TableMoviesRootfolder)
-            .values(path=item['path'])
-            .where(TableMoviesRootfolder.id == item['id']))
-    for item in rootfolder_to_insert:
-        database.execute(
-            insert(TableMoviesRootfolder)
-            .values(id=item['id'], path=item['path']))
+        if not isinstance(folder, dict):
+            return []
+        root_id, root_path = folder.get('id'), folder.get('path')
+        if type(root_id) is not int or not isinstance(root_path, str) or '\x00' in root_path:
+            return []
+        has_media = database.execute(select(
+            select(1).select_from(TableMovies)
+            .where(func.substr(TableMovies.path, 1, len(root_path)).collate(collation) == root_path)
+            .exists())).scalar_one()
+        if has_media:
+            radarr_rootfolder.append((root_id, root_path))
+    del folders
+    existing_ids = set(database.execute(select(TableMoviesRootfolder.id)).scalars())
+    desired_ids = {root_id for root_id, _ in radarr_rootfolder}
+    for root_id in existing_ids - desired_ids:
+        database.execute(delete(TableMoviesRootfolder).where(TableMoviesRootfolder.id == root_id))
+    # Preserve response order and the existing update-before-insert behavior,
+    # including duplicate IDs in the source response.
+    for root_id, root_path in radarr_rootfolder:
+        if root_id in existing_ids:
+            database.execute(update(TableMoviesRootfolder).values(path=root_path)
+                             .where(TableMoviesRootfolder.id == root_id))
+    for root_id, root_path in radarr_rootfolder:
+        if root_id not in existing_ids:
+            database.execute(insert(TableMoviesRootfolder).values(id=root_id, path=root_path))
 
 
 def check_radarr_rootfolder(*, connection: RadarrConnection | None = None,
