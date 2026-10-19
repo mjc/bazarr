@@ -267,6 +267,8 @@ class Subtitles(Resource):
             except (EmbeddedSubtitlesExtractionError, OSError):
                 return 'Unable to take action on subtitles file. Check logs.', 409
         elif subtitles_path:
+            if not isinstance(language, str) or not isinstance(action, str):
+                return 'Language and action are required for subtitle modifications', 400
             try:
                 if os.path.splitext(subtitles_path)[1] != '.srt':
                     logging.debug(f"BAZARR can't apply mods on unsupported subtitles file (not srt): {subtitles_path}")

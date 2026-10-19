@@ -13,6 +13,7 @@ from charset_normalizer import detect
 from bs4 import UnicodeDammit
 
 from app.config import settings
+from utilities.subtitle_paths import subtitle_directories
 
 
 bool_map = {"True": True, "False": False, "true": True, "false": False}
@@ -109,36 +110,16 @@ def get_target_folder(file_path: str) -> str | None:
         dedicated subfolder applies, the subfolder mode is unknown, or the
         directory could not be created.
     """
-    subfolder = settings.general.subfolder
-    fld_custom = str(settings.general.subfolder_custom).strip() \
-        if settings.general.subfolder_custom else None
-
-    if subfolder != "current" and fld_custom:
-        # specific subFolder requested, create it if it doesn't exist
-        fld_base = os.path.split(file_path)[0]
-
-        if subfolder == "absolute":
-            # absolute folder
-            fld = fld_custom
-        elif subfolder == "relative":
-            fld = os.path.join(fld_base, fld_custom)
-        else:
-            fld = None
-
-        if fld is None:
-            return None
-        fld = force_unicode(fld)
-
-        if not os.path.isdir(fld):
-            try:
-                os.makedirs(fld)
-            except Exception:
-                logging.error(f'BAZARR is unable to create directory to save subtitles: {fld}')
-                fld = None
-    else:
-        fld = None
-
-    return fld
+    directories = subtitle_directories(file_path)
+    if len(directories) < 2:
+        return None
+    folder = directories[-1]
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError:
+        logging.error('BAZARR is unable to create directory to save subtitles: %s', folder)
+        return None
+    return folder
 
 
 def force_unicode(s: str | bytes) -> str:
