@@ -5,9 +5,8 @@ from typing import Literal, TypeAlias, TypedDict
 
 from languages.formatting import LanguageInfo, SubtitleLanguage
 from utilities.subtitle_metadata import SubtitleFile
+from utilities.json_types import JsonObject, JsonValue
 
-JsonValue: TypeAlias = str | int | float | bool | None | list['JsonValue'] | dict[str, 'JsonValue']
-JsonObject: TypeAlias = dict[str, JsonValue]
 AudioValue: TypeAlias = list[LanguageInfo] | Literal[''] | None
 LanguageValue: TypeAlias = SubtitleLanguage | Literal[''] | None
 

@@ -6,6 +6,7 @@ import logging
 from app.config import settings
 from sonarr.info import get_sonarr_info, url_api_sonarr
 from constants import HEADERS
+from utilities.json_types import JsonValue
 
 
 def get_profile_list():
@@ -77,7 +78,7 @@ def get_tags():
         return tagsDict.json()
 
 
-def get_series_from_sonarr_api(apikey_sonarr, sonarr_series_id=None):
+def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None) -> JsonValue:
     url_sonarr_api_series = (f"{url_api_sonarr()}series/{sonarr_series_id if sonarr_series_id else ''}?"
                              f"apikey={apikey_sonarr}")
     try:
@@ -102,11 +103,11 @@ def get_series_from_sonarr_api(apikey_sonarr, sonarr_series_id=None):
         return
     else:
         if r.status_code == 200:
-            result = r.json()
+            result: JsonValue = r.json()
             if isinstance(result, dict):
                 return [result]
             else:
-                return r.json()
+                return result
         else:
             return
 

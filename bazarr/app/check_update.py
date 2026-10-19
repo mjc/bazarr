@@ -7,6 +7,7 @@ import json
 import requests
 import semver
 import sys
+from typing import TypedDict
 
 from shutil import rmtree
 from zipfile import ZipFile
@@ -16,12 +17,25 @@ from app.get_args import args
 from app.config import settings
 
 
+class ReleaseAsset(TypedDict):
+    name: str
+    browser_download_url: str
+
+
+class Release(TypedDict):
+    assets: list[ReleaseAsset]
+    name: str
+    body: str | None
+    published_at: str
+    prerelease: bool
+
+
 def deprecated_python_version():
     # return True if Python version is deprecated
     return sys.version_info.major == 2 or (sys.version_info.major == 3 and sys.version_info.minor < 10)
 
 
-def check_releases(job_id=None, startup=False, wait_for_completion=False):
+def check_releases(job_id: int | None = None, startup: bool = False, wait_for_completion: bool = False) -> None:
     # startup is used to prevent trying to create a job before the jobs queue is initialized
     if not startup and not job_id:
         jobs_queue.add_job_from_function("Updating Release Info", is_progress=False,
@@ -43,7 +57,8 @@ def check_releases(job_id=None, startup=False, wait_for_completion=False):
     except requests.exceptions.RequestException:
         logging.exception("Error trying to get releases from Github.")
     else:
-        for release in r.json():
+        raw_releases: list[Release] = r.json()
+        for release in raw_releases:
             download_link = None
             for asset in release['assets']:
                 if asset['name'] == 'bazarr.zip':
@@ -57,7 +72,7 @@ def check_releases(job_id=None, startup=False, wait_for_completion=False):
                              'download_link': download_link})
         with open(os.path.join(args.config_dir, 'config', 'releases.txt'), 'w') as f:
             json.dump(releases, f)
-        logging.debug(f'BAZARR saved {len(r.json())} releases to releases.txt')
+        logging.debug('BAZARR saved %s releases to releases.txt', len(raw_releases))
     finally:
         if job_id:
             jobs_queue.update_job_name(job_id=job_id, new_job_name="Updated Release Info")
