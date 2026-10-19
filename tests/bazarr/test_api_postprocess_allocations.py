@@ -304,7 +304,8 @@ def test_invalid_audio_languages_keep_the_empty_default(formatter: ResponseForma
 
 @pytest.mark.parametrize('value', [None, ''])
 def test_empty_audio_values_keep_their_response_shape(formatter: ResponseFormatter, value: str | None) -> None:
-    assert formatter.episode(episode_row(value), subtitles=[])['audio_language'] == value
+    assert formatter.episode(episode_row(value), subtitles=[])['audio_language'] == {
+        'name': None, 'code2': None, 'code3': None}
 
 
 def test_desired_languages_are_loaded_per_profile_and_refresh_between_requests(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -355,9 +356,9 @@ def test_language_flags_keep_each_response_contract(formatter: ResponseFormatter
     assert language['forced'] is True and language['hi'] is False
     missing = formatter.missing_languages(['en:hi:forced'])[0]
     assert missing['forced'] is False and missing['hi'] is True
-    assert formatter.language('None') is None
-    assert formatter.language(None) is None
-    assert formatter.language('') == ''
+    for empty in ('None', None, ''):
+        assert formatter.language(empty) == {'name': None, 'code2': None, 'code3': None,
+                                              'forced': None, 'hi': None}
 
 
 @pytest.mark.parametrize('names', ["['French', None, None]", ['French', None, None], ('French', None, None)])
@@ -392,7 +393,11 @@ def test_shared_history_formatting(
         assert result['matches'] == ['series']
         assert result['dont_matches'] == ['year']
         assert result['upgradable'] is True
-        assert 'profileId' not in result and 'path' not in result
+        assert 'profileId' not in result
+        if method == formatter.movie_history:
+            assert result['path'] is None
+        else:
+            assert 'path' not in result
         assert method(row, can_upgrade=False)['upgradable'] is False
         changed = row.copy()
         changed['external_subtitles'] = '/different.srt'

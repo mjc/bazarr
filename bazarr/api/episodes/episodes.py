@@ -1,11 +1,12 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 
 from app.database import TableEpisodes, TableShows, database, select, get_subtitles_for_query
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
 from ..utils import authenticate
+from api.response_types import EpisodesResponse
 from api.response_data import load_formatter, load_missing_languages
 
 api_ns_episodes = Namespace('Episodes', description='List episodes metadata for specific series or episodes.')
@@ -42,7 +43,7 @@ class Episodes(Resource):
     @api_ns_episodes.response(200, 'Success')
     @api_ns_episodes.response(401, 'Not Authenticated')
     @api_ns_episodes.response(404, 'Series or Episode ID not provided')
-    def get(self):
+    def get(self) -> EpisodesResponse | tuple[str, int]:
         """List episodes metadata for specific series or episodes"""
         args = self.get_request_parser.parse_args()
         seriesId = args.get('seriesid[]')
@@ -75,7 +76,7 @@ class Episodes(Resource):
         subtitles_map = get_subtitles_for_query('series', media_ids) if stmt_query else {}
         formatter = load_formatter(x.profileId for x in stmt_query)
 
-        return marshal([formatter.episode({
+        return {'data': [formatter.episode({
                 'audio_language': x.audio_language,
                 'episode': x.episode,
                 'missing_subtitles': missing_languages.get(x.sonarrEpisodeId, ()),
@@ -87,4 +88,4 @@ class Episodes(Resource):
                 'title': x.title,
                 'sceneName': x.sceneName,
                 'profileId': x.profileId,  # required to filter desired subtitles when settings.general.embedded_subs_show_desired
-                }, subtitles=subtitles_map.get(x.sonarrEpisodeId, ())) for x in stmt_query], self.get_response_model, envelope='data')
+                }, subtitles=subtitles_map.get(x.sonarrEpisodeId, ())) for x in stmt_query]}

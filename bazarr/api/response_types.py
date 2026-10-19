@@ -2,14 +2,20 @@
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal, TypeAlias, TypedDict
+from typing import TypeAlias, TypedDict
 
 from languages.formatting import LanguageInfo, SubtitleLanguage
 from utilities.subtitle_metadata import SubtitleFile
 from utilities.json_types import JsonObject, JsonValue
 
-AudioValue: TypeAlias = list[LanguageInfo] | Literal[''] | None
-LanguageValue: TypeAlias = SubtitleLanguage | Literal[''] | None
+
+class EmptySubtitleLanguage(LanguageInfo):
+    forced: None
+    hi: None
+
+
+AudioValue: TypeAlias = list[LanguageInfo] | LanguageInfo
+LanguageValue: TypeAlias = SubtitleLanguage | EmptySubtitleLanguage
 
 
 class MediaMetadata(TypedDict, total=False):
@@ -86,22 +92,50 @@ class HistoryRow(MediaMetadata):
     not_matched: str | None
 
 
-class SeriesResponse(MediaMetadata):
+class MediaResponse(TypedDict):
     alternativeTitles: list[str | None]
     audio_language: AudioValue
+    created_at_timestamp: str | None
+    fanart: str | None
+    imdbId: str | None
     monitored: bool
+    overview: str | None
+    path: str | None
+    poster: str | None
+    profileId: int | None
     tags: list[str | None]
+    title: str | None
+    year: str | None
 
 
-class EpisodeResponse(MediaMetadata):
+class SeriesResponse(MediaResponse):
+    episodeFileCount: int
+    ended: bool | None
+    episodeMissingCount: int
+    lastAired: str | None
+    seriesType: str | None
+    sonarrSeriesId: int | None
+    tvdbId: int | None
+
+
+class EpisodeResponse(TypedDict):
     audio_language: AudioValue
+    episode: int | None
     missing_subtitles: list[SubtitleLanguage]
     monitored: bool
+    path: str | None
+    season: int | None
+    sonarrEpisodeId: int | None
+    sonarrSeriesId: int | None
     subtitles: list[SubtitleFile]
+    title: str | None
+    sceneName: str | None
 
 
-class MovieResponse(SeriesResponse):
+class MovieResponse(MediaResponse):
     missing_subtitles: list[SubtitleLanguage]
+    radarrId: int | None
+    sceneName: str | None
     subtitles: list[SubtitleFile]
 
 
@@ -129,13 +163,41 @@ class FileBrowserEntry(TypedDict):
     path: str | None
 
 
-class BlacklistResponse(MediaMetadata):
+class BlacklistIdentity(TypedDict, total=False):
+    seriesTitle: str | None
+    episode_number: str | None
+    episodeTitle: str | None
+    sonarrSeriesId: int | None
+    title: str | None
+    radarrId: int | None
+
+
+class BlacklistResponse(BlacklistIdentity):
+    provider: str | None
+    subs_id: str | None
     timestamp: str
     parsed_timestamp: str
     language: LanguageValue
 
 
-class HistoryResponse(MediaMetadata):
+class HistoryIdentity(TypedDict, total=False):
+    seriesTitle: str | None
+    episode_number: str | None
+    episodeTitle: str | None
+    sonarrSeriesId: int | None
+    sonarrEpisodeId: int | None
+    title: str | None
+    radarrId: int | None
+    path: None
+
+
+class HistoryResponse(HistoryIdentity):
+    action: int | None
+    description: str | None
+    subs_id: str | None
+    provider: str | None
+    blacklisted: bool
+    subtitles_path: str | None
     timestamp: str | None
     parsed_timestamp: str | None
     language: LanguageValue
@@ -145,3 +207,93 @@ class HistoryResponse(MediaMetadata):
     matches: list[str]
     dont_matches: list[str]
     upgradable: bool
+
+
+class SeriesPageResponse(TypedDict):
+    data: list[SeriesResponse]
+    total: int | None
+
+
+class MoviesPageResponse(TypedDict):
+    data: list[MovieResponse]
+    total: int | None
+
+
+class EpisodesResponse(TypedDict):
+    data: list[EpisodeResponse]
+
+
+class HistoryPageResponse(TypedDict):
+    data: list[HistoryResponse]
+    total: int | None
+
+
+class BlacklistPageResponse(TypedDict):
+    data: list[BlacklistResponse]
+
+
+class BadgesResponse(TypedDict):
+    episodes: int | None
+    movies: int | None
+    providers: int
+    status: int
+    sonarr_signalr: str
+    radarr_signalr: str
+    announcements: int
+
+
+class TaskResponse(TypedDict):
+    interval: str
+    job_id: str
+    job_running: bool
+    name: str
+    next_run_in: str
+    next_run_time: str
+
+
+class TasksResponse(TypedDict):
+    data: list[TaskResponse]
+
+
+class LogEntry(TypedDict):
+    timestamp: str | None
+    type: str
+    message: str
+    exception: str | None
+
+
+class LogsResponse(TypedDict):
+    data: list[LogEntry]
+
+
+class ProviderStatus(TypedDict):
+    name: str | None
+    status: str
+    retry: str
+
+
+class ProvidersStatusResponse(TypedDict):
+    data: list[ProviderStatus]
+
+
+class SubtitleNameResult(TypedDict):
+    filename: str
+    subtitle_language: str | None
+    season: int | None
+    episode: int | None
+
+
+class SubtitleNamesResponse(TypedDict):
+    data: list[SubtitleNameResult]
+
+
+class ReleaseInfo(TypedDict):
+    body: list[str | None] | None
+    name: str | None
+    date: str | None
+    prerelease: bool | None
+    current: bool | None
+
+
+class ReleasesResponse(TypedDict):
+    data: list[ReleaseInfo]

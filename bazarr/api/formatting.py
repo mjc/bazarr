@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import pretty
+from flask_restx.inputs import boolean
 
 from api.response_types import (AudioValue, BlacklistResponse, BlacklistRow, EpisodeResponse, EpisodeRow,
                                 FileBrowserEntry, HistoryResponse, HistoryRow, LanguageValue, MovieResponse, MovieRow,
@@ -51,10 +52,8 @@ class ResponseFormatter:
             return ()
 
     def _audio(self, value: str | None, names: tuple[str | None, ...] | None = None) -> AudioValue:
-        if value is None:
-            return None
         if not value:
-            return ''
+            return {'name': None, 'code2': None, 'code3': None}
         if names is None:
             names = self.audio_names(value)
         if names not in self._audio_languages:
@@ -77,48 +76,84 @@ class ResponseFormatter:
     def series(self, row: SeriesRow, *, episode_audio: tuple[str | None, ...] | None) -> SeriesResponse:
         if row['audio_language'] == '[]' and episode_audio is None:
             raise ValueError('Series episode audio must be loaded before formatting')
+        created = row.get('created_at_timestamp')
+        ended = row.get('ended')
         return {
-            **row,
             'alternativeTitles': parse_text_list(row['alternativeTitles']) if row['alternativeTitles'] else [],
             'audio_language': self._audio(row['audio_language'], episode_audio if row['audio_language'] == '[]' else None),
-            'tags': self._tags(row['tags']),
+            'created_at_timestamp': str(created) if created is not None else None,
+            'episodeFileCount': row.get('episodeFileCount') or 0,
+            'ended': boolean(ended) if ended is not None else None,
+            'episodeMissingCount': row.get('episodeMissingCount') or 0,
+            'fanart': self._image(row.get('fanart'), 'series'),
+            'imdbId': row.get('imdbId'),
+            'lastAired': row.get('lastAired'),
             'monitored': row['monitored'] == 'True',
+            'overview': row.get('overview'),
             'path': self.series_path(row.get('path')),
             'poster': self._image(row.get('poster'), 'series'),
-            'fanart': self._image(row.get('fanart'), 'series'),
+            'profileId': row.get('profileId'),
+            'seriesType': row.get('seriesType'),
+            'sonarrSeriesId': row.get('sonarrSeriesId'),
+            'tags': self._tags(row['tags']),
+            'title': row.get('title'),
+            'tvdbId': row.get('tvdbId'),
+            'year': row.get('year'),
         }
 
     def episode(self, row: EpisodeRow, *, subtitles: Sequence[SubtitleFile]) -> EpisodeResponse:
         return {
-            **row,
             'audio_language': self._audio(row['audio_language']),
+            'episode': row.get('episode'),
             'missing_subtitles': self.missing_languages(row['missing_subtitles']),
             'monitored': row['monitored'] == 'True',
             'path': self.series_path(row.get('path')),
+            'season': row.get('season'),
+            'sonarrEpisodeId': row.get('sonarrEpisodeId'),
+            'sonarrSeriesId': row.get('sonarrSeriesId'),
             'subtitles': self._subtitles(subtitles, row.get('profileId')),
+            'title': row.get('title'),
+            'sceneName': row.get('sceneName'),
         }
 
     def movie(self, row: MovieRow, *, subtitles: Sequence[SubtitleFile]) -> MovieResponse:
+        created = row.get('created_at_timestamp')
         return {
-            **row,
             'alternativeTitles': parse_text_list(row['alternativeTitles']) if row['alternativeTitles'] else [],
             'audio_language': self._audio(row['audio_language']),
-            'tags': self._tags(row['tags']),
+            'created_at_timestamp': str(created) if created is not None else None,
+            'fanart': self._image(row.get('fanart'), 'movies'),
+            'imdbId': row.get('imdbId'),
             'missing_subtitles': self.missing_languages(row['missing_subtitles']),
             'monitored': row['monitored'] == 'True',
+            'overview': row.get('overview'),
             'path': self.movie_path(row.get('path')),
             'poster': self._image(row.get('poster'), 'movies'),
-            'fanart': self._image(row.get('fanart'), 'movies'),
+            'profileId': row.get('profileId'),
+            'radarrId': row.get('radarrId'),
+            'sceneName': row.get('sceneName'),
             'subtitles': self._subtitles(subtitles, row.get('profileId')),
+            'tags': self._tags(row['tags']),
+            'title': row.get('title'),
+            'year': row.get('year'),
         }
 
     def wanted(self, row: WantedRow) -> WantedResponse:
         return {**row, 'tags': self._tags(row['tags']),
                 'missing_subtitles': self.missing_languages(row['missing_subtitles'])}
 
-    def blacklist(self, row: BlacklistRow) -> BlacklistResponse:
-        return {**row, 'language': self.language(row['language']),
-                'timestamp': pretty.date(row['timestamp']), 'parsed_timestamp': row['timestamp'].strftime('%x %X')}
+    def _blacklist(self, row: BlacklistRow) -> BlacklistResponse:
+        return {'provider': row.get('provider'), 'subs_id': row.get('subs_id'),
+                'language': self.language(row['language']), 'timestamp': pretty.date(row['timestamp']),
+                'parsed_timestamp': row['timestamp'].strftime('%x %X')}
+
+    def episode_blacklist(self, row: BlacklistRow) -> BlacklistResponse:
+        return {**self._blacklist(row), 'seriesTitle': row.get('seriesTitle'),
+                'episode_number': row.get('episode_number'), 'episodeTitle': row.get('episodeTitle'),
+                'sonarrSeriesId': row.get('sonarrSeriesId')}
+
+    def movie_blacklist(self, row: BlacklistRow) -> BlacklistResponse:
+        return {**self._blacklist(row), 'title': row.get('title'), 'radarrId': row.get('radarrId')}
 
     def episode_history(self, row: HistoryRow, *, can_upgrade: bool) -> HistoryResponse:
         result = self._history(row, can_upgrade=can_upgrade, replace_path=self.series_path)
@@ -133,6 +168,7 @@ class ResponseFormatter:
         result = self._history(row, can_upgrade=can_upgrade, replace_path=self.movie_path)
         result['title'] = row.get('title')
         result['radarrId'] = row.get('radarrId')
+        result['path'] = None
         return result
 
     def _history(self, row: HistoryRow, *, can_upgrade: bool, replace_path: PathTranslator) -> HistoryResponse:
@@ -168,10 +204,8 @@ class ResponseFormatter:
         return self._subtitle_languages[key].copy()
 
     def language(self, value: str | None) -> LanguageValue:
-        if value is None or value == 'None':
-            return None
-        if not value:
-            return ''
+        if not value or value == 'None':
+            return {'name': None, 'code2': None, 'code3': None, 'forced': None, 'hi': None}
         return self._subtitle_language(value.split(':')[0], forced=value.endswith(':forced'), hi=value.endswith(':hi'))
 
     def missing_languages(self, values: Sequence[str]) -> list[SubtitleLanguage]:

@@ -2,13 +2,13 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 from functools import reduce
 
 from app.database import (TableMovies, TableHistoryMovie, TableBlacklistMovie, database, select, func,
                           TableMoviesSubtitles)
 from subtitles.upgrade import get_upgradable_movies_subtitles
-from api.response_types import HistoryResponse, HistoryRow
+from api.response_types import HistoryPageResponse, HistoryResponse, HistoryRow
 from api.response_data import load_formatter, load_history_languages
 from api.swaggerui import subtitles_language_model
 
@@ -55,7 +55,7 @@ class MoviesHistory(Resource):
     @authenticate
     @api_ns_movies_history.response(401, 'Not Authenticated')
     @api_ns_movies_history.expect(get_request_parser)
-    def get(self):
+    def get(self) -> HistoryPageResponse:
         """List movies history events"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -153,4 +153,4 @@ class MoviesHistory(Resource):
             .where(TableMovies.title.is_not(None))) \
             .scalar()
 
-        return marshal({'data': movie_history, 'total': count}, self.get_response_model)
+        return {'data': movie_history, 'total': count}

@@ -1,16 +1,13 @@
 # coding=utf-8
 
-from typing import cast
-
-from api.utils import JsonObject
-
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 from app.database import TableMissingSubtitles, TableMovies, database, update, select, func, get_subtitles_for_query
 from radarr.sync.movies import update_one_movie
 from subtitles.indexer.movies import list_missing_subtitles_movies, movies_scan_subtitles
 from app.event_handler import event_stream
 from subtitles.wanted import wanted_search_missing_subtitles_movies
 from subtitles.mass_download import movies_download_subtitles
+from api.response_types import MoviesPageResponse
 from api.response_data import load_formatter, load_missing_languages
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
@@ -63,7 +60,7 @@ class Movies(Resource):
     @api_ns_movies.expect(get_request_parser)
     @api_ns_movies.response(200, 'Success')
     @api_ns_movies.response(401, 'Not Authenticated')
-    def get(self) -> JsonObject:
+    def get(self) -> MoviesPageResponse:
         """List movies metadata for specific movies"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -161,7 +158,7 @@ class Movies(Resource):
 
         count = database.execute(count_stmt).scalar()
 
-        return cast(JsonObject, marshal({'data': results, 'total': count}, self.get_response_model))
+        return {'data': results, 'total': count}
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('radarrid', type=int, action='append', required=False, default=[],

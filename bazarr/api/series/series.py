@@ -2,7 +2,7 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 from functools import reduce
 
 from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableMissingSubtitles, database, select, \
@@ -12,6 +12,7 @@ from subtitles.indexer.series import list_missing_subtitles, series_scan_subtitl
 from subtitles.mass_download import series_download_subtitles
 from subtitles.wanted import wanted_search_missing_subtitles_series
 from app.event_handler import event_stream
+from api.response_types import SeriesPageResponse
 from api.response_data import load_formatter, load_series_audio_languages
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
@@ -67,7 +68,7 @@ class Series(Resource):
     @api_ns_series.expect(get_request_parser)
     @api_ns_series.response(200, 'Success')
     @api_ns_series.response(401, 'Not Authenticated')
-    def get(self):
+    def get(self) -> SeriesPageResponse:
         """List series metadata for specific series"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -209,7 +210,7 @@ class Series(Resource):
 
         count = database.execute(count_stmt).scalar()
 
-        return marshal({'data': results, 'total': count}, self.get_response_model)
+        return {'data': results, 'total': count}
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('seriesid', type=int, action='append', required=False, default=[],

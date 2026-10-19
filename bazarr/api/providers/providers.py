@@ -1,8 +1,10 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
+from itertools import chain
 from operator import itemgetter
 
+from api.response_types import ProviderStatus, ProvidersStatusResponse
 from app.database import TableHistory, TableHistoryMovie, database, select
 from app.get_providers import list_throttled_providers, reset_throttled_providers
 
@@ -26,24 +28,23 @@ class Providers(Resource):
     @api_ns_providers.response(200, 'Success')
     @api_ns_providers.response(401, 'Not Authenticated')
     @api_ns_providers.expect(get_request_parser)
-    def get(self):
+    def get(self) -> ProvidersStatusResponse:
         """Get providers status"""
         args = self.get_request_parser.parse_args()
         history = args.get('history')
+        providers_dicts: list[ProviderStatus] = []
         if history and history not in False_Keys:
             providers = database.execute(
                 select(TableHistory.provider)
                 .where(TableHistory.provider and TableHistory.provider != "manual")
                 .distinct())\
-                .all()
-            providers += database.execute(
+                .scalars()
+            movie_providers = database.execute(
                 select(TableHistoryMovie.provider)
                 .where(TableHistoryMovie.provider and TableHistoryMovie.provider != "manual")
                 .distinct())\
-                .all()
-            providers_list = [x.provider for x in providers]
-            providers_dicts = []
-            for provider in providers_list:
+                .scalars()
+            for provider in chain(providers, movie_providers):
                 if provider not in [x['name'] for x in providers_dicts]:
                     providers_dicts.append({
                         'name': provider,
@@ -53,14 +54,13 @@ class Providers(Resource):
         else:
             throttled_providers = list_throttled_providers()
 
-            providers_dicts = list()
             for provider in throttled_providers:
                 providers_dicts.append({
                     "name": provider[0],
                     "status": provider[1] if provider[1] is not None else "Good",
                     "retry": provider[2] if provider[2] != "now" else "-"
                 })
-        return marshal(sorted(providers_dicts, key=itemgetter('name')), self.get_response_model, envelope='data')
+        return {'data': sorted(providers_dicts, key=itemgetter('name'))}
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('action', type=str, required=True, help='Action to perform from ["reset"]')
