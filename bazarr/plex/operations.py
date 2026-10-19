@@ -216,7 +216,7 @@ def plex_update_library(is_movie_library: bool) -> None:
         logger.error(f"Error in plex_update_library: {e}")
 
 
-def plex_refresh_item(imdb_id: str, is_movie: bool, season: int = None, episode: int = None) -> None:
+def plex_refresh_item(imdb_id: str | None, is_movie: bool, season: int | None = None, episode: int | None = None) -> None:
     """
     Refresh a specific item in Plex instead of scanning the entire library.
     This is much more efficient than a full library scan when subtitles are added.

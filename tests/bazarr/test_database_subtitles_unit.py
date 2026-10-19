@@ -1,3 +1,4 @@
+from languages.registry import LanguageRegistry
 import pytest
 
 from app import database
@@ -5,19 +6,14 @@ from languages import get_languages
 from utilities.subtitle_metadata import SubtitleFile, SubtitleOrder
 
 
-def test_subtitle_payload_maps_language_and_path() -> None:
-    original_languages = getattr(get_languages, "languages_dict", None)
-    get_languages.languages_dict = [{"code2": "en", "code3": "eng", "code3b": None, "name": "English"}]
+def test_subtitle_payload_maps_language_and_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_languages, '_language_registry', LanguageRegistry([
+        {'code2': 'en', 'code3': 'eng', 'code3b': None, 'name': 'English'},
+    ]))
     def replace_path(path: str | None) -> str | None:
         return path.replace('/media', '/mapped') if path is not None else None
 
-    try:
-        result = database._subtitle_payload('/media/movie.en.srt', 'en', False, True, 123, None, 71, replace_path)
-    finally:
-        if original_languages is None:
-            del get_languages.languages_dict
-        else:
-            get_languages.languages_dict = original_languages
+    result = database._subtitle_payload('/media/movie.en.srt', 'en', False, True, 123, None, 71, replace_path)
 
     assert result == {
         "id": 71,
@@ -50,9 +46,9 @@ def test_sort_subtitles_matches_legacy_get_subtitles_order() -> None:
 def test_sort_subtitles_preserves_unknown_language_metadata(
     monkeypatch: pytest.MonkeyPatch, unknown_first: bool,
 ) -> None:
-    monkeypatch.setattr(get_languages, 'languages_dict', [
+    monkeypatch.setattr(get_languages, '_language_registry', LanguageRegistry([
         {'code2': 'en', 'code3': 'eng', 'code3b': None, 'name': 'English'},
-    ])
+    ]))
 
     def unchanged_path(path: str | None) -> str | None:
         return path

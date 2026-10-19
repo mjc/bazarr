@@ -66,6 +66,8 @@ class EpisodesSubtitles(Resource):
         args = self.post_request_parser.parse_args()
 
         uploaded_file = args.get('file')
+        if uploaded_file is None or uploaded_file.filename is None:
+            return 'Subtitle file is required', 400
         _, ext = os.path.splitext(uploaded_file.filename)
 
         if not isinstance(ext, str) or ext.lower() not in SUBTITLE_EXTENSIONS:

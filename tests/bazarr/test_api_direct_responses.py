@@ -1,3 +1,4 @@
+from languages.registry import LanguageRegistry
 from collections.abc import Iterable
 from datetime import datetime
 from importlib import import_module
@@ -129,9 +130,9 @@ def test_media_responses_preserve_unknown_subtitle_languages(
                 language='en', forced=True, hi=False, path='/movie.en.srt', size=123, embedded_track_id=None),
         ])
     memory_session.flush()
-    monkeypatch.setattr(get_languages, 'languages_dict', [
+    monkeypatch.setattr(get_languages, '_language_registry', LanguageRegistry([
         {'code2': 'en', 'code3': 'eng', 'code3b': None, 'name': 'English'},
-    ])
+    ]))
     monkeypatch.setattr(app_database, 'database', memory_session)
     monkeypatch.setattr(response_data, 'database', memory_session)
     endpoint = import_module(f'api.{kind}.{kind}')

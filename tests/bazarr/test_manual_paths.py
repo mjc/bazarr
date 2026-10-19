@@ -1,3 +1,4 @@
+from languages.registry import LanguageRegistry
 from tests.helpers.profile_records import profile_record
 from types import SimpleNamespace
 
@@ -44,11 +45,11 @@ def manual_module(bind_wanted_database, monkeypatch):
 def language_dictionary(monkeypatch):
     monkeypatch.setattr(
         get_languages,
-        "languages_dict",
-        [
+        "_language_registry",
+        LanguageRegistry([
             {"code2": "en", "code3": "eng", "code3b": None, "name": "English"},
             {"code2": "fr", "code3": "fra", "code3b": "fre", "name": "French"},
-        ],
+        ]),
         raising=False,
     )
 

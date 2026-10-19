@@ -125,9 +125,9 @@ def _find_episode(client: JellyfinClient, series_id: str, season: int,
     return None
 
 
-def jellyfin_refresh_item(imdb_id: str = None, is_movie: bool = True, season: int = None,
-                          episode: int = None, tmdb_id: str = None, tvdb_id: int = None,
-                          title: str = None, year: int = None) -> None:
+def jellyfin_refresh_item(imdb_id: str | None = None, is_movie: bool = True, season: int | None = None,
+                          episode: int | None = None, tmdb_id: str | None = None, tvdb_id: int | None = None,
+                          title: str | None = None, year: int | None = None) -> None:
     """
     Refresh a specific item in Jellyfin after subtitle changes.
 

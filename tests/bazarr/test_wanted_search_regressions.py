@@ -1,3 +1,4 @@
+from languages.registry import LanguageRegistry
 from tests.helpers.profile_records import profile_record
 """Exercise the runtime ORM and autocommit engine, rather than table proxies."""
 from collections.abc import Mapping, Sequence
@@ -35,9 +36,9 @@ def runtime_database(monkeypatch, tmp_path):
     with Session(engine) as session:
         for module in [db, state, movie_indexer, episode_indexer, radarr, sonarr]:
             monkeypatch.setattr(module, 'database', session)
-        monkeypatch.setattr(get_languages, 'languages_dict', [
+        monkeypatch.setattr(get_languages, '_language_registry', LanguageRegistry([
             {'code2': 'en', 'code3': 'eng', 'code3b': None, 'name': 'English'},
-        ])
+        ]))
         yield engine, session
     engine.dispose()
 

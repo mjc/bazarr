@@ -16,24 +16,24 @@ class SubtitleLanguage(LanguageInfo):
 
 
 def language_info_from_name(name: str) -> LanguageInfo:
-    from .get_languages import languages_dict
+    from .get_languages import get_language_registry
 
-    language = next((item for item in languages_dict if item['name'] == name), None)
+    language = get_language_registry().from_name(name)
     return {
         'name': name,
-        'code2': (language['code2'] or None) if language else None,
-        'code3': (language['code3'] or None) if language else None,
+        'code2': (language.code2 or None) if language else None,
+        'code3': (language.code3 or None) if language else None,
     }
 
 
 def language_info_from_code(code: str) -> LanguageInfo:
-    from .get_languages import languages_dict
+    from .get_languages import get_language_registry
 
-    language = next((item for item in languages_dict if item['code2'] == code[:2]), None)
+    language = get_language_registry().from_code2(code)
     return {
-        'name': language['name'] if language else None,
+        'name': language.name if language else None,
         'code2': code,
-        'code3': language['code3'] if language else None,
+        'code3': language.code3 if language else None,
     }
 
 

@@ -60,3 +60,10 @@ def test_episodes_subtitles_patch_normalizes_malformed_flags(episodes_api_module
     assert result == ("", 204)
     assert captured["hi"] == "False"
     assert captured["forced"] == "False"
+
+
+@pytest.mark.parametrize('resource', [movies_subtitles.MoviesSubtitles, episodes_subtitles.EpisodesSubtitles])
+@pytest.mark.parametrize('uploaded', [None, SimpleNamespace(filename=None)])
+def test_subtitle_upload_rejects_missing_file_before_reading_media(resource, uploaded, monkeypatch):
+    monkeypatch.setattr(resource, 'post_request_parser', SimpleNamespace(parse_args=lambda: {'file': uploaded}))
+    assert _call_resource_method(resource.post, resource()) == ('Subtitle file is required', 400)
