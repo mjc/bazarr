@@ -78,6 +78,35 @@ def test_modifications_replace_content_before_removing_source(tmp_path: Path, in
     assert list(destination.parent.glob('.bazarr-*')) == []
 
 
+def test_directory_alias_does_not_delete_replacement(tmp_path: Path) -> None:
+    directory = tmp_path / 'subtitles'
+    directory.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(directory, target_is_directory=True)
+    source = directory / 'movie.en.srt'
+    destination = alias / source.name
+    source.write_bytes(b'original')
+    mods._write_modified_subtitle(b'modified', str(source), str(destination))
+    assert source.read_bytes() == b'modified'
+    assert destination.read_bytes() == b'modified'
+    assert list(directory.glob('.bazarr-*')) == []
+
+
+@pytest.mark.parametrize('symbolic', [False, True])
+def test_distinct_source_link_is_removed_after_replacement(tmp_path: Path, symbolic: bool) -> None:
+    destination = tmp_path / 'movie.en.srt'
+    destination.write_bytes(b'original')
+    source = tmp_path / 'movie.en.hi.srt'
+    if symbolic:
+        source.symlink_to(destination)
+    else:
+        source.hardlink_to(destination)
+    mods._write_modified_subtitle(b'modified', str(source), str(destination))
+    assert not source.exists()
+    assert not source.is_symlink()
+    assert destination.read_bytes() == b'modified'
+
+
 @pytest.mark.parametrize('in_place', [False, True])
 def test_failed_replacement_keeps_original_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, in_place: bool,

@@ -30,7 +30,7 @@ def _write_modified_subtitle(content: bytes, source: str, destination: str) -> N
     finally:
         if temporary is not None:
             os.unlink(temporary)
-    if os.path.abspath(source) != os.path.abspath(destination):
+    if os.path.islink(source) or not os.path.samefile(source, destination):
         os.unlink(source)
 
 
