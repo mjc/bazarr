@@ -488,33 +488,34 @@ def migrate_db(app: Flask) -> None:
             .values(configured='0', updated='0'))
 
 
-def get_exclusion_clause(exclusion_type):
-    where_clause = []
+def get_exclusion_clause(exclusion_type: str) -> list[SQLColumnExpression[bool]]:
+    where_clause: list[SQLColumnExpression[bool]] = []
+    media_settings = settings.sonarr if exclusion_type == 'series' else settings.radarr
     if exclusion_type == 'series':
-        tagsList = settings.sonarr.excluded_tags
+        tagsList = media_settings.excluded_tags
         for tag in tagsList:
             where_clause.append(~(TableShows.tags.contains(f"\'{tag}\'")))
     else:
-        tagsList = settings.radarr.excluded_tags
+        tagsList = media_settings.excluded_tags
         for tag in tagsList:
             where_clause.append(~(TableMovies.tags.contains(f"\'{tag}\'")))
 
     if exclusion_type == 'series':
-        monitoredOnly = settings.sonarr.only_monitored
+        monitoredOnly = media_settings.only_monitored
         if monitoredOnly:
             where_clause.append((TableEpisodes.monitored == 'True'))  # noqa E712
             where_clause.append((TableShows.monitored == 'True'))  # noqa E712
     else:
-        monitoredOnly = settings.radarr.only_monitored
+        monitoredOnly = media_settings.only_monitored
         if monitoredOnly:
             where_clause.append((TableMovies.monitored == 'True'))  # noqa E712
 
     if exclusion_type == 'series':
-        typesList = settings.sonarr.excluded_series_types
+        typesList = media_settings.excluded_series_types
         for item in typesList:
             where_clause.append((TableShows.seriesType != item))
 
-        exclude_season_zero = settings.sonarr.exclude_season_zero
+        exclude_season_zero = media_settings.exclude_season_zero
         if exclude_season_zero:
             where_clause.append((TableEpisodes.season != 0))
 
