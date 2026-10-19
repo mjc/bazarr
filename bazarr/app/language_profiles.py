@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, NamedTuple
 
-from constants import HI_EXCLUDED
+from literals import HI_EXCLUDED
 from utilities.json_types import JsonObject, JsonValue
 from utilities.text_list import parse_string_list
 

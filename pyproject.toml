@@ -1,6 +1,8 @@
 [tool.basedpyright]
 include = [
     "bazarr/utilities",
+    "bazarr/constants.py",
+    "bazarr/literals.py",
     "bazarr/api/badges/badges.py",
     "bazarr/api/system/backups.py",
     "bazarr/api/system/logs.py",
