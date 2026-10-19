@@ -16,11 +16,12 @@ from app.notifier import send_notifications_movie
 from constants import MINIMUM_VIDEO_SIZE
 from radarr.rootfolder import check_radarr_rootfolder
 from subtitles.indexer.movies import store_subtitles_movie
-from utilities.helper import bool_map
+from utilities.helper import bool_map, has_changed_fields
 from utilities.path_mappings import path_mappings
 from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due_missing_languages_for_media
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.engine import RowMapping
 from .parser import movieParser
 from .utils import get_profile_list, get_tags, get_movies_from_radarr_api
 
@@ -145,7 +146,7 @@ def add_movie(added_movie):
         event_stream(type='movie', action='update', payload=int(added_movie['radarrId']))
 
 
-def update_movies(job_id=None, wait_for_completion=False):
+def update_movies(job_id: int | None = None, wait_for_completion: bool = False) -> None:
     if not job_id:
         jobs_queue.add_job_from_function("Syncing movies with Radarr", is_progress=True,
                                          wait_for_completion=wait_for_completion, is_cancellable=True)
@@ -190,14 +191,12 @@ def update_movies(job_id=None, wait_for_completion=False):
             movies_count = len(movies)
             jobs_queue.update_job_progress(job_id=job_id, progress_max=movies_count)
             # Get current movies in DB
-            current_movies_in_db = {
-                row[0].radarrId: {
-                    column.name: getattr(row[0], column.name)
-                    for column in row[0].__table__.columns
-                }
-                for row in database.execute(select(TableMovies)).all()
+            current_movies_in_db: dict[int, RowMapping] = {
+                row['radarrId']: row for row in database.execute(
+                    select(*(getattr(TableMovies, column.name) for column in TableMovies.__table__.columns))
+                ).mappings()
             }
-            current_movies_id_db = set(current_movies_in_db)
+            current_movies_id_db = current_movies_in_db.keys()
 
             complete_movie_list = all(
                 isinstance(movie, dict) and type(movie.get('id')) is int and movie['id'] > 0
@@ -213,7 +212,7 @@ def update_movies(job_id=None, wait_for_completion=False):
 
             # Remove movies from DB that either no longer exist in Radarr or exist and Radarr says do not have a movie file
             movies_to_delete = (
-                list(current_movies_id_db - set(current_movies_radarr)) if complete_movie_list else []
+                list(current_movies_id_db - current_movies_radarr) if complete_movie_list else []
             )
             if not complete_movie_list:
                 logging.warning('BAZARR Skipping movie deletion because Radarr returned unidentified movies.')
@@ -270,7 +269,7 @@ def update_movies(job_id=None, wait_for_completion=False):
                                                            language_profiles=language_profiles,
                                                            movie_default_profile=movie_default_profile,
                                                            audio_profiles=audio_profiles)
-                                if not parsed_movie.items() <= current_movies_in_db[movie_id].items():
+                                if has_changed_fields(current_movies_in_db[movie_id], parsed_movie):
                                     update_movie(parsed_movie)
                                     movies_updated.append(parsed_movie['title'])
                             else:

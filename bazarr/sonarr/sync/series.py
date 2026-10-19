@@ -9,7 +9,7 @@ from datetime import datetime
 from app.config import settings
 from sonarr.rootfolder import check_sonarr_rootfolder
 from app.database import TableShows, TableLanguagesProfiles, database, insert, update, select
-from utilities.helper import bool_map
+from utilities.helper import bool_map, has_changed_fields
 from utilities.path_mappings import path_mappings
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue, JobCanceled
@@ -93,12 +93,18 @@ def update_series(job_id=None, wait_for_completion=False):
             if job.cancel_event.is_set():
                 raise JobCanceled
 
-            if not isinstance(show, dict) or type(show.get('id')) is not int or show['id'] <= 0:
+            if not isinstance(show, dict):
                 complete_series_list = False
                 skipped_count += 1
                 continue
             show_id = show.get('id')
-            jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_message=show.get('title', 'Unknown'))
+            if type(show_id) is not int or show_id <= 0:
+                complete_series_list = False
+                skipped_count += 1
+                continue
+            show_title = show.get('title', 'Unknown')
+            jobs_queue.update_job_progress(job_id=job_id, progress_value=i,
+                                           progress_message=show_title if isinstance(show_title, str) else 'Unknown')
 
             if settings.sonarr.sync_only_monitored_series:
                 try:
@@ -154,14 +160,13 @@ def update_series(job_id=None, wait_for_completion=False):
 
 
 def update_one_series(series_id, action, is_signalr=False, sync_episodes_after_update=True, series_data=None,
-                      audio_profiles=None, tagsDict=None, language_profiles=None):
+                      audio_profiles=None, tagsDict=None, language_profiles=None) -> None:
     logging.debug(f'BAZARR syncing this specific series from Sonarr: {series_id}')
 
     # Check if there's a row in database for this series ID
     existing_series = database.execute(
-        select(TableShows)
-        .where(TableShows.sonarrSeriesId == series_id))\
-        .first()
+        select(*(getattr(TableShows, column.name) for column in TableShows.__table__.columns))
+        .where(TableShows.sonarrSeriesId == series_id)).mappings().first()
 
     # Delete series from DB
     if action == 'deleted' and existing_series:
@@ -192,21 +197,19 @@ def update_one_series(series_id, action, is_signalr=False, sync_episodes_after_u
             logging.exception(f'BAZARR cannot get series with ID {series_id} from Sonarr API.')
             return
 
-    if not series_data:
+    if not isinstance(series_data, list) or not series_data:
+        return
+    series_payload = series_data[0]
+    if not isinstance(series_payload, dict):
         return
 
     if action == 'updated' and existing_series:
         # Update existing series in DB
-        series = seriesParser(series_data[0], action='update', tags_dict=tagsDict,
+        series = seriesParser(series_payload, action='update', tags_dict=tagsDict,
                               language_profiles=language_profiles,
                               serie_default_profile=serie_default_profile,
                               audio_profiles=audio_profiles)
-        existing_series_model = existing_series[0]
-        existing_series_values = {
-            column.name: getattr(existing_series_model, column.name)
-            for column in existing_series_model.__table__.columns
-        }
-        if series.items() <= existing_series_values.items():
+        if not has_changed_fields(existing_series, series):
             if sync_episodes_after_update and not is_signalr:
                 sync_episodes(series_id=int(series_id))
             return
@@ -231,7 +234,7 @@ def update_one_series(series_id, action, is_signalr=False, sync_episodes_after_u
                 f'BAZARR updated this series into the database:{path_mappings.path_replace(series["path"])}')
     elif action == 'updated' and not existing_series:
         # Insert new series in DB
-        series = seriesParser(series_data[0], action='insert', tags_dict=tagsDict,
+        series = seriesParser(series_payload, action='insert', tags_dict=tagsDict,
                               language_profiles=language_profiles,
                               serie_default_profile=serie_default_profile,
                               audio_profiles=audio_profiles)

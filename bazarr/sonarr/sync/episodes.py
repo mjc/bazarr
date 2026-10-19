@@ -6,6 +6,7 @@ import operator
 import semver
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.engine import RowMapping
 from datetime import datetime
 from functools import reduce
 
@@ -13,7 +14,7 @@ from constants import MINIMUM_VIDEO_SIZE
 from app.database import database, TableShows, TableEpisodes, TableMissingSubtitles, update, insert, select, \
     get_exclusion_clause
 from app.config import settings
-from utilities.helper import bool_map
+from utilities.helper import bool_map, has_changed_fields
 from utilities.path_mappings import path_mappings
 from subtitles.indexer.series import store_subtitles, series_full_scan_subtitles
 from subtitles.mass_download import episode_download_subtitles
@@ -59,12 +60,11 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
 
     # Get current episodes id in DB
     if series_id:
-        current_episodes_in_db_row_as_dict = {row[0].sonarrEpisodeId: row[0].to_dict() for row in
-                                              database.execute(
-                                                  select(TableEpisodes)
-                                                  .where(TableEpisodes.sonarrSeriesId == series_id))
-                                              .all()}
-        current_episodes_id_db_list = list(current_episodes_in_db_row_as_dict)
+        current_episodes_in_db: dict[int, RowMapping] = {
+            row['sonarrEpisodeId']: row for row in database.execute(
+                select(*(getattr(TableEpisodes, column.name) for column in TableEpisodes.__table__.columns))
+                .where(TableEpisodes.sonarrSeriesId == series_id)).mappings()
+        }
     else:
         return
 
@@ -126,10 +126,10 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
                     current_episodes_sonarr.append(episode['id'])
 
                     # Parse episode data
-                    if episode['id'] in current_episodes_in_db_row_as_dict:
+                    if episode['id'] in current_episodes_in_db:
                         parsed_episode = episodeParser(
                             episode, parse_embedded_audio_track=parse_embedded_audio_track)
-                        if not parsed_episode.items() <= current_episodes_in_db_row_as_dict[episode['id']].items():
+                        if has_changed_fields(current_episodes_in_db[episode['id']], parsed_episode):
                             episodes_to_update.append(parsed_episode)
                     else:
                         episodes_to_add.append(
@@ -145,7 +145,7 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
             trace(f"Skipped {skipped_count} unmonitored episodes out of {len(episodes)} for {series_title}")
 
     # Remove old episodes from DB
-    episodes_to_delete = list(set(current_episodes_id_db_list) - set(current_episodes_sonarr))
+    episodes_to_delete = list(current_episodes_in_db.keys() - current_episodes_sonarr)
 
     if len(episodes_to_delete):
         try:

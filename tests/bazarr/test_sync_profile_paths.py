@@ -176,7 +176,8 @@ def test_radarr_movie_sync_skips_file_payloads_without_movie_id(monkeypatch, syn
         "get_movies_from_radarr_api",
         lambda apikey_radarr: [{"hasFile": True, "title": "Missing ID", "movieFile": {"size": 999999}}],
     )
-    monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(all=lambda: []))
+    monkeypatch.setattr(radarr_movies.database, "execute",
+                        lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter(())))
     monkeypatch.setattr(
         radarr_movies.jobs_queue,
         "update_job_progress",
@@ -217,7 +218,8 @@ def test_radarr_movie_sync_handles_malformed_movie_file_fields(monkeypatch, sync
             {"id": 2, "hasFile": True, "title": "Missing Path", "movieFile": {"size": None}},
         ],
     )
-    monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(all=lambda: []))
+    monkeypatch.setattr(radarr_movies.database, "execute",
+                        lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter(())))
     monkeypatch.setattr(
         radarr_movies.jobs_queue,
         "update_job_progress",
@@ -269,7 +271,8 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
             },
         ],
     )
-    monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(all=lambda: []))
+    monkeypatch.setattr(radarr_movies.database, "execute",
+                        lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter(())))
     monkeypatch.setattr(
         radarr_movies,
         "movieParser",
@@ -322,7 +325,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
     monkeypatch.setattr(
         radarr_movies.database,
         "execute",
-        lambda *args, **kwargs: SimpleNamespace(all=lambda: []),
+        lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter(())),
     )
     monkeypatch.setattr(
         radarr_movies,

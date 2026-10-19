@@ -4,6 +4,9 @@ import os
 import logging
 import hashlib
 import hmac
+from collections.abc import Mapping
+from typing import Protocol, TypeVar
+
 from flask import Request
 
 from charset_normalizer import detect
@@ -13,6 +16,18 @@ from app.config import settings
 
 
 bool_map = {"True": True, "False": False, "true": True, "false": False}
+
+_FieldValue = TypeVar('_FieldValue', covariant=True)
+
+
+class _FieldLookup(Protocol[_FieldValue]):
+    def __getitem__(self, key: str, /) -> _FieldValue: ...
+
+    def __contains__(self, key: str, /) -> bool: ...
+
+
+def has_changed_fields(current: _FieldLookup[_FieldValue], incoming: Mapping[str, _FieldValue]) -> bool:
+    return any(key not in current or current[key] != value for key, value in incoming.items())
 
 
 def check_credentials(user: str, pw: str, request: Request, log_success: bool = True) -> bool:

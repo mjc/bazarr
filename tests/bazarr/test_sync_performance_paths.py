@@ -17,17 +17,11 @@ class _Result:
     def all(self):
         return self._all_value
 
+    def mappings(self):
+        return self
 
-class _Column:
-    def __init__(self, name):
-        self.name = name
-
-
-def _model(**values):
-    return SimpleNamespace(
-        __table__=SimpleNamespace(columns=[_Column(name) for name in values]),
-        **values,
-    )
+    def __iter__(self):
+        return iter(self._all_value)
 
 
 def test_update_one_series_fetches_and_inserts_for_standalone_call(monkeypatch):
@@ -203,14 +197,14 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
 def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatch):
     from sonarr.sync import series as series_sync
 
-    existing_series = _model(sonarrSeriesId=123, path="/series/path")
+    existing_series = {"sonarrSeriesId": 123, "path": "/series/path"}
     execute_calls = []
     episode_sync_calls = []
 
     class _Database:
         def execute(self, statement):
             execute_calls.append(statement)
-            return _Result(first_value=(existing_series,))
+            return _Result(first_value=existing_series)
 
     monkeypatch.setattr(series_sync, "database", _Database())
     monkeypatch.setattr(
@@ -283,8 +277,8 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     from radarr.sync import movies as movies_sync
 
     movie_rows = [
-        (_model(radarrId=1, title="Movie 1", path="/movies/one.mkv"),),
-        (_model(radarrId=2, title="Old Movie 2", path="/movies/two.mkv"),),
+        {"radarrId": 1, "title": "Movie 1", "path": "/movies/one.mkv"},
+        {"radarrId": 2, "title": "Old Movie 2", "path": "/movies/two.mkv"},
     ]
     updated_movies = []
 
