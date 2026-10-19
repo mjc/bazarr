@@ -4,9 +4,10 @@
 import logging
 import operator
 
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from datetime import datetime, timedelta
 from functools import reduce
+from itertools import islice
 from sqlalchemy import Select, and_, or_
 
 from app.config import settings
@@ -41,6 +42,14 @@ def upgrade_subtitles(wait_for_completion=False):
     logging.info('BAZARR Finished searching for Subtitles to upgrade. Check History for more information.')
 
 
+def _upgrade_id_batches(history_ids: Collection[int]) -> Iterator[list[int]]:
+    # A deterministic order across batches keeps processing independent of the
+    # timestamp order in the candidate mapping and bounds SQLite parameters.
+    ordered_ids = iter(sorted(history_ids))
+    while batch := list(islice(ordered_ids, 500)):
+        yield batch
+
+
 def upgrade_episodes_subtitles(job_id: int | None = None, wait_for_completion: bool = False) -> None:
     if not job_id:
         jobs_queue.add_job_from_function("Trying to upgrade episodes subtitles", is_progress=True,
@@ -68,7 +77,8 @@ def upgrade_episodes_subtitles(job_id: int | None = None, wait_for_completion: b
         'subtitles_path': x.subtitles_path,
         'profileId': x.profileId,
         'original_id': episodes_to_upgrade[x.id],
-    } for x in database.execute(
+    } for history_ids in _upgrade_id_batches(episodes_to_upgrade)
+    for x in database.execute(
         select(TableHistory.id,
                TableShows.title.label('seriesTitle'),
                TableEpisodes.season,
@@ -83,19 +93,19 @@ def upgrade_episodes_subtitles(job_id: int | None = None, wait_for_completion: b
                TableHistory.sonarrEpisodeId,
                TableHistory.sonarrSeriesId,
                TableHistory.subtitles_path,
-               TableEpisodes.path,
-               TableShows.profileId,
-               TableEpisodesSubtitles.path.label('external_subtitles'))
+               TableShows.profileId)
         .select_from(TableHistory)
         .join(TableShows, onclause=TableHistory.sonarrSeriesId == TableShows.sonarrSeriesId)
         .join(TableEpisodes, onclause=TableHistory.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId)
-        .join(TableEpisodesSubtitles, onclause=TableHistory.sonarrEpisodeId == TableEpisodesSubtitles.sonarrEpisodeId, isouter=True)
-        .where(TableEpisodesSubtitles.path.is_not(None)))
-    .all() if x.id in episodes_to_upgrade
-    and x.video_path == x.path
-    and x.subtitles_path == x.external_subtitles
-    and (profile := profiles.get(x.profileId)) is not None
+        .where(TableHistory.id.in_(history_ids),
+               TableHistory.video_path == TableEpisodes.path,
+               select(TableEpisodesSubtitles.id).where(
+                   TableEpisodesSubtitles.sonarrEpisodeId == TableHistory.sonarrEpisodeId,
+                   TableEpisodesSubtitles.path == TableHistory.subtitles_path).exists())
+        .order_by(TableHistory.id))
+    if (profile := profiles.get(x.profileId)) is not None
     and x.language in profile.upgrade_languages]
+    del episodes_to_upgrade, profiles
 
     count_episode_to_upgrade = len(episodes_data)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_episode_to_upgrade)
@@ -183,7 +193,8 @@ def upgrade_movies_subtitles(job_id: int | None = None, wait_for_completion: boo
         'profileId': x.profileId,
         'subtitles_path': x.subtitles_path,
         'original_id': movies_to_upgrade[x.id],
-    } for x in database.execute(
+    } for history_ids in _upgrade_id_batches(movies_to_upgrade)
+    for x in database.execute(
         select(TableHistoryMovie.id,
                TableMovies.title,
                TableHistoryMovie.language,
@@ -194,18 +205,18 @@ def upgrade_movies_subtitles(job_id: int | None = None, wait_for_completion: boo
                TableHistoryMovie.score_out_of,
                TableHistoryMovie.radarrId,
                TableHistoryMovie.subtitles_path,
-               TableMovies.path,
-               TableMovies.profileId,
-               TableMoviesSubtitles.path.label('external_subtitles'))
+               TableMovies.profileId)
         .select_from(TableHistoryMovie)
         .join(TableMovies, onclause=TableHistoryMovie.radarrId == TableMovies.radarrId)
-        .join(TableMoviesSubtitles, onclause=TableHistoryMovie.radarrId == TableMoviesSubtitles.radarrId, isouter=True)
-        .where(TableMoviesSubtitles.path.is_not(None)))
-    .all() if x.id in movies_to_upgrade
-    and x.video_path == x.path
-    and x.subtitles_path == x.external_subtitles
-    and (profile := profiles.get(x.profileId)) is not None
+        .where(TableHistoryMovie.id.in_(history_ids),
+               TableHistoryMovie.video_path == TableMovies.path,
+               select(TableMoviesSubtitles.id).where(
+                   TableMoviesSubtitles.radarrId == TableHistoryMovie.radarrId,
+                   TableMoviesSubtitles.path == TableHistoryMovie.subtitles_path).exists())
+        .order_by(TableHistoryMovie.id))
+    if (profile := profiles.get(x.profileId)) is not None
     and x.language in profile.upgrade_languages]
+    del movies_to_upgrade, profiles
 
     count_movie_to_upgrade = len(movies_data)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_movie_to_upgrade)
