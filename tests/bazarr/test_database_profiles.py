@@ -5,30 +5,11 @@ import pytest
 from app import database
 
 
-@pytest.mark.parametrize("profile_id", [None, "null", "not-an-id", []])
-def test_profile_cutoff_rejects_invalid_id_before_loading_profiles(monkeypatch, profile_id):
+def test_missing_profile_id_does_not_load_profiles(monkeypatch):
     def unexpected_load():
-        pytest.fail("invalid IDs should not load profiles")
+        pytest.fail("a missing ID should not load profiles")
     monkeypatch.setattr(database, "list_profiles", unexpected_load)
-    assert database.get_profile_cutoff(profile_id) is None
-
-
-@pytest.mark.parametrize("cutoff, expected", [(1, [1]), (65535, [1, 2]), (3, []), (None, [])])
-def test_profile_cutoff_uses_named_fields(monkeypatch, cutoff, expected):
-    items = [{"id": 1, "language": "en"}, {"id": 2, "language": "fr"}]
-    # Reordered keys and additional metadata must not alter the profile contract.
-    monkeypatch.setattr(database, "list_profiles", lambda: [
-        {"items": items, "extra": "metadata", "cutoff": cutoff, "profileId": 11},
-    ])
-    result = database.get_profile_cutoff("11")
-    assert [item["id"] for item in result or []] == expected
-
-
-def test_profile_cutoff_ignores_invalid_items(monkeypatch):
-    monkeypatch.setattr(database, "list_profiles", lambda: [
-        {"profileId": 11, "cutoff": 65535, "items": [None, {"id": 1}]},
-    ])
-    assert database.get_profile_cutoff(11) == [{"id": 1}]
+    assert database.get_profile(None) is None
 
 
 def _item(item_id, language):
@@ -42,14 +23,6 @@ ENHANCED_GROUPS = [
 ]
 
 
-def _enhanced_profile(profile_id, cutoff):
-    return {
-        "profileId": profile_id, "cutoff": cutoff, "profileType": "enhanced",
-        "items": [item for group in ENHANCED_GROUPS for item in group["items"]],
-        "groups": ENHANCED_GROUPS,
-    }
-
-
 def test_parse_profile_items_basic_returns_flat_list():
     raw = json.dumps([_item(1, "en")])
     assert database.parse_profile_items("basic", raw) == ([_item(1, "en")], None)
@@ -60,14 +33,6 @@ def test_parse_profile_items_enhanced_flattens_groups():
     items, groups = database.parse_profile_items("enhanced", raw)
     assert [item["id"] for item in items] == [1, 2, 3]
     assert groups == ENHANCED_GROUPS
-
-
-@pytest.mark.parametrize("cutoff, expected", [(1, [1, 2]), (2, [3]), (65535, [1, 2, 3]), (9, None), (None, None)])
-def test_profile_cutoff_for_enhanced_profile_uses_group_id(monkeypatch, cutoff, expected):
-    monkeypatch.setattr(database, "list_profiles", lambda: [_enhanced_profile(5, cutoff)])
-    result = database.get_profile_cutoff(5)
-    ids = None if result is None else [item["id"] for item in result]
-    assert ids == expected
 
 
 @pytest.fixture
@@ -122,7 +87,7 @@ def test_raw_json_upgrade_helpers_skip_enhanced_profiles(profiles_session):
     assert json.loads(stored[2]) == {"groups": ENHANCED_GROUPS}
 
 
-@pytest.mark.parametrize('raw_items', ['null', '{}', '[null]', '[{"id": 1, "language": null}]', 'not json'])
+@pytest.mark.parametrize('raw_items', ['null', '{}', '[null]', '[null, {"id": 1, "language": "en"}]', '[{"id": 1, "language": null}]', 'not json'])
 def test_malformed_profile_items_return_none(raw_items):
     assert database.parse_profile_items('basic', raw_items) is None
 

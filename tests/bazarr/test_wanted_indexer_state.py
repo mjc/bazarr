@@ -27,7 +27,6 @@ def _bind_indexer_module(bind_wanted_database, module_name, kind, monkeypatch):
     bind_wanted_database(module, kind)
     monkeypatch.setattr(module, "event_stream", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "get_profile", lambda *args, **kwargs: _profile_with_english())
-    monkeypatch.setattr(module, "get_profile_cutoff", lambda *args, **kwargs: None)
     monkeypatch.setattr(module.settings.general, "use_embedded_subs", False)
     return module
 
@@ -103,8 +102,7 @@ def test_missing_profile_flags_default_when_recalculating_wanted_rows(
 ):
     module_name = "subtitles.indexer.movies" if kind == "movies" else "subtitles.indexer.series"
     module = _bind_indexer_module(bind_wanted_database, module_name, kind, monkeypatch)
-    monkeypatch.setattr(module, "get_profile", lambda **kwargs: {"items": [{"language": "en"}]})
-    monkeypatch.setattr(module, "get_profile_cutoff", lambda **kwargs: [{"language": "en"}])
+    monkeypatch.setattr(module, "get_profile", lambda **kwargs: {"cutoff": 65535, "items": [{"id": 1, "language": "en"}]})
     monkeypatch.setattr(
         module,
         "get_subtitles",

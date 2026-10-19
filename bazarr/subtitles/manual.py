@@ -377,9 +377,7 @@ def _get_language_obj(profile_id):
     if not isinstance(profile, dict):
         return language_set, False, hi_excluded_keys
 
-    language_items = profile.get('items')
-    if not isinstance(language_items, list):
-        language_items = []
+    language_items = profile['items']
     original_format = profile.get('originalFormat', False)
 
     for language in language_items:

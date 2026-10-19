@@ -65,7 +65,6 @@ def configure_indexer(monkeypatch, media_type):
     monkeypatch.setattr(module, 'get_profile', lambda **kwargs: {
         'items': [{'language': 'en', 'forced': 'False', 'hi': 'False'}],
     })
-    monkeypatch.setattr(module, 'get_profile_cutoff', lambda **kwargs: None)
     monkeypatch.setattr(module, 'get_subtitles', lambda **kwargs: [])
     monkeypatch.setattr(module.settings.general, 'use_embedded_subs', False)
     events = []

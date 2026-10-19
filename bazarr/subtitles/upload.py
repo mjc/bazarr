@@ -39,10 +39,7 @@ from jellyfin.operations import jellyfin_refresh_item
 
 def _get_profile_original_format(profile_id):
     profile = get_profile(profile_id)
-    if not isinstance(profile, dict):
-        return False
-
-    return bool(profile.get("originalFormat", 0))
+    return bool(profile and profile.get("originalFormat", 0))
 
 
 def _get_audio_language_payload(audio_languages):

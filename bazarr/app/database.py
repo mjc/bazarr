@@ -558,27 +558,6 @@ def get_profile(profile_id: int | None) -> Profile | None:
     return next((profile for profile in list_profiles() if profile['profileId'] == profile_id), None)
 
 
-def get_profile_cutoff(profile_id):
-    try:
-        profile_id = int(profile_id)
-    except (TypeError, ValueError):
-        return None
-
-    profile = get_profile(profile_id)
-    if profile is None:
-        return None
-    cutoff = profile['cutoff']
-    if not cutoff:
-        return None
-    items = [item for item in profile['items'] if isinstance(item, dict)]
-    if cutoff == 65535:
-        return items or None
-    if profile.get('groups') is not None:
-        group = next((group for group in profile['groups'] if group['id'] == cutoff), None)
-        return group['items'] or None if group is not None else None
-    return next(([item] for item in items if item['id'] == cutoff), None)
-
-
 def get_audio_profile_languages(audio_languages_list_str):
     from languages.get_languages import alpha2_from_language, alpha3_from_language, language_from_alpha2
     audio_languages = []

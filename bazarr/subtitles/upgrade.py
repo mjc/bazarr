@@ -491,13 +491,7 @@ def _language_still_desired(language, profile_id):
         return False
 
     profile = get_profile(profile_id)
-    if not isinstance(profile, dict):
-        return False
-
-    if language in _language_from_items(profile.get('items', [])):
-        return True
-    else:
-        return False
+    return profile is not None and language in _language_from_items(profile['items'])
 
 
 def _language_from_items(items):

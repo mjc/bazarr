@@ -114,7 +114,6 @@ def test_indexer_updates_normalized_missing_languages_before_sync_checks(
     monkeypatch.setattr(indexer, 'get_profile', lambda **kwargs: {'items': [{
         'language': 'en', 'hi': 'False', 'forced': 'False', 'audio_exclude': 'False', 'audio_only_include': 'False',
     }]})
-    monkeypatch.setattr(indexer, 'get_profile_cutoff', lambda **kwargs: None)
     monkeypatch.setattr(indexer, 'event_stream', lambda **kwargs: None)
     if kind == 'movies':
         indexer.list_missing_subtitles_movies(no=row.radarrId)
