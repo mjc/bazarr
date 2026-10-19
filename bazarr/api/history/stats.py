@@ -29,8 +29,8 @@ class HistoryStatsResponse(TypedDict):
 
 def _history_counts(timestamps: Iterable[datetime.datetime]) -> list[HistoryCount]:
     return [
-        {'date': date, 'count': sum(1 for _ in group)}
-        for date, group in itertools.groupby(timestamps, key=lambda timestamp: timestamp.strftime('%Y-%m-%d'))
+        {'date': date.strftime('%Y-%m-%d'), 'count': sum(1 for _ in group)}
+        for date, group in itertools.groupby(timestamps, key=lambda timestamp: timestamp.date())
     ]
 
 
