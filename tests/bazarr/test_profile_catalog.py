@@ -90,3 +90,35 @@ def test_catalog_invalidation_refreshes_profiles(memory_session, monkeypatch):
     database.invalidate_profiles()
     assert database.load_profile_catalog().get(7).desired_languages == {'en'}
     database.invalidate_profiles()
+
+
+@pytest.mark.parametrize('enhanced', [False, True])
+@pytest.mark.parametrize('original', [None, 0, 1])
+def test_valid_admin_profiles_use_normalized_flags_and_cached_records(mocker, enhanced, original):
+    items = [{'id': 1, 'language': 'en', 'hi': True, 'forced': False, 'audio_exclude': True},
+             {'id': 2, 'language': 'fr', 'hi': 'Excluded'}]
+    payload = {'groups': [{'id': 9, 'operator': 'AND', 'items': items}]} if enhanced else items
+    stored = replace(source(json.dumps(payload), 'enhanced' if enhanced else 'basic'), original_format=original)
+    catalog = ProfileCatalog((stored,))
+    decode = mocker.patch('app.language_profiles.json.loads', side_effect=AssertionError('profile parsed again'))
+    listed = catalog.administrative_profiles()[0]
+    decode.assert_not_called()
+    assert listed['originalFormat'] is original
+    assert listed['items'] == [
+        {'id': 1, 'language': 'en', 'forced': 'False', 'hi': 'True',
+         'audio_exclude': 'True', 'audio_only_include': 'False'},
+        {'id': 2, 'language': 'fr', 'forced': 'False', 'hi': 'Excluded',
+         'audio_exclude': 'False', 'audio_only_include': 'False'},
+    ]
+    if enhanced:
+        assert listed['groups'][0]['items'][0] is listed['items'][0]
+        assert listed['groups'][0]['items'][1] is listed['items'][1]
+
+
+def test_admin_wire_records_are_not_shared_between_responses():
+    catalog = ProfileCatalog((source('[{"id":1,"language":"en"}]'),))
+    first = catalog.administrative_profiles()[0]
+    first['items'][0]['language'] = 'changed'
+    second = catalog.administrative_profiles()[0]
+    assert second['items'][0]['language'] == 'en'
+    assert catalog.get(1).items[0].language == 'en'

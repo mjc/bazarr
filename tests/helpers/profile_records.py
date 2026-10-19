@@ -21,9 +21,11 @@ def profile_record(payload=None, *, profile_id=44) -> Profile:
 
 
 def profile_catalog(*profiles: Profile) -> ProfileCatalog:
-    sources = tuple(ProfileSource(profile.profile_id, profile.name, profile.cutoff,
-                    json.dumps({'groups': [group.wire() for group in profile.groups]}) if profile.groups is not None
-                    else json.dumps([item.wire() for item in profile.items]),
-                    str(list(profile.must_contain)), str(list(profile.must_not_contain)), int(profile.original_format),
-                    profile.tag, profile.profile_type) for profile in profiles)
-    return ProfileCatalog(sources)
+    sources = []
+    for profile in profiles:
+        items, groups = profile.wire_items()
+        sources.append(ProfileSource(profile.profile_id, profile.name, profile.cutoff,
+                       json.dumps({'groups': groups}) if groups is not None else json.dumps(items),
+                       str(list(profile.must_contain)), str(list(profile.must_not_contain)),
+                       int(profile.original_format), profile.tag, profile.profile_type))
+    return ProfileCatalog(tuple(sources))

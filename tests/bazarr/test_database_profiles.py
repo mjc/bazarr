@@ -51,7 +51,9 @@ def test_parse_profile_items_enhanced_flattens_groups():
     raw = json.dumps({"groups": ENHANCED_GROUPS})
     items, groups = parse_profile_items("enhanced", raw)
     assert [item.item_id for item in items] == [1, 2, 3]
-    assert [group.wire() for group in groups] == ENHANCED_GROUPS
+    assert [(group.group_id, group.operator, [item.wire() for item in group.items]) for group in groups] == [
+        (group['id'], group['operator'], group['items']) for group in ENHANCED_GROUPS
+    ]
 
 
 @pytest.mark.parametrize('cutoff,expected', [(1, [1, 2]), (2, [3]), (65535, [1, 2, 3]), (9, []), (None, [])])

@@ -45,8 +45,6 @@ class ProfileGroup:
     operator: Literal['AND', 'OR']
     items: tuple[ProfileItem, ...]
 
-    def wire(self) -> JsonObject:
-        return {'id': self.group_id, 'operator': self.operator, 'items': [item.wire() for item in self.items]}
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +92,15 @@ class Profile:
         object.__setattr__(self, 'hi_excluded_keys', frozenset((item.language, item.forced) for item in self.items if item.hi == 'excluded'))
         object.__setattr__(self, 'non_hi_languages', frozenset(item.language for item in self.items if not item.forced and item.hi == 'excluded'))
         object.__setattr__(self, 'cutoff_items', cutoff_items)
+
+    def wire_items(self) -> tuple[list[JsonValue], list[JsonValue] | None]:
+        payloads = {item: item.wire() for item in self.items}
+        items: list[JsonValue] = [payloads[item] for item in self.items]
+        groups: list[JsonValue] | None = None
+        if self.groups is not None:
+            groups = [{'id': group.group_id, 'operator': group.operator,
+                       'items': [payloads[item] for item in group.items]} for group in self.groups]
+        return items, groups
 
 
 def _flag(value: JsonValue) -> bool:
@@ -168,8 +175,8 @@ class ProfileSource:
                        tuple(parse_string_list(self.must_not_contain)) if self.must_not_contain else (),
                        bool(self.original_format), self.tag)
 
-    def administrative(self, error: str | None = None) -> JsonObject:
-        if error is not None:
+    def administrative(self, profile: Profile | None, error: str | None = None) -> JsonObject:
+        if profile is None:
             # The editor needs arrays even when the stored document is corrupt.
             # Untouched submissions carry these source bytes; applying an edit
             # builds a new profile and drops the preservation metadata.
@@ -177,31 +184,22 @@ class ProfileSource:
                 'profileId': self.profile_id, 'name': self.name, 'cutoff': self.cutoff,
                 'profileType': self.profile_type, 'items': [], 'mustContain': [], 'mustNotContain': [],
                 'originalFormat': self.original_format, 'tag': self.tag,
-                'profileError': str(error),
+                'profileError': error or 'Invalid language profile',
                 '_profileSource': {'items': self.items, 'mustContain': self.must_contain,
                                    'mustNotContain': self.must_not_contain},
             }
             if self.profile_type == 'enhanced':
                 result['groups'] = []
             return result
-        payload: JsonValue = json.loads(self.items)
-        groups = payload.get('groups') if isinstance(payload, dict) else None
+        items, groups = profile.wire_items()
         result = {
             'profileId': self.profile_id, 'name': self.name, 'cutoff': self.cutoff,
-            'profileType': self.profile_type, 'items': payload,
-            'mustContain': list(parse_string_list(self.must_contain)) if self.must_contain else [],
-            'mustNotContain': list(parse_string_list(self.must_not_contain)) if self.must_not_contain else [],
+            'profileType': self.profile_type, 'items': items,
+            'mustContain': list(profile.must_contain), 'mustNotContain': list(profile.must_not_contain),
             'originalFormat': self.original_format, 'tag': self.tag,
         }
-        if isinstance(groups, list):
-            flattened: list[JsonValue] = []
-            for group in groups:
-                if isinstance(group, dict):
-                    group_items = group.get('items')
-                    if isinstance(group_items, list):
-                        flattened.extend(group_items)
+        if groups is not None:
             result['groups'] = groups
-            result['items'] = flattened
         return result
 
 
@@ -226,7 +224,7 @@ class ProfileCatalog:
         return self.profiles.get(profile_id) if profile_id is not None else None
 
     def administrative_profiles(self) -> list[JsonObject]:
-        return [source.administrative(self.errors.get(source.profile_id)) for source in self.sources]
+        return [source.administrative(self.get(source.profile_id), self.errors.get(source.profile_id)) for source in self.sources]
 
 
 def preserved_profile_sources(payload: JsonValue, catalog: ProfileCatalog) -> dict[int, ProfileSource]:
@@ -244,7 +242,7 @@ def preserved_profile_sources(payload: JsonValue, catalog: ProfileCatalog) -> di
         if not isinstance(profile_id, int) or isinstance(profile_id, bool):
             raise ValueError('Invalid profile id')
         source = sources.get(profile_id)
-        if source is None or source.administrative(catalog.errors.get(source.profile_id)).get('_profileSource') != marker:
+        if source is None or source.administrative(catalog.get(source.profile_id), catalog.errors.get(source.profile_id)).get('_profileSource') != marker:
             raise ValueError('The language profile changed. Reload settings before saving.')
         groups = profile.get('groups')
         items = profile.get('items')

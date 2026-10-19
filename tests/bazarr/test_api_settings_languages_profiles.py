@@ -189,3 +189,21 @@ def test_invalid_basic_profile_is_rejected_before_any_write(saved, api_client, a
     assert response.status_code == 400
     assert calls['save_settings'] == 0
     assert session.execute(select(TableLanguagesProfiles)).all() == []
+
+
+@pytest.mark.parametrize('enhanced', [False, True])
+def test_saved_boolean_flags_have_the_frontend_string_wire_contract(saved, api_client, api_key, enhanced):
+    items = [{'id': 1, 'language': 'en', 'hi': True, 'forced': False, 'audio_only_include': True}]
+    payload = {'profileId': 9, 'name': 'Flags', 'cutoff': None, 'profileType': 'enhanced' if enhanced else 'basic',
+               'items': {'groups': [{'id': 1, 'operator': 'AND', 'items': items}]} if enhanced else items,
+               'mustContain': [], 'mustNotContain': [], 'originalFormat': None}
+    assert _post_profiles(api_client, api_key, [payload]).status_code == 204
+    listed = api_client.get('/api/system/languages/profiles', headers={'X-API-KEY': api_key}).get_json()[0]
+    assert listed['items'] == [{'id': 1, 'language': 'en', 'hi': 'True', 'forced': 'False',
+                               'audio_only_include': 'True', 'audio_exclude': 'False'}]
+    assert listed['originalFormat'] is None
+    if enhanced:
+        assert listed['groups'][0]['items'] == listed['items']
+        listed['items'] = {'groups': listed.pop('groups')}
+    assert _post_profiles(api_client, api_key, [listed]).status_code == 204
+    assert app_database.get_profile(9).items[0].hi == 'required'
