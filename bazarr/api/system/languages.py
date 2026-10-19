@@ -1,14 +1,20 @@
 # coding=utf-8
 
 from flask_restx import Resource, Namespace, reqparse
+from itertools import chain
 from operator import itemgetter
 
 from app.database import TableHistory, TableHistoryMovie, TableSettingsLanguages, database, select
 from languages.get_languages import alpha2_from_alpha3, language_from_alpha2, alpha3_from_alpha2
+from languages.formatting import LanguageInfo
 
 from ..utils import authenticate, False_Keys
 
 api_ns_system_languages = Namespace('System Languages', description='Get languages list')
+
+
+class MenuLanguage(LanguageInfo):
+    enabled: bool
 
 
 @api_ns_system_languages.route('system/languages')
@@ -20,22 +26,21 @@ class Languages(Resource):
     @api_ns_system_languages.expect(get_request_parser)
     @api_ns_system_languages.response(200, 'Success')
     @api_ns_system_languages.response(401, 'Not Authenticated')
-    def get(self):
+    def get(self) -> list[MenuLanguage]:
         """List languages for history filter or for language filter menu"""
         args = self.get_request_parser.parse_args()
         history = args.get('history')
         if history and history not in False_Keys:
-            languages = database.execute(
-                select(TableHistory.language)
-                .where(TableHistory.language.is_not(None)))\
-                .all()
-            languages += database.execute(
-                select(TableHistoryMovie.language)
-                .where(TableHistoryMovie.language.is_not(None)))\
-                .all()
-            languages_list = [lang.language.split(':')[0] for lang in languages]
-            languages_dicts = []
-            for language in languages_list:
+            languages = chain.from_iterable(
+                database.execute(statement).scalars() for statement in (
+                    select(TableHistory.language).where(TableHistory.language.is_not(None)),
+                    select(TableHistoryMovie.language).where(TableHistoryMovie.language.is_not(None)),
+                )
+            )
+            languages_dicts: list[MenuLanguage] = []
+            seen_codes: set[str | None] = set()
+            for token in languages:
+                language = token.split(':', 1)[0]
                 code2 = None
                 if len(language) == 2:
                     code2 = language
@@ -44,7 +49,7 @@ class Languages(Resource):
                 else:
                     continue
 
-                if not any(x['code2'] == code2 for x in languages_dicts):
+                if code2 not in seen_codes:
                     try:
                         languages_dicts.append({
                             'code2': code2,
@@ -53,6 +58,7 @@ class Languages(Resource):
                             # Compatibility: Use false temporarily
                             'enabled': False
                         })
+                        seen_codes.add(code2)
                     except Exception:
                         continue
         else:
