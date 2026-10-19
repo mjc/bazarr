@@ -1,6 +1,14 @@
 # coding=utf-8
 
-def RadarrFormatAudioCodec(audioFormat, audioCodecID, audioProfile, audioAdditionalFeatures):
+def RadarrFormatAudioCodec(audioFormat: str | None, audioCodecID: str | None, audioProfile: str | None,
+                           audioAdditionalFeatures: str | None) -> str | None:
+    if audioFormat is None:
+        return None
+    return _normalize_audio_codec(audioFormat, audioCodecID, audioProfile, audioAdditionalFeatures)
+
+
+def _normalize_audio_codec(audioFormat: str, audioCodecID: str | None, audioProfile: str | None,
+                           audioAdditionalFeatures: str | None) -> str:
     if type(audioFormat) is not str:
         return audioFormat
     else:
@@ -27,9 +35,17 @@ def RadarrFormatAudioCodec(audioFormat, audioCodecID, audioProfile, audioAdditio
                 return "TrueHD"
         else:
             return audioFormat
+    return audioFormat
 
 
-def RadarrFormatVideoCodec(videoFormat, videoCodecID, videoCodecLibrary):
+def RadarrFormatVideoCodec(videoFormat: str | None, videoCodecID: str | None,
+                           videoCodecLibrary: str | None) -> str | None:
+    if videoFormat is None:
+        return None
+    return _normalize_video_codec(videoFormat, videoCodecID, videoCodecLibrary)
+
+
+def _normalize_video_codec(videoFormat: str, videoCodecID: str | None, videoCodecLibrary: str | None) -> str:
     if type(videoFormat) is not str:
         return videoFormat
     else:
@@ -63,3 +79,4 @@ def RadarrFormatVideoCodec(videoFormat, videoCodecID, videoCodecLibrary):
             return "DivX"
         else:
             return videoFormat
+    return videoFormat
