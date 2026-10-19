@@ -87,25 +87,29 @@ class GetRadarrInfo:
 get_radarr_info = GetRadarrInfo()
 
 
-def url_radarr():
-    if settings.radarr.ssl:
+def url_radarr() -> str:
+    radarr = settings.radarr
+    if radarr.ssl:
         protocol_radarr = "https"
     else:
         protocol_radarr = "http"
 
-    if settings.radarr.base_url == '':
-        settings.radarr.base_url = "/"
-    if not settings.radarr.base_url.startswith("/"):
-        settings.radarr.base_url = f"/{settings.radarr.base_url}"
-    if settings.radarr.base_url.endswith("/"):
-        settings.radarr.base_url = settings.radarr.base_url[:-1]
+    configured_base_url = radarr.base_url
+    base_url = configured_base_url
+    if not base_url.startswith("/"):
+        base_url = f"/{base_url}"
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+    if base_url != configured_base_url:
+        radarr.base_url = base_url
 
-    if settings.radarr.port in empty_values:
+    configured_port = radarr.port
+    if configured_port in empty_values:
         port = ""
     else:
-        port = f":{settings.radarr.port}"
+        port = f":{configured_port}"
 
-    return f"{protocol_radarr}://{settings.radarr.ip}{port}{settings.radarr.base_url}"
+    return f"{protocol_radarr}://{radarr.ip}{port}{base_url}"
 
 
 def url_api_radarr():

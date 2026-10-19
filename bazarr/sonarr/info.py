@@ -87,25 +87,29 @@ class GetSonarrInfo:
 get_sonarr_info = GetSonarrInfo()
 
 
-def url_sonarr():
-    if settings.sonarr.ssl:
+def url_sonarr() -> str:
+    sonarr = settings.sonarr
+    if sonarr.ssl:
         protocol_sonarr = "https"
     else:
         protocol_sonarr = "http"
 
-    if settings.sonarr.base_url == '':
-        settings.sonarr.base_url = "/"
-    if not settings.sonarr.base_url.startswith("/"):
-        settings.sonarr.base_url = f"/{settings.sonarr.base_url}"
-    if settings.sonarr.base_url.endswith("/"):
-        settings.sonarr.base_url = settings.sonarr.base_url[:-1]
+    configured_base_url = sonarr.base_url
+    base_url = configured_base_url
+    if not base_url.startswith("/"):
+        base_url = f"/{base_url}"
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+    if base_url != configured_base_url:
+        sonarr.base_url = base_url
 
-    if settings.sonarr.port in empty_values:
+    configured_port = sonarr.port
+    if configured_port in empty_values:
         port = ""
     else:
-        port = f":{settings.sonarr.port}"
+        port = f":{configured_port}"
 
-    return f"{protocol_sonarr}://{settings.sonarr.ip}{port}{settings.sonarr.base_url}"
+    return f"{protocol_sonarr}://{sonarr.ip}{port}{base_url}"
 
 
 def url_api_sonarr():
