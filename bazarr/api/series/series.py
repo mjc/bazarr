@@ -12,11 +12,11 @@ from subtitles.indexer.series import list_missing_subtitles, series_scan_subtitl
 from subtitles.mass_download import series_download_subtitles
 from subtitles.wanted import wanted_search_missing_subtitles_series
 from app.event_handler import event_stream
+from api.response_data import load_formatter, load_series_audio_languages
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
-from api.utils import authenticate, None_Keys, postprocess, add_list_query_args, profile_filter_clause, \
-    monitored_filter_clause, tags_filter_clause, series_audio_language_filter_clause, apply_sort, ended_filter_clause, \
-    get_series_audio_languages
+from api.utils import authenticate, None_Keys, add_list_query_args, profile_filter_clause, \
+    monitored_filter_clause, tags_filter_clause, series_audio_language_filter_clause, apply_sort, ended_filter_clause
 
 api_ns_series = Namespace('Series', description='List series metadata, update series languages profile or run actions '
                                                 'for specific series.')
@@ -163,13 +163,13 @@ class Series(Resource):
             stmt = stmt.limit(length).offset(start)
 
         series = database.execute(stmt).all()
-        audio_languages = get_series_audio_languages([
-            row.sonarrSeriesId for row in series if row.audio_language == '[]'
-        ])
-        results = [postprocess({
+        formatter = load_formatter()
+        audio_by_series = load_series_audio_languages(
+            (x.sonarrSeriesId for x in series if x.audio_language == '[]'), formatter.audio_names)
+        results = [formatter.series({
             'tvdbId': x.tvdbId,
             'alternativeTitles': x.alternativeTitles,
-            'audio_language': audio_languages[x.sonarrSeriesId] if x.audio_language == '[]' else x.audio_language,
+            'audio_language': x.audio_language,
             'created_at_timestamp': x.created_at_timestamp,
             'fanart': x.fanart,
             'imdbId': x.imdbId,
@@ -187,7 +187,7 @@ class Series(Resource):
             'lastAired': x.lastAired,
             'episodeFileCount': x.episodeFileCount,
             'episodeMissingCount': x.episodeMissingCount,
-        }) for x in series]
+        }, episode_audio=audio_by_series.get(x.sonarrSeriesId)) for x in series]
 
         count_stmt = select(func.count()) \
             .select_from(TableShows) \

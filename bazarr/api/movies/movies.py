@@ -12,9 +12,10 @@ from app.event_handler import event_stream
 from subtitles.wanted import wanted_search_missing_subtitles_movies
 from subtitles.wanted_state import get_missing_languages_map
 from subtitles.mass_download import movies_download_subtitles
+from api.response_data import load_formatter
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
-from api.utils import authenticate, None_Keys, postprocess, add_list_query_args, profile_filter_clause, \
+from api.utils import authenticate, None_Keys, add_list_query_args, profile_filter_clause, \
     monitored_filter_clause, tags_filter_clause, audio_language_filter_clause, apply_sort
 
 api_ns_movies = Namespace('Movies', description='List movies metadata, update movie languages profile or run actions '
@@ -131,8 +132,9 @@ class Movies(Resource):
         movies = database.execute(stmt).all()
         missing_languages = get_missing_languages_map('movie', [x.radarrId for x in movies])
         subtitles_map = get_subtitles_map('movie', [x.radarrId for x in movies])
+        formatter = load_formatter(x.profileId for x in movies)
 
-        results = [postprocess({
+        results = [formatter.movie({
             'alternativeTitles': x.alternativeTitles,
             'audio_language': x.audio_language,
             'created_at_timestamp': x.created_at_timestamp,

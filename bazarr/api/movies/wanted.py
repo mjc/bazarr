@@ -5,11 +5,12 @@ import operator
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
-from app.database import get_exclusion_clause, TableMovies, TableMissingSubtitles, database, select, func, get_subtitles_map
+from app.database import get_exclusion_clause, TableMovies, TableMissingSubtitles, database, select, func
 from api.swaggerui import subtitles_language_model
 from subtitles.wanted_state import get_missing_languages_map
 
-from api.utils import authenticate, postprocess
+from api.utils import authenticate
+from api.response_data import load_formatter
 
 
 api_ns_movies_wanted = Namespace('Movies Wanted', description='List movies wanted subtitles')
@@ -71,15 +72,15 @@ class MoviesWanted(Resource):
 
         movies = database.execute(stmt).all()
         missing_languages = get_missing_languages_map('movie', [x.radarrId for x in movies])
-        subtitles_map = get_subtitles_map('movie', [x.radarrId for x in movies])
+        formatter = load_formatter()
 
-        results = [postprocess({
+        results = [formatter.wanted({
             'title': x.title,
             'missing_subtitles': missing_languages[x.radarrId],
             'radarrId': x.radarrId,
             'sceneName': x.sceneName,
             'tags': x.tags,
-        }, subtitles=subtitles_map.get(x.radarrId, [])) for x in movies]
+        }) for x in movies]
 
         count = database.execute(
             select(func.count())

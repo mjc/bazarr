@@ -1,12 +1,15 @@
 # coding=utf-8
 
 from datetime import datetime
-from typing import TypeAlias, TypedDict
-from typing_extensions import NotRequired
+from typing import Literal, TypeAlias, TypedDict
 
+from languages.formatting import LanguageInfo, SubtitleLanguage
+from utilities.subtitle_metadata import SubtitleFile
 
 JsonValue: TypeAlias = str | int | float | bool | None | list['JsonValue'] | dict[str, 'JsonValue']
 JsonObject: TypeAlias = dict[str, JsonValue]
+AudioValue: TypeAlias = list[LanguageInfo] | Literal[''] | None
+LanguageValue: TypeAlias = SubtitleLanguage | Literal[''] | None
 
 
 class MediaMetadata(TypedDict, total=False):
@@ -14,30 +17,22 @@ class MediaMetadata(TypedDict, total=False):
     blacklisted: bool
     created_at_timestamp: datetime | None
     description: str | None
-    dont_matches: str | list[str] | None
     ended: str | None
     episode: int
     episodeFileCount: int | None
     episodeMissingCount: int | None
     episodeTitle: str | None
     episode_number: str | None
-    external_subtitles: str | None
     fanart: str | None
-    ffprobe_cache: bytes | None
-    id: int
     imdbId: str | None
     lastAired: str | None
-    matches: str | list[str] | None
     overview: str | None
-    parsed_timestamp: str
     path: str | None
     poster: str | None
-    profileId: int | str | None
+    profileId: int | None
     provider: str | None
     radarrId: int | None
     sceneName: str | None
-    score: int | str | None
-    score_out_of: int | None
     season: int
     seriesTitle: str | None
     seriesType: str | None
@@ -45,42 +40,89 @@ class MediaMetadata(TypedDict, total=False):
     sonarrSeriesId: int | None
     subs_id: str | None
     subtitles_path: str | None
-    timestamp: datetime | str | None
     title: str | None
     tvdbId: int | None
-    video_path: str | None
     year: str | None
 
 
-class MediaRow(MediaMetadata, total=False):
+class SeriesRow(MediaMetadata):
     alternativeTitles: str | None
     audio_language: str | None
-    hearing_impaired: str | None
-    language: str | None
-    missing_subtitles: str | list[str] | None
     monitored: str | None
     tags: str | None
 
 
-class LanguageInfo(TypedDict):
-    name: str | None
-    code2: str | None
-    code3: str | None
+class EpisodeRow(MediaMetadata):
+    audio_language: str | None
+    missing_subtitles: list[str]
+    monitored: str | None
 
 
-class SubtitleLanguage(LanguageInfo):
-    forced: bool
-    hi: bool
+class MovieRow(SeriesRow):
+    missing_subtitles: list[str]
 
 
-class MediaResponse(MediaMetadata):
+class WantedRow(MediaMetadata):
+    missing_subtitles: list[str]
+    tags: str | None
+
+
+class BlacklistRow(MediaMetadata):
+    timestamp: datetime
+    language: str | None
+
+
+class HistoryRow(MediaMetadata):
+    id: int
+    timestamp: datetime | None
+    language: str | None
+    score: int | None
+    score_out_of: int | None
+    monitored: str | None
+    tags: str | None
+    video_path: str | None
+    external_subtitles: str | None
+    matched: str | None
+    not_matched: str | None
+
+
+class SeriesResponse(MediaMetadata):
     alternativeTitles: list[str | None]
-    audio_language: NotRequired[str | list[LanguageInfo] | None]
-    hearing_impaired: bool
-    language: NotRequired[str | SubtitleLanguage | None]
+    audio_language: AudioValue
+    monitored: bool
+    tags: list[str | None]
+
+
+class EpisodeResponse(MediaMetadata):
+    audio_language: AudioValue
     missing_subtitles: list[SubtitleLanguage]
     monitored: bool
-    original_id: NotRequired[int | None]
-    subtitles: list[JsonObject]
+    subtitles: list[SubtitleFile]
+
+
+class MovieResponse(SeriesResponse):
+    missing_subtitles: list[SubtitleLanguage]
+    subtitles: list[SubtitleFile]
+
+
+class WantedResponse(MediaMetadata):
+    missing_subtitles: list[SubtitleLanguage]
     tags: list[str | None]
-    upgradable: NotRequired[bool]
+
+
+class BlacklistResponse(MediaMetadata):
+    timestamp: str
+    parsed_timestamp: str
+    language: LanguageValue
+
+
+class HistoryResponse(MediaMetadata):
+    timestamp: str | None
+    parsed_timestamp: str | None
+    language: LanguageValue
+    score: str | None
+    monitored: bool
+    tags: list[str | None]
+    matches: list[str]
+    dont_matches: list[str]
+    upgradable: bool

@@ -6,7 +6,8 @@ from app.database import TableEpisodes, TableShows, database, select, get_subtit
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 from subtitles.wanted_state import get_missing_languages_map
 
-from ..utils import authenticate, postprocess
+from ..utils import authenticate
+from api.response_data import load_formatter
 
 api_ns_episodes = Namespace('Episodes', description='List episodes metadata for specific series or episodes.')
 
@@ -77,8 +78,9 @@ class Episodes(Resource):
 
         missing_languages = get_missing_languages_map('series', [x.sonarrEpisodeId for x in stmt_query])
         subtitles_map = get_subtitles_map('series', [x.sonarrEpisodeId for x in stmt_query])
+        formatter = load_formatter(x.profileId for x in stmt_query)
 
-        return marshal([postprocess({
+        return marshal([formatter.episode({
                 'audio_language': x.audio_language,
                 'episode': x.episode,
                 'missing_subtitles': missing_languages[x.sonarrEpisodeId],

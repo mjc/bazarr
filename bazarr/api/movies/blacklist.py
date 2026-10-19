@@ -1,7 +1,5 @@
 # coding=utf-8
 
-import pretty
-
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 
 from app.database import TableMovies, TableBlacklistMovie, database, select, TableMoviesSubtitles
@@ -12,7 +10,8 @@ from subtitles.mass_download import movies_download_subtitles
 from app.event_handler import event_stream
 from api.swaggerui import subtitles_language_model
 
-from ..utils import authenticate, postprocess
+from ..utils import authenticate
+from api.response_data import load_formatter
 
 api_ns_movies_blacklist = Namespace('Movies Blacklist', description='List, add or remove subtitles to or from '
                                                                     'movies blacklist')
@@ -57,14 +56,14 @@ class MoviesBlacklist(Resource):
         if length > 0:
             stmt = stmt.limit(length).offset(start)
 
-        return marshal([postprocess({
+        formatter = load_formatter()
+        return marshal([formatter.blacklist({
             'title': x.title,
             'radarrId': x.radarrId,
             'provider': x.provider,
             'subs_id': x.subs_id,
             'language': x.language,
-            'timestamp': pretty.date(x.timestamp),
-            'parsed_timestamp': x.timestamp.strftime('%x %X'),
+            'timestamp': x.timestamp,
         }) for x in database.execute(stmt).all()], self.get_response_model, envelope='data')
 
     post_request_parser = reqparse.RequestParser()

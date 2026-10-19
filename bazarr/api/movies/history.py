@@ -1,19 +1,18 @@
 # coding=utf-8
 
 import operator
-import pretty
 
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
 from app.database import (TableMovies, TableHistoryMovie, TableBlacklistMovie, database, select, func,
                           TableMoviesSubtitles)
-from subtitles.upgrade import get_upgradable_movies_subtitles, _language_still_desired
-from utilities.text_list import parse_string_list
-from api.response_types import MediaResponse, MediaRow
+from subtitles.upgrade import get_upgradable_movies_subtitles
+from api.response_types import HistoryResponse, HistoryRow
+from api.response_data import load_formatter, load_history_languages
 from api.swaggerui import subtitles_language_model
 
-from api.utils import authenticate, postprocess
+from api.utils import authenticate
 
 api_ns_movies_history = Namespace('Movies History', description='List movies history events')
 
@@ -112,9 +111,13 @@ class MoviesHistory(Resource):
         upgradable_movies_not_perfect = get_upgradable_movies_subtitles(history_id_list=[x.id for x in
                                                                                          movie_rows])
 
-        movie_history: list[MediaResponse] = []
+        formatter = load_formatter()
+        desired_languages = load_history_languages(
+            ((x.id, x.language, x.profileId) for x in movie_rows), upgradable_movies_not_perfect)
+
+        movie_history: list[HistoryResponse] = []
         for x in movie_rows:
-            record: MediaRow = {
+            record: HistoryRow = {
                 'id': x.id,
                 'action': x.action,
                 'title': x.title,
@@ -132,41 +135,14 @@ class MoviesHistory(Resource):
                 'provider': x.provider,
                 'subtitles_path': x.subtitles_path,
                 'video_path': x.video_path,
-                'matches': x.matched,
-                'dont_matches': x.not_matched,
+                'matched': x.matched,
+                'not_matched': x.not_matched,
                 'external_subtitles': x.external_subtitles,
                 'blacklisted': bool(x.blacklisted),
             }
-            # is this language still desired or should we simply skip this subtitles from upgrade logic?
-            still_desired = _language_still_desired(x.language, x.profileId)
-
-            item = postprocess(record, subtitles=[])
-
-            # Mark upgradable and get original_id
-            item['original_id'] = upgradable_movies_not_perfect.get(x.id)
-            item['upgradable'] = x.id in upgradable_movies_not_perfect
-
-            # Mark not upgradable if video/subtitles file doesn't exist anymore or if language isn't desired anymore
-            if item['upgradable']:
-                if (item.get('subtitles_path') != item.get('external_subtitles') or item.get('video_path') != item.get('path') or
-                        not still_desired):
-                    item['upgradable'] = False
-
-            del item['path']
-            del item['video_path']
-            del item['external_subtitles']
-            del item['profileId']
-
-            if x.score:
-                item['score'] = f"{round((int(x.score) * 100 / x.score_out_of), 2)}%"
-
-            # Make timestamp pretty
-            if x.timestamp:
-                item["parsed_timestamp"] = x.timestamp.strftime('%x %X')
-                item['timestamp'] = pretty.date(x.timestamp)
-
-            item['matches'] = parse_string_list(x.matched or '[]')
-            item['dont_matches'] = parse_string_list(x.not_matched or '[]')
+            item = formatter.movie_history(
+                record, can_upgrade=x.id in upgradable_movies_not_perfect
+                and (x.language, x.profileId) in desired_languages)
 
             movie_history.append(item)
 

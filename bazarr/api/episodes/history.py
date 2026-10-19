@@ -3,16 +3,15 @@
 import operator
 from functools import reduce
 
-from api.response_types import MediaResponse, MediaRow
+from api.response_types import HistoryResponse, HistoryRow
+from api.response_data import load_formatter, load_history_languages
 from api.swaggerui import subtitles_language_model
 from app.database import (TableEpisodes, TableShows, TableHistory, TableBlacklist, database, select,
                           TableEpisodesSubtitles, func)
-from subtitles.upgrade import get_upgradable_episode_subtitles,  _language_still_desired
-from utilities.text_list import parse_string_list
+from subtitles.upgrade import get_upgradable_episode_subtitles
 
-import pretty
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
-from ..utils import authenticate, postprocess
+from ..utils import authenticate
 
 api_ns_episodes_history = Namespace('Episodes History', description='List episodes history events')
 
@@ -118,9 +117,13 @@ class EpisodesHistory(Resource):
         upgradable_episodes_not_perfect = get_upgradable_episode_subtitles(history_id_list=[x.id for x in
                                                                                             episode_rows])
 
-        episode_history: list[MediaResponse] = []
+        formatter = load_formatter()
+        desired_languages = load_history_languages(
+            ((x.id, x.language, x.profileId) for x in episode_rows), upgradable_episodes_not_perfect)
+
+        episode_history: list[HistoryResponse] = []
         for x in episode_rows:
-            record: MediaRow = {
+            record: HistoryRow = {
                 'id': x.id,
                 'seriesTitle': x.seriesTitle,
                 'monitored': x.monitored,
@@ -141,41 +144,14 @@ class EpisodesHistory(Resource):
                 'subtitles_path': x.subtitles_path,
                 'sonarrEpisodeId': x.sonarrEpisodeId,
                 'provider': x.provider,
-                'matches': x.matched,
-                'dont_matches': x.not_matched,
+                'matched': x.matched,
+                'not_matched': x.not_matched,
                 'external_subtitles': x.external_subtitles,
                 'blacklisted': bool(x.blacklisted),
             }
-            # is this language still desired or should we simply skip this subtitles from upgrade logic?
-            still_desired = _language_still_desired(x.language, x.profileId)
-
-            item = postprocess(record, subtitles=[])
-
-            # Mark upgradable and get original_id
-            item['original_id'] = upgradable_episodes_not_perfect.get(x.id)
-            item['upgradable'] = x.id in upgradable_episodes_not_perfect
-
-            # Mark not upgradable if video/subtitles file doesn't exist anymore or if language isn't desired anymore
-            if item['upgradable']:
-                if (item.get('subtitles_path') != item.get('external_subtitles') or item.get('video_path') != item.get('path') or
-                        not still_desired):
-                    item['upgradable'] = False
-
-            del item['path']
-            del item['video_path']
-            del item['external_subtitles']
-            del item['profileId']
-
-            if x.score:
-                item['score'] = f"{round((int(x.score) * 100 / x.score_out_of), 2)}%"
-
-            # Make timestamp pretty
-            if x.timestamp:
-                item["parsed_timestamp"] = x.timestamp.strftime('%x %X')
-                item['timestamp'] = pretty.date(x.timestamp)
-
-            item['matches'] = parse_string_list(x.matched or '[]')
-            item['dont_matches'] = parse_string_list(x.not_matched or '[]')
+            item = formatter.episode_history(
+                record, can_upgrade=x.id in upgradable_episodes_not_perfect
+                and (x.language, x.profileId) in desired_languages)
 
             episode_history.append(item)
 
