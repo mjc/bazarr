@@ -173,7 +173,7 @@ def _profile_item(item_id, subtitle_type, language='en'):
 
 
 def _profile(items, cutoff=None):
-    # Same key order as update_profile_id_list() because get_profile_cutoff() unpacks profile.values()
+    # Same key order as list_profiles() because get_profile_cutoff() unpacks profile.values()
     return {'profileId': 1, 'name': 'test', 'cutoff': cutoff, 'items': items,
             'mustContain': [], 'mustNotContain': [], 'originalFormat': False, 'tag': None}
 
@@ -202,7 +202,7 @@ def _missing(monkeypatch, indexer, profile, subtitles, audio_language='[]', use_
         run = indexer.list_missing_subtitles_movies
 
     fake_database = _FakeDatabase(row)
-    monkeypatch.setattr(app_database, 'update_profile_id_list', lambda: [profile])
+    monkeypatch.setattr(app_database, 'list_profiles', lambda: [profile])
     monkeypatch.setattr(indexer, 'database', fake_database)
     monkeypatch.setattr(indexer, 'store_missing_subtitles', fake_database.store_missing_subtitles)
     monkeypatch.setattr(indexer, 'get_audio_profile_languages',

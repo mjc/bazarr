@@ -23,7 +23,7 @@ from alembic.migration import MigrationContext
 
 from flask_sqlalchemy import SQLAlchemy
 
-from .language_profiles import Profile, parse_profile_items, find_profile
+from .language_profiles import Profile, parse_profile_items
 from .config import settings
 from .get_args import args
 from utilities.text_list import parse_text_list_or_default
@@ -519,7 +519,7 @@ def get_exclusion_clause(exclusion_type):
 
 
 @region.cache_on_arguments()
-def update_profile_id_list() -> list[Profile]:
+def list_profiles() -> list[Profile]:
     profiles = []
     for x in database.execute(
             select(TableLanguagesProfiles.profileId,
@@ -552,24 +552,10 @@ def update_profile_id_list() -> list[Profile]:
     return profiles
 
 
-def list_profiles() -> list[Profile]:
-    return update_profile_id_list()
-
-
 def get_profile(profile_id: int | None) -> Profile | None:
     if profile_id is None:
         return None
-    return find_profile(list_profiles(), profile_id)
-
-
-def get_desired_languages(profile_id: int) -> list[str] | None:
-    profile = get_profile(profile_id)
-    return None if profile is None else [item['language'] for item in profile['items']]
-
-
-def get_profile_id_name(profile_id):
-    profile = get_profile(profile_id)
-    return profile['name'] if profile is not None else None
+    return next((profile for profile in list_profiles() if profile['profileId'] == profile_id), None)
 
 
 def get_profile_cutoff(profile_id):
@@ -616,42 +602,6 @@ def get_audio_profile_languages(audio_languages_list_str):
                 )
 
     return audio_languages
-
-
-def get_profile_id(series_id=None, episode_id=None, movie_id=None):
-    if series_id:
-        data = database.execute(
-            select(TableShows.profileId)
-            .where(TableShows.sonarrSeriesId == series_id))\
-            .first()
-        if data:
-            return data.profileId
-    elif episode_id:
-        data = database.execute(
-            select(TableShows.profileId)
-            .select_from(TableShows)
-            .join(TableEpisodes)
-            .where(TableEpisodes.sonarrEpisodeId == episode_id)) \
-            .first()
-        if data:
-            return data.profileId
-
-    elif movie_id:
-        data = database.execute(
-            select(TableMovies.profileId)
-            .where(TableMovies.radarrId == movie_id))\
-            .first()
-        if data:
-            return data.profileId
-
-    return None
-
-
-def convert_list_to_clause(arr: list):
-    if isinstance(arr, list):
-        return f"({','.join(str(x) for x in arr)})"
-    else:
-        return ""
 
 
 def upgrade_languages_profile_values():

@@ -119,7 +119,7 @@ def test_sonarr_profile_parser_skips_missing_profile_id(configured_sonarr, monke
 def test_get_profile_cutoff_returns_none_for_malformed_profile_id(monkeypatch):
     monkeypatch.setattr(
         app_database,
-        "update_profile_id_list",
+        "list_profiles",
         lambda: [{"profileId": 44, "cutoff": 1, "items": [{"id": 1, "language": "en"}]}],
     )
 

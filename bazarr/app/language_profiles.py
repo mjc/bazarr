@@ -90,7 +90,3 @@ def parse_profile_items(profile_type: str, raw_items: str | None) -> tuple[list[
         return [item for group in groups for item in group['items']], groups
     items = _parse_items(data)
     return None if items is None else (items, None)
-
-
-def find_profile(profiles: list[Profile], profile_id: int) -> Profile | None:
-    return next((profile for profile in profiles if profile['profileId'] == profile_id), None)

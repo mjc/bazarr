@@ -131,7 +131,7 @@ def test_manual_search_accepts_empty_profile_fallback(monkeypatch, profile_id):
 
 
 def test_episode_manual_download_handles_none_audio_list_and_message_less_result(
-    manual_module, show_row_factory, episode_row_factory, monkeypatch
+    manual_module, show_row_factory, episode_row_factory, monkeypatch, mocker
 ):
     show_row_factory(sonarrSeriesId=5, title="Series", profileId=44)
     episode_row_factory(sonarrSeriesId=5, sonarrEpisodeId=11, title="Pilot", season=1, episode=2)
@@ -142,6 +142,7 @@ def test_episode_manual_download_handles_none_audio_list_and_message_less_result
     monkeypatch.setattr(manual_module, "manual_download_subtitle", _empty_message_result)
     monkeypatch.setattr(manual_module, "send_notifications", _record_call(notifications))
 
+    reads = mocker.spy(manual_module.database, "execute")
     result = manual_module.episode_manually_download_specific_subtitle(
         sonarr_series_id=5,
         sonarr_episode_id=11,
@@ -155,10 +156,11 @@ def test_episode_manual_download_handles_none_audio_list_and_message_less_result
 
     assert result == ("", 204)
     assert notifications == []
+    assert reads.call_count == 1
 
 
 def test_movie_manual_download_handles_none_audio_list_and_message_less_result(
-    manual_module, movie_row_factory, monkeypatch
+    manual_module, movie_row_factory, monkeypatch, mocker
 ):
     movie_row_factory(radarrId=7)
     notifications = []
@@ -168,6 +170,7 @@ def test_movie_manual_download_handles_none_audio_list_and_message_less_result(
     monkeypatch.setattr(manual_module, "manual_download_subtitle", _empty_message_result)
     monkeypatch.setattr(manual_module, "send_notifications_movie", _record_call(notifications))
 
+    reads = mocker.spy(manual_module.database, "execute")
     result = manual_module.movie_manually_download_specific_subtitle(
         radarr_id=7,
         hi="False",
@@ -180,6 +183,7 @@ def test_movie_manual_download_handles_none_audio_list_and_message_less_result(
 
     assert result == ("", 204)
     assert notifications == []
+    assert reads.call_count == 1
 
 
 def test_get_video_skips_scene_name_refinement_for_none(monkeypatch):

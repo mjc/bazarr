@@ -8,7 +8,7 @@ from dynaconf.validator import ValidationError
 
 from api.utils import None_Keys
 from app.database import TableLanguagesProfiles, TableSettingsLanguages, TableSettingsNotifier, \
-    update_profile_id_list, database, insert, update, delete, select, PROFILE_TYPE_BASIC, PROFILE_TYPE_ENHANCED
+    list_profiles, database, insert, update, delete, select, PROFILE_TYPE_BASIC, PROFILE_TYPE_ENHANCED
 from app.event_handler import event_stream
 from app.config import settings, save_settings, get_settings
 from app.scheduler import scheduler
@@ -186,7 +186,7 @@ class SystemSettings(Resource):
                     .where(TableLanguagesProfiles.profileId == profileId))
 
             # invalidate cache
-            update_profile_id_list.invalidate()
+            list_profiles.invalidate()
 
             event_stream("languages")
 

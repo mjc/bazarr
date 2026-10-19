@@ -639,16 +639,6 @@ def episode_history_row_factory(transactional_session, wanted_search_schema, wan
 def bind_wanted_database(transactional_session, bind_wanted_state, monkeypatch):
     del bind_wanted_state
 
-    def get_profile_id(*, movie_id=None, episode_id=None, **unused_kwargs):
-        if movie_id is not None:
-            statement = select(_movie_rows.c.profileId).where(_movie_rows.c.radarrId == movie_id)
-        elif episode_id is not None:
-            statement = select(_episode_rows.c.profileId).where(_episode_rows.c.sonarrEpisodeId == episode_id)
-        else:
-            return None
-
-        return transactional_session.execute(statement).scalar_one_or_none()
-
     def get_profile(*unused_args, **unused_kwargs):
         return {"items": [], "originalFormat": False}
 
@@ -691,7 +681,6 @@ def bind_wanted_database(transactional_session, bind_wanted_state, monkeypatch):
         monkeypatch.setattr(module, "database", transactional_session, raising=False)
         monkeypatch.setattr(module, "select", select, raising=False)
         monkeypatch.setattr(module, "update", update, raising=False)
-        monkeypatch.setattr(module, "get_profile_id", get_profile_id, raising=False)
         monkeypatch.setattr(module, "get_profile", get_profile, raising=False)
         monkeypatch.setattr(module, "get_audio_profile_languages", get_audio_profile_languages, raising=False)
         monkeypatch.setattr(module, "get_subtitles", get_subtitles, raising=False)
