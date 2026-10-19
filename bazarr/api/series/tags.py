@@ -1,8 +1,9 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, fields, marshal
+from flask_restx import Resource, Namespace, fields
 
 from app.database import TableShows, get_media_tags
+from api.response_types import TagsResponse
 
 from ..utils import authenticate
 
@@ -18,7 +19,6 @@ class SeriesTags(Resource):
     @authenticate
     @api_ns_series_tags.response(200, 'Success')
     @api_ns_series_tags.response(401, 'Not Authenticated')
-    def get(self):
+    def get(self) -> TagsResponse:
         """List all distinct tags assigned to any series"""
-        return marshal([{'tag': tag} for tag in get_media_tags(TableShows.tags)],
-                       self.get_response_model, envelope='data')
+        return {'data': [{'tag': tag} for tag in get_media_tags(TableShows.tags)]}

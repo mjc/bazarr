@@ -2,7 +2,7 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 from functools import reduce
 
 from app.database import get_exclusion_clause, TableMovies, TableMissingSubtitles, database, select, func
@@ -10,6 +10,7 @@ from api.swaggerui import subtitles_language_model
 
 from api.utils import authenticate
 from api.response_data import load_formatter, load_missing_languages
+from api.response_types import WantedPageResponse
 
 
 api_ns_movies_wanted = Namespace('Movies Wanted', description='List movies wanted subtitles')
@@ -41,7 +42,7 @@ class MoviesWanted(Resource):
     @authenticate
     @api_ns_movies_wanted.response(401, 'Not Authenticated')
     @api_ns_movies_wanted.expect(get_request_parser)
-    def get(self):
+    def get(self) -> WantedPageResponse:
         """List movies wanted subtitles"""
         args = self.get_request_parser.parse_args()
         radarrid = args.get("radarrid[]")
@@ -88,4 +89,4 @@ class MoviesWanted(Resource):
             .where(wanted_condition)) \
             .scalar()
 
-        return marshal({'data': results, 'total': count}, self.get_response_model)
+        return {'data': results, 'total': count}

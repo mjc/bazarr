@@ -110,6 +110,25 @@ class WantedResponse(MediaMetadata):
     tags: list[str | None]
 
 
+class WantedPageResponse(TypedDict):
+    data: list[WantedResponse]
+    total: int | None
+
+
+class TagResponse(TypedDict):
+    tag: str
+
+
+class TagsResponse(TypedDict):
+    data: list[TagResponse]
+
+
+class FileBrowserEntry(TypedDict):
+    name: str | None
+    children: bool
+    path: str | None
+
+
 class BlacklistResponse(MediaMetadata):
     timestamp: str
     parsed_timestamp: str

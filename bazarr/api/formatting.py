@@ -1,19 +1,30 @@
 # coding=utf-8
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import pretty
 
 from api.response_types import (AudioValue, BlacklistResponse, BlacklistRow, EpisodeResponse, EpisodeRow,
-                                HistoryResponse, HistoryRow, LanguageValue, MovieResponse, MovieRow,
+                                FileBrowserEntry, HistoryResponse, HistoryRow, LanguageValue, MovieResponse, MovieRow,
                                 SeriesResponse, SeriesRow, WantedResponse, WantedRow)
 from languages.formatting import LanguageInfo, SubtitleLanguage, format_audio_languages, subtitle_language
+from utilities.filesystem import DirectoryEntry
+from utilities.json_types import JsonValue
 from utilities.subtitle_metadata import SubtitleFile
 from utilities.text_list import parse_string_list, parse_text_list, parse_text_tuple
 
 
 PathTranslator = Callable[[str | None], str | None]
+
+
+def format_directories(directories: Iterable[DirectoryEntry | Mapping[str, JsonValue]]) -> list[FileBrowserEntry]:
+    return [
+        {'name': str(item['name']) if item['name'] is not None else None,
+         'children': True,
+         'path': str(item['path']) if item['path'] is not None else None}
+        for item in directories
+    ]
 
 
 @dataclass(frozen=True)
