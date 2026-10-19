@@ -56,6 +56,7 @@ include = [
     "bazarr/subtitles/upgrade.py",
     "bazarr/subtitles/upload.py",
     "bazarr/subtitles/tools/mods.py",
+    "bazarr/subtitles/tools/translate",
     "bazarr/subtitles/utils.py",
     "bazarr/subtitles/indexer/profile_requirements.py",
 ]

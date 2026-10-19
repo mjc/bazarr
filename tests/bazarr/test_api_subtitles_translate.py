@@ -114,3 +114,36 @@ def test_combined_job_skips_translation_when_extraction_fails(mocker):
 
     extract.assert_called_once()
     translate.assert_not_called()
+
+
+@pytest.mark.parametrize('media_type,target,status', [
+    ('movie', '', 400), ('invalid', 'fr', 400), ('movie', 'fr', 204), ('episode', 'fr', 204),
+])
+def test_translation_route_validates_inputs_before_enqueue(
+    monkeypatch, tmp_path, api_client, api_key, media_type, target, status,
+):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import api.subtitles.subtitles as endpoint
+
+    source = tmp_path / 'source.en.srt'
+    source.write_text('1\n00:00:00,000 --> 00:00:01,000\nHello\n\n')
+    metadata = SimpleNamespace(path=str(tmp_path / 'video.mkv'), sonarrSeriesId=2)
+    query = Mock()
+    query.execute.return_value.first.return_value = metadata
+    monkeypatch.setattr(endpoint, 'database', query)
+    monkeypatch.setattr(endpoint, 'is_indexed_subtitle_path', lambda *args: True)
+    monkeypatch.setattr(endpoint, 'get_subtitles', lambda **kwargs: [
+        {'path': str(source), 'code2': 'en', 'id': 1, 'embedded_track_id': None}])
+    translate = Mock()
+    monkeypatch.setattr(endpoint, 'translate_subtitles_file', translate)
+    response = api_client.patch('/api/subtitles', json={'action': 'translate', 'language': target,
+                                'path': str(source), 'type': media_type, 'id': 3},
+                                headers={'X-API-KEY': api_key})
+    assert response.status_code == status
+    if status == 204:
+        translate.assert_called_once()
+        assert translate.call_args.kwargs['to_lang'] == target
+        assert translate.call_args.kwargs['source_srt_file'] == str(source)
+    else:
+        translate.assert_not_called()

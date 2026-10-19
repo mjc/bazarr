@@ -1,3 +1,7 @@
+from languages.registry import ResolvedLanguage
+from bazarr.subtitles.tools.translate.core.translation_request import (
+    MovieMedia, TranslationRequest, TranslationTarget,
+)
 import pytest
 
 from bazarr.subtitles.tools.translate.services import google_translator
@@ -5,21 +9,9 @@ from deep_translator.exceptions import RequestError
 
 
 def _build_service(tmp_path):
-    return google_translator.GoogleTranslatorService(
-        source_srt_file=str(tmp_path / "input.srt"),
-        dest_srt_file=str(tmp_path / "output.srt"),
-        lang_obj=type("L", (), {"alpha2": "fr"})(),
-        to_lang="fra",
-        from_lang="en",
-        media_type="movie",
-        video_path="/tmp/video.mkv",
-        orig_to_lang="fr",
-        forced=False,
-        hi=False,
-        sonarr_series_id=1,
-        sonarr_episode_id=1,
-        radarr_id=1,
-    )
+    request = TranslationRequest(str(tmp_path / "input.srt"), str(tmp_path / "output.srt"), '/media/video.mkv', 'en',
+                                 TranslationTarget(ResolvedLanguage('fr', 'fra', 'French'), 'fr', 'fr'), MovieMedia(1), False, False)
+    return google_translator.GoogleTranslatorService(request)
 
 
 def test_looks_like_error_response_detects_html_and_error_text():
@@ -48,6 +40,7 @@ def test_translate_text_raises_on_error_response_baked_into_result(mocker, tmp_p
     (raising RequestError so @retry can retry) instead of baking "Error 500" into the subtitle.
     """
     service = _build_service(tmp_path)
+    mocker.patch("retry.api.time.sleep")
     mocker.patch.object(google_translator, "GoogleTranslator")
 
     # Force the inner retry to give up quickly so the test stays fast.
@@ -97,8 +90,6 @@ def test_translate_succeeds_when_all_lines_translate(mocker, tmp_path):
     service = _build_service(tmp_path)
     mocker.patch.object(service, "_translate_text", return_value="Bonjour le monde")
     mocker.patch.object(google_translator.jobs_queue, "update_job_progress")
-    mocker.patch.object(google_translator, "history_log")
-    mocker.patch.object(google_translator, "history_log_movie")
 
     result = service.translate(job_id="job-1")
 

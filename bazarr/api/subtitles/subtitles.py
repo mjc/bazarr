@@ -215,6 +215,10 @@ class Subtitles(Resource):
             except OSError:
                 return 'Unable to edit subtitles file. Check logs.', 409
         elif action == 'translate':
+            if not language:
+                return 'Target language is required for translation', 400
+            if media_type is None or media_type not in ('episode', 'movie'):
+                return 'Invalid media type for translation', 400
             dest_language = language
 
             subtitles = get_subtitles(sonarr_episode_id=id if media_type == "episode" else None,
@@ -244,7 +248,7 @@ class Subtitles(Resource):
                     return 'Image based embedded subtitles cannot be extracted', 415
                 except (EmbeddedSubtitlesExtractionError, OSError):
                     return 'Unable to take action on subtitles file. Check logs.', 409
-            else:
+            elif subtitles_path:
                 try:
                     translate_subtitles_file(video_path=video_path, source_srt_file=subtitles_path,
                                              from_lang=from_language, to_lang=dest_language, forced=forced, hi=hi,
@@ -257,6 +261,8 @@ class Subtitles(Resource):
 
                 except OSError:
                     return 'Unable to edit subtitles file. Check logs.', 409
+            else:
+                return 'Translation source is required', 400
         elif action == 'extract':
             if not subtitles_id:
                 return 'Subtitles ID is required for extraction', 400
