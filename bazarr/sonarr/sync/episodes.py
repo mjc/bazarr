@@ -70,8 +70,7 @@ def _load_episode_snapshot(connection: SonarrConnection, *, series_id: int | Non
     return snapshot
 
 
-def _prepare_episode_sync(connection: SonarrConnection, series_id: int,
-                          current: dict[int, RowMapping], general: DynaBox,
+def _prepare_episode_sync(connection: SonarrConnection, series_id: int, general: DynaBox,
                           sync_monitored: bool) -> EpisodeSyncPlan | None:
     snapshot = _load_episode_snapshot(connection, series_id=series_id)
     if snapshot is None:
@@ -79,6 +78,12 @@ def _prepare_episode_sync(connection: SonarrConnection, series_id: int,
     # Retain the existing conservative behavior for an empty episode catalogue.
     if not snapshot.episodes:
         return None
+    current: dict[int, RowMapping] = {
+        row['sonarrEpisodeId']: row for row in database.execute(
+            select(*(column for column in TableEpisodes.__table__.columns
+                     if column.name != 'ffprobe_cache'))
+            .where(TableEpisodes.__table__.c.sonarrSeriesId == series_id)).mappings()
+    }
     retained_ids: set[int] = set()
     additions: list[EpisodeValues] = []
     updates: list[EpisodeValues] = []
@@ -104,7 +109,7 @@ def _prepare_episode_sync(connection: SonarrConnection, series_id: int,
             additions.append(parsed)
         elif has_changed_fields(current[episode['id']], parsed):
             updates.append(parsed)
-    return EpisodeSyncPlan(retained_ids, additions, updates, len(snapshot.episodes), skipped_count)
+    return EpisodeSyncPlan(list(current.keys() - retained_ids), additions, updates, len(snapshot.episodes), skipped_count)
 
 
 def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr: bool = False,
@@ -112,24 +117,15 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
     logging.debug(f'BAZARR Starting episodes sync from Sonarr for series ID {series_id}.')
     sonarr = settings.sonarr
 
-    # Get current episodes id in DB
-    if series_id:
-        current_episodes_in_db: dict[int, RowMapping] = {
-            row['sonarrEpisodeId']: row for row in database.execute(
-                select(*(column for column in TableEpisodes.__table__.columns
-                         if column.name != 'ffprobe_cache'))
-                .where(TableEpisodes.__table__.c.sonarrSeriesId == series_id)).mappings()
-        }
-    else:
+    if not series_id:
         return
-
     general = settings.general
     connection = get_sonarr_connection(sonarr) if connection is None else connection
     if connection is None:
         logging.debug('BAZARR skipping episodes sync because Sonarr version is unknown')
         return
     sync_monitored = bool(sonarr.sync_only_monitored_series and sonarr.sync_only_monitored_episodes)
-    plan = _prepare_episode_sync(connection, series_id, current_episodes_in_db, general, sync_monitored)
+    plan = _prepare_episode_sync(connection, series_id, general, sync_monitored)
     if plan is None:
         logging.debug('BAZARR skipping episodes sync because Sonarr returned an incomplete snapshot')
         return
@@ -140,8 +136,8 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
         trace(f"Skipped {plan.skipped_count} unmonitored episodes out of {plan.episode_count} for {series_title}")
 
     # Remove old episodes from DB
-    episodes_to_delete = list(current_episodes_in_db.keys() - plan.retained_ids)
-    del current_episodes_in_db, plan
+    episodes_to_delete = plan.deleted_ids
+    del plan
 
     if len(episodes_to_delete):
         try:

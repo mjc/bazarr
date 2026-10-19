@@ -28,7 +28,8 @@ def get_matching_profile(tags, language_profiles):
 def movieParser(movie: Movie, action: str, tags_dict: list[ArrTag], language_profiles,
                 movie_default_profile: int | None, audio_profiles,
                 *, general: DynaBox | None = None,
-                capabilities: RadarrCapabilities | None = None) -> MovieValues | None:
+                capabilities: RadarrCapabilities | None = None,
+                parse_embedded_audio_track: bool | None = None) -> MovieValues | None:
     file = movie['movieFile']
     legacy = get_radarr_info.is_legacy() if capabilities is None else capabilities.legacy
     images = movie.get('images') or []
@@ -56,7 +57,8 @@ def movieParser(movie: Movie, action: str, tags_dict: list[ArrTag], language_pro
     else:
         video_codec = audio_codec = None
     general_settings = settings.general if general is None else general
-    if general_settings.parse_embedded_audio_track:
+    parse_audio = general_settings.parse_embedded_audio_track if parse_embedded_audio_track is None else parse_embedded_audio_track
+    if parse_audio:
         audio_language = embedded_audio_reader(path_mappings.path_replace_movie(file['path']),
                                                file_size=int(file['size']), movie_file_id=file['id'], use_cache=True)
     elif legacy:

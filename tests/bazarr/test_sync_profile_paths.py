@@ -337,7 +337,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
         lambda movie, **kwargs: parsed_movies.append(movie["title"]) or {"radarrId": movie["id"], "title": movie["title"], "path": movie["movieFile"]["path"]},
     )
     monkeypatch.setattr(radarr_movies, "add_movie", lambda movie: parsed_movies.append(f"added:{movie['title']}"))
-    monkeypatch.setattr(radarr_movies, "update_movie", lambda movie, **kwargs: parsed_movies.append(f"updated:{movie['title']}"))
+    monkeypatch.setattr(radarr_movies, "update_movie", lambda change, **kwargs: parsed_movies.append(f"updated:{change.values['title']}") or "updated")
     monkeypatch.setattr(
         radarr_movies.jobs_queue,
         "update_job_progress",

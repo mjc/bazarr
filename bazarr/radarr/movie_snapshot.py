@@ -96,6 +96,8 @@ class MovieChange:
     values: MovieValues
     existing: bool
     position: int
+    metadata_changed: bool
+    previous_audio_language: str | None
 
 
 @dataclass(frozen=True)
@@ -104,7 +106,6 @@ class MovieSyncPlan:
     deleted_ids: list[int]
     movie_count: int
     missing_count: int
-    skipped_count: int
 
 
 def movie_file_size(value: JsonValue) -> int | None:

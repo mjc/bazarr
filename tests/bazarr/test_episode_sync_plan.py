@@ -293,3 +293,28 @@ def test_comparison_rows_are_released_before_subtitle_indexing(live_sync, monkey
     monkeypatch.setattr(sync, 'database', SimpleNamespace(execute=execute))
     monkeypatch.setattr(sync, 'store_subtitles', store)
     sync.sync_episodes(7, defer_search=True)
+
+
+def test_episode_monitored_comparison_is_read_after_the_http_snapshot(live_sync, monkeypatch):
+    from sqlalchemy import update
+    session, effects, _ = live_sync
+    session.get(TableEpisodes, 101).monitored = 'False'
+    session.commit()
+    payload = episode()
+    payload['monitored'] = False
+    payload['episodeFile']['path'] = '/updated.mkv'
+
+    def fetch(**kwargs):
+        session.execute(update(TableEpisodes).where(TableEpisodes.sonarrEpisodeId == 101)
+                        .values(monitored='True'))
+        return [payload]
+
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', fetch)
+    monkeypatch.setattr(sync.settings.sonarr, 'sync_only_monitored_series', True)
+    monkeypatch.setattr(sync.settings.sonarr, 'sync_only_monitored_episodes', True)
+    sync.sync_episodes(7, defer_search=True)
+    session.expire_all()
+    assert session.get(TableEpisodes, 101).path == '/updated.mkv'
+    assert session.get(TableEpisodes, 101).monitored == 'False'
+    effects['store_subtitles'].assert_called_once_with(101)

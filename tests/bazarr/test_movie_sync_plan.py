@@ -128,7 +128,7 @@ def test_eligibility_and_monitored_reads_are_not_repeated(movie_sync, monkeypatc
     actual_size.assert_called_once_with('/movie.mkv')
     selects = [statement for statement in statements if statement.is_select]
     assert len(selects) == 2
-    assert set(selects[1].selected_columns.keys()) == {'movie_file_id', 'path'}
+    assert set(selects[1].selected_columns.keys()) == {'movie_file_id', 'path', 'monitored'}
     store.assert_not_called()
     session.expire_all()
     assert session.get(TableMovies, 1).title == 'Updated'
@@ -212,3 +212,74 @@ def test_movie_rechecks_current_file_before_deciding_to_skip_indexing(movie_sync
     assert session.get(TableMovies, 1).path == '/movie.mkv'
     assert session.get(TableMovies, 1).title == 'Updated'
     store.assert_called_once_with(1)
+
+
+@pytest.mark.parametrize('embedded', [False, True])
+def test_fresh_monitored_mismatch_forces_update_even_with_unchanged_metadata_and_audio(movie_sync, monkeypatch, embedded):
+    from sqlalchemy import update
+    session, _, _, _, _ = movie_sync
+    payload = movie_payload(1, 'Movie', '/movie.mkv')
+    payload['monitored'] = False
+    canonical = sync.movieParser(payload, action='update', tags_dict=[], language_profiles=[],
+                                 movie_default_profile=None, audio_profiles=[], general=sync.settings.general,
+                                 capabilities=radarr_connection().capabilities)
+    session.execute(update(TableMovies).where(TableMovies.radarrId == 1).values(canonical))
+    session.commit()
+    monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', embedded)
+    monkeypatch.setattr(sync.settings.radarr, 'sync_only_monitored_movies', True)
+    monkeypatch.setattr(sync, 'get_movies_from_radarr_api', lambda **kwargs: [payload])
+    probe = Mock(return_value=['English'])
+    monkeypatch.setattr(sync, 'embedded_audio_reader', probe)
+    prepare = sync._prepare_movie_sync
+
+    def prepare_with_interleaved_monitor_change(*args, **kwargs):
+        plan = prepare(*args, **kwargs)
+        assert plan is not None and len(plan.changes) == 1
+        assert plan.changes[0].metadata_changed is False
+        session.execute(update(TableMovies).where(TableMovies.radarrId == 1).values(monitored='True'))
+        return plan
+
+    monkeypatch.setattr(sync, '_prepare_movie_sync', prepare_with_interleaved_monitor_change)
+    sync.update_movies(job_id=1)
+    session.expire_all()
+    assert session.get(TableMovies, 1).monitored == 'False'
+    assert probe.call_count == int(embedded)
+
+
+def test_still_unmonitored_movie_does_not_probe_embedded_audio(movie_sync, monkeypatch):
+    session, _, events, store, _ = movie_sync
+    session.get(TableMovies, 1).monitored = 'False'
+    session.commit()
+    payload = movie_payload(1, 'New metadata', '/updated.mkv')
+    payload['monitored'] = False
+    monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', True)
+    monkeypatch.setattr(sync.settings.radarr, 'sync_only_monitored_movies', True)
+    monkeypatch.setattr(sync, 'get_movies_from_radarr_api', lambda **kwargs: [payload])
+    probe = Mock(side_effect=AssertionError('Still unmonitored files must not be probed'))
+    monkeypatch.setattr(sync, 'embedded_audio_reader', probe)
+    sync.update_movies(job_id=1)
+    probe.assert_not_called()
+    events.assert_not_called()
+    store.assert_not_called()
+    assert session.get(TableMovies, 1).title == 'Old'
+
+
+def test_raw_movie_graph_is_released_before_embedded_audio_probe(movie_sync, monkeypatch):
+    references = []
+
+    class RemoteMovie(dict):
+        pass
+
+    def fetch(**kwargs):
+        raw = RemoteMovie(movie_payload(1, 'Updated', '/updated.mkv'))
+        references.append(ref(raw))
+        return [raw]
+
+    def probe(*args, **kwargs):
+        assert references and all(reference() is None for reference in references)
+        return ['English']
+
+    monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', True)
+    monkeypatch.setattr(sync, 'get_movies_from_radarr_api', fetch)
+    monkeypatch.setattr(sync, 'embedded_audio_reader', probe)
+    sync.update_movies(job_id=1)

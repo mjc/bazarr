@@ -346,6 +346,7 @@ def configure_sync(monkeypatch, module, payload):
     job = SimpleNamespace(cancel_event=Event())
     monkeypatch.setattr(module.jobs_queue, 'get_job', lambda *args, **kwargs: job)
     if movie_sync:
+        monkeypatch.setattr(module.settings.general, 'parse_embedded_audio_track', False)
         monkeypatch.setattr(module.settings.general, 'movie_default_enabled', False)
         monkeypatch.setattr(module.settings.radarr, 'apikey', 'test')
         monkeypatch.setattr(module.settings.radarr, 'sync_only_monitored_movies', False)

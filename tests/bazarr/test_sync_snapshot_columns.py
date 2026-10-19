@@ -1,5 +1,6 @@
 from types import SimpleNamespace
-from tests.helpers.arr_fixtures import radarr_connection
+from tests.helpers.arr_fixtures import radarr_connection, sonarr_connection, episode_payload
+from sonarr.episode_snapshot import EpisodeSnapshot
 from unittest.mock import Mock
 
 import pytest
@@ -24,12 +25,14 @@ def test_sync_snapshot_omits_cached_video_metadata_and_preserves_other_columns(
     cached_metadata = b'cached metadata' * 65536
     if media_type == 'episode':
         model = TableEpisodes
+        monkeypatch.setattr(episodes, 'get_sonarr_connection', lambda *args: sonarr_connection())
+        monkeypatch.setattr(episodes, '_load_episode_snapshot', lambda *args, **kwargs: EpisodeSnapshot([episode_payload(series_id=1, episode_id=1)]))
         memory_session.add(TableShows(sonarrSeriesId=1, path='/show', title='Show'))
         memory_session.flush()
         memory_session.add(TableEpisodes(sonarrEpisodeId=1, sonarrSeriesId=1, path='/show/ep.mkv',
                                          title='Episode', season=1, episode=1, ffprobe_cache=cached_metadata))
         monkeypatch.setattr(episodes, 'database', SimpleNamespace(execute=execute))
-        monkeypatch.setattr(episodes, 'settings', SimpleNamespace(sonarr=SimpleNamespace(apikey='key')))
+        monkeypatch.setattr(episodes, 'settings', SimpleNamespace(sonarr=SimpleNamespace(apikey='key', sync_only_monitored_series=False), general=SimpleNamespace()))
         with pytest.raises(SnapshotFound):
             episodes.sync_episodes(series_id=1)
     elif media_type == 'movie':

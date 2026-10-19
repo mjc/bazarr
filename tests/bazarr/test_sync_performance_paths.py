@@ -286,8 +286,8 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     from radarr.sync import movies as movies_sync
 
     movie_rows = [
-        {"radarrId": 1, "title": "Movie 1", "path": "/movies/one.mkv", "movie_file_id": 101, "monitored": "True"},
-        {"radarrId": 2, "title": "Old Movie 2", "path": "/movies/two.mkv", "movie_file_id": 102, "monitored": "True"},
+        {"radarrId": 1, "title": "Movie 1", "path": "/movies/one.mkv", "movie_file_id": 101, "monitored": "True", "audio_language": None},
+        {"radarrId": 2, "title": "Old Movie 2", "path": "/movies/two.mkv", "movie_file_id": 102, "monitored": "True", "audio_language": None},
     ]
     updated_movies = []
 
@@ -315,7 +315,7 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
         movies_sync,
         "settings",
         SimpleNamespace(
-            general=SimpleNamespace(movie_default_enabled=False, debug=False),
+            general=SimpleNamespace(movie_default_enabled=False, debug=False, parse_embedded_audio_track=False),
             radarr=SimpleNamespace(apikey="radarr-key", sync_only_monitored_movies=False),
         ),
     )
@@ -324,7 +324,7 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     monkeypatch.setattr(movies_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(movies_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(movies_sync, "movieParser", _movie_parser)
-    monkeypatch.setattr(movies_sync, "update_movie", lambda movie, **kwargs: updated_movies.append(movie))
+    monkeypatch.setattr(movies_sync, "update_movie", lambda change, **kwargs: updated_movies.append(change.values) or "updated")
     monkeypatch.setattr(movies_sync, "event_stream", lambda **kwargs: None)
     monkeypatch.setattr(
         movies_sync,

@@ -5,6 +5,8 @@ import os
 import operator
 
 from datetime import datetime
+from typing import Literal
+from utilities.video_analyzer import embedded_audio_reader
 from dynaconf.utils.boxing import DynaBox
 from radarr.info import RadarrConnection, get_radarr_connection
 from radarr.movie_snapshot import MovieChange, MovieSyncPlan, MovieValues, is_movie, movie_file_size
@@ -69,33 +71,41 @@ def _has_usable_movie_file(movie: JsonValue, *, general: DynaBox | None = None) 
     return bool(general_settings.enable_strm_support and path.lower().endswith('.strm'))
 
 
-# Update movies in DB
-def update_movie(updated_movie: MovieValues) -> None:
+def _resolve_movie_audio(change: MovieChange, general: DynaBox) -> None:
+    if general.parse_embedded_audio_track:
+        values = change.values
+        values['audio_language'] = str(embedded_audio_reader(
+            path_mappings.path_replace_movie(values['path']), file_size=values['file_size'],
+            movie_file_id=values['movie_file_id'], use_cache=True))
+
+
+def update_movie(change: MovieChange, *, general: DynaBox,
+                 sync_monitored: bool = False) -> Literal['updated', 'skipped', 'unchanged', 'failed']:
+    updated_movie = change.values
+    previous_movie_data = database.execute(
+        select(TableMovies.movie_file_id, TableMovies.path, TableMovies.monitored)
+        .where(TableMovies.radarrId == updated_movie['radarrId'])).first()
+    monitored_changed = False
+    if previous_movie_data is not None:
+        if sync_monitored and bool_map.get(previous_movie_data.monitored) is False and updated_movie['monitored'] == 'False':
+            return 'skipped'
+        monitored_changed = previous_movie_data.monitored != updated_movie['monitored']
+    previous_movie_file_id = previous_movie_data.movie_file_id if previous_movie_data else None
+    previous_movie_path = previous_movie_data.path if previous_movie_data else None
+    _resolve_movie_audio(change, general)
+    if not change.metadata_changed and not monitored_changed and updated_movie['audio_language'] == change.previous_audio_language:
+        return 'unchanged'
     try:
-        previous_movie_data = database.execute(
-            select(TableMovies.movie_file_id, TableMovies.path)
-            .where(TableMovies.radarrId == updated_movie['radarrId'])).first()
-        previous_movie_id = updated_movie['radarrId']
-        previous_movie_file_id = previous_movie_data.movie_file_id if previous_movie_data else None
-        previous_movie_path = previous_movie_data.path if previous_movie_data else None
-
         updated_movie['updated_at_timestamp'] = datetime.now()
-        database.execute(
-            update(TableMovies).values(updated_movie)
-            .where(TableMovies.radarrId == updated_movie['radarrId']))
-    except IntegrityError as e:
-        logging.error(f"BAZARR cannot update movie {updated_movie['path']} because of {e}")
-    else:
-        if (previous_movie_file_id != updated_movie['movie_file_id'] or
-                previous_movie_path != updated_movie['path']):
-            # Store subtitles for updated movie where path or movie_file_id changed
-            logging.debug(f'BAZARR updating subtitles for movie {updated_movie["path"]}')
-            store_subtitles_movie(updated_movie['radarrId'])
-        else:
-            logging.debug(f'BAZARR skipping subtitle update for movie {updated_movie["path"]} as path '
-                          f'and movie_file_id unchanged')
-
-        event_stream(type='movie', action='update', payload=previous_movie_id)
+        database.execute(update(TableMovies).values(updated_movie)
+                         .where(TableMovies.radarrId == updated_movie['radarrId']))
+    except IntegrityError as error:
+        logging.error('BAZARR cannot update movie %s because of %s', updated_movie['path'], error)
+        return 'failed'
+    if previous_movie_file_id != updated_movie['movie_file_id'] or previous_movie_path != updated_movie['path']:
+        store_subtitles_movie(updated_movie['radarrId'])
+    event_stream(type='movie', action='update', payload=updated_movie['radarrId'])
+    return 'updated'
 
 
 # Insert new movies in DB
@@ -139,7 +149,7 @@ def _prepare_movie_sync(connection: RadarrConnection, radarr: DynaBox,
                      if column.name != 'ffprobe_cache'))).mappings()
     }
     if not payload:
-        return MovieSyncPlan([], list(current), 0, 0, 0)
+        return MovieSyncPlan([], list(current), 0, 0)
     audio_profiles = get_profile_list(connection=connection)
     tags = get_tags(connection=connection)
     if audio_profiles is None or not is_arr_tags(tags):
@@ -150,7 +160,7 @@ def _prepare_movie_sync(connection: RadarrConnection, radarr: DynaBox,
     seen: set[int] = set()
     complete = True
     changes: list[MovieChange] = []
-    missing = skipped = 0
+    missing = 0
     for position, raw in enumerate(payload, start=1):
         if not isinstance(raw, dict):
             complete = False
@@ -167,26 +177,27 @@ def _prepare_movie_sync(connection: RadarrConnection, radarr: DynaBox,
             missing += 1
             continue
         previous = current.get(movie_id)
-        if radarr.sync_only_monitored_movies and previous is not None:
-            monitored = previous['monitored']
-            if monitored is not None and bool_map.get(monitored) is False and raw['monitored'] is False:
-                skipped += 1
-                continue
         values = movieParser(raw, action='update', tags_dict=tags, language_profiles=language_profiles,
                              movie_default_profile=None, audio_profiles=audio_profiles,
-                             general=general, capabilities=connection.capabilities)
+                             general=general, capabilities=connection.capabilities, parse_embedded_audio_track=False)
         if values is None:
             continue
         if previous is None:
             if 'profileId' not in values:
                 values['profileId'] = default_profile
-            changes.append(MovieChange(values, False, position))
-        elif has_changed_fields(previous, values):
-            changes.append(MovieChange(values, True, position))
+            changes.append(MovieChange(values, False, position, True, None))
+        else:
+            if general.parse_embedded_audio_track:
+                changed = any(previous[key] != value for key, value in values.items() if key != 'audio_language')
+            else:
+                changed = has_changed_fields(previous, values)
+            needs_monitored_check = radarr.sync_only_monitored_movies and values['monitored'] == 'False'
+            if changed or general.parse_embedded_audio_track or needs_monitored_check:
+                changes.append(MovieChange(values, True, position, changed, previous['audio_language']))
     deleted = list(current.keys() - retained) if complete else []
     if not complete:
         logging.warning('BAZARR Skipping movie deletion because Radarr returned unidentified movies.')
-    return MovieSyncPlan(changes, deleted, len(payload), missing, skipped)
+    return MovieSyncPlan(changes, deleted, len(payload), missing)
 
 
 def update_movies(job_id: int | None = None, wait_for_completion: bool = False) -> None:
@@ -218,7 +229,7 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
             for movie_id in deleted:
                 event_stream(type='movie', action='delete', payload=movie_id)
     plan.changes.reverse()
-    added = updated = 0
+    added = updated = skipped = 0
     while plan.changes:
         if job.cancel_event.is_set():
             raise JobCanceled
@@ -226,16 +237,26 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
         jobs_queue.update_job_progress(job_id=job_id, progress_value=change.position,
                                        progress_message=change.values['title'])
         if not change.existing:
+            if radarr.sync_only_monitored_movies and change.values['monitored'] == 'False':
+                monitored = database.execute(select(TableMovies.monitored)
+                                             .where(TableMovies.radarrId == change.values['radarrId'])).scalar()
+                if monitored is not None and bool_map.get(monitored) is False:
+                    skipped += 1
+                    continue
+            _resolve_movie_audio(change, general)
             add_movie(change.values)
             added += 1
         else:
-            update_movie(change.values)
-            updated += 1
+            result = update_movie(change, general=general, sync_monitored=radarr.sync_only_monitored_movies)
+            if result == 'updated':
+                updated += 1
+            elif result == 'skipped':
+                skipped += 1
         del change
     trace(f'Skipped {plan.missing_count} file missing movies out of {plan.movie_count}')
     if radarr.sync_only_monitored_movies:
-        trace(f'Skipped {plan.skipped_count} unmonitored movies out of {plan.movie_count}')
-    trace(f'Processed {plan.movie_count - plan.missing_count - plan.skipped_count} movies out of {plan.movie_count} '
+        trace(f'Skipped {skipped} unmonitored movies out of {plan.movie_count}')
+    trace(f'Processed {plan.movie_count - plan.missing_count - skipped} movies out of {plan.movie_count} '
           f'with {added} added and {updated} updated')
     jobs_queue.update_job_name(job_id=job_id, new_job_name='Synced movies with Radarr')
     logging.debug('BAZARR All movies synced from Radarr into database.')

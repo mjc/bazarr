@@ -68,7 +68,7 @@ class EpisodeSnapshot:
 
 @dataclass(frozen=True)
 class EpisodeSyncPlan:
-    retained_ids: set[int]
+    deleted_ids: list[int]
     additions: list[EpisodeValues]
     updates: list[EpisodeValues]
     episode_count: int
