@@ -76,7 +76,7 @@ def audio_language_from_name(lang):
     return language_from_alpha2(alpha2_code)
 
 
-def language_from_alpha2(lang):
+def language_from_alpha2(lang: str) -> str | None:
     return next((item['name'] for item in languages_dict if item['code2'] == lang[:2]), None)
 
 
@@ -92,7 +92,7 @@ def alpha2_from_language(lang):
     return next((item['code2'] for item in languages_dict if item['name'] == lang), None)
 
 
-def alpha3_from_alpha2(lang):
+def alpha3_from_alpha2(lang: str) -> str | None:
     return next((item['code3'] for item in languages_dict if item['code2'] == lang[:2]), None)
 
 

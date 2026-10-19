@@ -78,13 +78,14 @@ def configure_indexer(monkeypatch, media_type):
 
 
 @pytest.mark.parametrize('media_type', ['movie', 'series'])
-def test_bulk_subtitles_match_single_media_with_embedded_ids(runtime_database, media_type):
+@pytest.mark.parametrize('embedded_language', ['en', 'und'])
+def test_bulk_subtitles_match_single_media_with_embedded_ids(runtime_database, media_type, embedded_language):
     _, session = runtime_database
     seed_media(session, media_type)
     table = db.TableMoviesSubtitles if media_type == 'movie' else db.TableEpisodesSubtitles
     values = {'radarrId': 7} if media_type == 'movie' else {'sonarrEpisodeId': 7, 'sonarrSeriesId': 7}
     session.execute(insert(table), [
-        dict(values, id=71, language='en', forced=False, hi=False, embedded_track_id=0, path=None, size=0),
+        dict(values, id=71, language=embedded_language, forced=False, hi=False, embedded_track_id=0, path=None, size=0),
         dict(values, id=72, language='en', forced=True, hi=False, embedded_track_id=None, path='/movie.en.srt', size=123),
     ])
     single = db.get_subtitles(**({'radarr_id': 7} if media_type == 'movie' else {'sonarr_episode_id': 7}))

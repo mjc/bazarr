@@ -11,7 +11,6 @@ from collections import defaultdict
 from dogpile.cache import make_region
 from flask import Flask
 from datetime import datetime
-from typing import List
 
 from sqlalchemy import create_engine, inspect, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, text, \
     BigInteger, Boolean, Index
@@ -25,6 +24,7 @@ from flask_sqlalchemy import SQLAlchemy
 
 from .config import settings
 from .get_args import args
+from .subtitle_payload import SubtitlePayload, subtitle_payload as _subtitle_payload, sort_subtitles as _sort_subtitles
 from utilities.text_list import parse_text_list_or_default
 from utilities.path_mappings import path_mappings
 
@@ -807,7 +807,7 @@ def is_indexed_subtitle_path(*subtitles_paths) -> bool:
     return False
 
 
-def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[dict]:
+def get_subtitles(sonarr_episode_id: int | None = None, radarr_id: int | None = None) -> list[SubtitlePayload]:
     """
     Retrieves a list of subtitles based on the provided episode or movie identifiers.
 
@@ -822,7 +822,7 @@ def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[
     :return: A list of dictionaries, each containing information about a subtitle file, including its
              path, language metadata (name, alpha-2 code, and alpha-3 code), forced subtitles flag,
              hearing impaired flag, and file size.
-    :rtype: List[dict]
+    :rtype: list[SubtitlePayload]
     """
     subtitles = []
     if sonarr_episode_id:
@@ -857,25 +857,7 @@ def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[
     return _sort_subtitles(subtitles)
 
 
-def _subtitle_payload(subtitle, replace_path):
-    from languages.get_languages import alpha3_from_alpha2, language_from_alpha2
-
-    return {"id": subtitle.id,
-            "path": replace_path(subtitle.path),
-            "name": language_from_alpha2(subtitle.language),
-            "code2": subtitle.language,
-            "code3": alpha3_from_alpha2(subtitle.language),
-            "forced": subtitle.forced,
-            "hi": subtitle.hi,
-            "file_size": subtitle.size,
-            "embedded_track_id": subtitle.embedded_track_id}
-
-
-def _sort_subtitles(subtitles):
-    return sorted(subtitles, key=lambda i: (i['name'], i['forced']))
-
-
-def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, List[dict]]:
+def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, list[SubtitlePayload]]:
     if not media_ids:
         return {}
 

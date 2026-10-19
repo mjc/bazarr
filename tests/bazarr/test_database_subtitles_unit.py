@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app import database
 from languages import get_languages
 
@@ -50,3 +52,29 @@ def test_sort_subtitles_matches_legacy_get_subtitles_order():
         {"name": "English", "forced": True},
         {"name": "French", "forced": True},
     ]
+
+
+@pytest.mark.parametrize("unknown_first", [False, True])
+def test_sort_subtitles_preserves_unknown_languages(monkeypatch, unknown_first):
+    monkeypatch.setattr(get_languages, "languages_dict", [
+        {"code2": "en", "code3": "eng", "code3b": None, "name": "English"},
+    ])
+    rows = [
+        SimpleNamespace(id=1, path="/movie.en.srt", language="en", forced=False,
+                        hi=False, size=123, embedded_track_id=None),
+        SimpleNamespace(id=2, path=None, language="und", forced=True,
+                        hi=False, size=None, embedded_track_id=0),
+        SimpleNamespace(id=3, path=None, language="und", forced=False,
+                        hi=True, size=None, embedded_track_id=1),
+    ]
+    if unknown_first:
+        rows.reverse()
+    payloads = [database._subtitle_payload(row, lambda path: path) for row in rows]
+
+    result = database._sort_subtitles(payloads)
+
+    assert [subtitle["id"] for subtitle in result] == [3, 2, 1]
+    assert result[0] == {
+        "id": 3, "path": None, "name": None, "code2": "und", "code3": None,
+        "forced": False, "hi": True, "file_size": None, "embedded_track_id": 1,
+    }
