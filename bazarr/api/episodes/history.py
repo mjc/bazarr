@@ -2,6 +2,7 @@
 
 import operator
 from functools import reduce
+from sqlalchemy.sql.selectable import ScalarSelect
 
 from api.response_types import HistoryPageResponse, HistoryResponse, HistoryRow
 from api.response_data import load_formatter, load_history_languages
@@ -67,10 +68,12 @@ class EpisodesHistory(Resource):
                                        TableBlacklist.subs_id) \
             .subquery()
 
-        external_subtitles_sq = select(
-            TableEpisodesSubtitles.sonarrEpisodeId,
-            func.min(TableEpisodesSubtitles.path).label('path')
-        ).group_by(TableEpisodesSubtitles.sonarrEpisodeId).subquery()
+        external_subtitles: ScalarSelect[str | None] = (
+            select(func.min(TableEpisodesSubtitles.path))
+            .where(TableEpisodesSubtitles.sonarrEpisodeId == TableHistory.sonarrEpisodeId)
+            .correlate(TableHistory)
+            .scalar_subquery()
+        )
 
         query_conditions = [(TableEpisodes.title.is_not(None))]
         if episodeid:
@@ -99,13 +102,11 @@ class EpisodesHistory(Resource):
                       TableShows.profileId,
                       TableHistory.matched,
                       TableHistory.not_matched,
-                      external_subtitles_sq.c.path.label('external_subtitles'),
+                      external_subtitles.label('external_subtitles'),
                       blacklisted_subtitles.c.subs_id.label('blacklisted')) \
             .select_from(TableHistory) \
             .join(TableShows, onclause=TableHistory.sonarrSeriesId == TableShows.sonarrSeriesId) \
             .join(TableEpisodes, onclause=TableHistory.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId) \
-            .join(external_subtitles_sq,
-                  onclause=TableHistory.sonarrEpisodeId == external_subtitles_sq.c.sonarrEpisodeId, isouter=True) \
             .join(blacklisted_subtitles, onclause=TableHistory.subs_id == blacklisted_subtitles.c.subs_id,
                   isouter=True) \
             .where(reduce(operator.and_, query_conditions)) \

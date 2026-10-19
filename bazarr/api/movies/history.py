@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import operator
+from sqlalchemy.sql.selectable import ScalarSelect
 
 from flask_restx import Resource, Namespace, reqparse, fields
 from functools import reduce
@@ -66,10 +67,12 @@ class MoviesHistory(Resource):
                                        TableBlacklistMovie.subs_id) \
             .subquery()
 
-        external_subtitles_sq = select(
-            TableMoviesSubtitles.radarrId,
-            func.min(TableMoviesSubtitles.path).label('path')
-        ).group_by(TableMoviesSubtitles.radarrId).subquery()
+        external_subtitles: ScalarSelect[str | None] = (
+            select(func.min(TableMoviesSubtitles.path))
+            .where(TableMoviesSubtitles.radarrId == TableHistoryMovie.radarrId)
+            .correlate(TableHistoryMovie)
+            .scalar_subquery()
+        )
 
         query_conditions = [(TableMovies.title.is_not(None))]
         if radarrid:
@@ -94,12 +97,10 @@ class MoviesHistory(Resource):
                       TableHistoryMovie.matched,
                       TableHistoryMovie.not_matched,
                       TableMovies.profileId,
-                      external_subtitles_sq.c.path.label('external_subtitles'),
+                      external_subtitles.label('external_subtitles'),
                       blacklisted_subtitles.c.subs_id.label('blacklisted')) \
             .select_from(TableHistoryMovie) \
             .join(TableMovies) \
-            .join(external_subtitles_sq,
-                  onclause=TableHistoryMovie.radarrId == external_subtitles_sq.c.radarrId, isouter=True) \
             .join(blacklisted_subtitles, onclause=TableHistoryMovie.subs_id == blacklisted_subtitles.c.subs_id,
                   isouter=True) \
             .where(reduce(operator.and_, query_conditions)) \
