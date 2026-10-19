@@ -5,6 +5,7 @@ import os
 from dynaconf.utils.boxing import DynaBox
 
 from app.config import settings
+from app.settings_cache import settings_cache
 from languages.get_languages import audio_language_from_name
 from radarr.info import RadarrCapabilities, get_radarr_info
 from radarr.movie_snapshot import Movie, MovieValues
@@ -56,7 +57,7 @@ def movieParser(movie: Movie, action: str, tags_dict: list[ArrTag], language_pro
                                              media.get('audioAdditionalFeatures'))
     else:
         video_codec = audio_codec = None
-    general_settings = settings.general if general is None else general
+    general_settings = settings_cache.get(settings, 'general') if general is None else general
     parse_audio = general_settings.parse_embedded_audio_track if parse_embedded_audio_track is None else parse_embedded_audio_track
     if parse_audio:
         audio_language = embedded_audio_reader(path_mappings.path_replace_movie(file['path']),

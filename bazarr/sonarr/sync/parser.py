@@ -6,6 +6,7 @@ from dateutil import parser
 from dynaconf.utils.boxing import DynaBox
 
 from app.config import settings
+from app.settings_cache import settings_cache
 from app.database import TableShows, database, select
 from constants import MINIMUM_VIDEO_SIZE
 from languages.get_languages import audio_language_from_name
@@ -60,7 +61,7 @@ def seriesParser(show: Series, action: str, tags_dict: list[ArrTag], language_pr
     original_language = original.get('name') if original is not None else None
 
     audio_language = []
-    general_settings = settings.general if general is None else general
+    general_settings = settings_cache.get(settings, 'general') if general is None else general
     if not general_settings.parse_embedded_audio_track:
         if get_sonarr_info.is_legacy() if capabilities is None else capabilities.legacy:
             audio_language = profile_id_to_language(show.get('qualityProfileId'), audio_profiles)
@@ -117,7 +118,7 @@ def profile_id_to_language(id_, profiles):
 def episodeParser(episode: Episode, parse_embedded_audio_track: bool | None = None,
                   *, general: DynaBox | None = None,
                   audio_languages: dict[int, str | None] | None = None) -> EpisodeValues | None:
-    general_settings = settings.general if general is None else general
+    general_settings = settings_cache.get(settings, 'general') if general is None else general
     file = episode.get('episodeFile')
     if not episode['hasFile'] or file is None:
         return None

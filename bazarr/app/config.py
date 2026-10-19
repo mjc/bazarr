@@ -31,6 +31,7 @@ from shutil import move
 from utilities.text_list import parse_text_list_or_default
 
 from .get_args import args
+from .settings_cache import settings_cache
 
 NoneType = type(None)
 
@@ -560,7 +561,7 @@ while failed_validator:
             stop_bazarr(EXIT_VALIDATION_ERROR)
 
 
-def write_config():
+def write_config() -> None:
     if settings.as_dict() == Dynaconf(
         settings_file=config_yaml_file,
         core_loaders=['YAML']
@@ -579,6 +580,7 @@ def write_config():
             except Exception as error:
                 logging.exception(f"Exception raised while trying to overwrite settings file with temporary settings "
                                   f"file: {error}")
+    settings_cache.invalidate()
 
 
 base_url = settings.general.base_url.rstrip('/')
@@ -961,7 +963,10 @@ def save_settings(settings_items):
         settings.validators.validate()
         validate_log_regex()
     except ValidationError:
-        settings.reload()
+        try:
+            settings.reload()
+        finally:
+            settings_cache.invalidate()
         raise
     else:
         write_config()

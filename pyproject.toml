@@ -38,6 +38,7 @@ include = [
     "bazarr/api/utils.py",
     "bazarr/app/check_update.py",
     "bazarr/app/database.py",
+    "bazarr/app/settings_cache.py",
     "bazarr/app/language_profiles.py",
     "bazarr/app/get_providers.py",
     "bazarr/app/provider_throttling.py",

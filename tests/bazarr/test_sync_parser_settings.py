@@ -45,5 +45,6 @@ def test_sync_parser_reuses_supplied_settings_and_reads_current_settings_when_ca
 
     settings.section = DynaBox({'parse_embedded_audio_track': False, 'serie_tag_enabled': False,
                                 'movie_tag_enabled': False, 'remove_profile_tags': []})
+    module.settings_cache.invalidate()
     assert parse(*arguments)['profileId'] == 99
     assert settings.reads == 2

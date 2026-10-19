@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 
 from app.config import settings
+from app.settings_cache import settings_cache
 from sonarr.rootfolder import check_sonarr_rootfolder
 from app.database import TableShows, TableLanguagesProfiles, database, insert, update, select
 from utilities.helper import bool_map, has_changed_fields
@@ -59,8 +60,8 @@ def _default_series_profile(general: DynaBox) -> int | None:
         return None
 
 
-def _prepare_series_sync(connection: SonarrConnection, sonarr: DynaBox,
-                         general: DynaBox, *, session: requests.Session | None = None) -> SeriesSyncPlan | None:
+def _prepare_series_sync(connection: SonarrConnection,
+                         *, session: requests.Session | None = None) -> SeriesSyncPlan | None:
     try:
         payload = get_series_from_sonarr_api(apikey_sonarr=connection.apikey, connection=connection, session=session)
     except requests.exceptions.RequestException:
@@ -83,6 +84,8 @@ def _prepare_series_sync(connection: SonarrConnection, sonarr: DynaBox,
     complete = True
     skipped = 0
     for raw in payload:
+        general = settings_cache.get(settings, 'general')
+        sonarr = settings_cache.get(settings, 'sonarr')
         if not is_series(raw) or raw['id'] <= 0 or raw['id'] in retained:
             complete = False
             skipped += 1
@@ -116,13 +119,13 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
     if job is None:
         return
     with arr_session() as http:
-        sonarr = settings.sonarr
-        general = settings.general
+        sonarr = settings_cache.get(settings, 'sonarr')
+        general = settings_cache.get(settings, 'general')
         connection = get_sonarr_connection(sonarr, session=http)
         if connection is None:
             return
         check_sonarr_rootfolder(connection=connection, session=http)
-        plan = _prepare_series_sync(connection, sonarr, general, session=http)
+        plan = _prepare_series_sync(connection, session=http)
         if plan is None:
             logging.debug('BAZARR Sonarr series sync returned an invalid payload. Skipping sync.')
             jobs_queue.update_job_name(job_id=job_id, new_job_name='Synced series with Sonarr')
@@ -138,9 +141,9 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
             series_id = series['sonarrSeriesId']
             jobs_queue.update_job_progress(job_id=job_id, progress_value=processed, progress_message=series['title'])
             update_one_series(series_id, action='updated', sync_episodes_after_update=False,
-                              prepared_series=series, connection=connection, general=general, session=http)
+                              prepared_series=series, connection=connection, session=http)
             del series
-            sync_episodes(series_id=series_id, connection=connection, session=http, general=general, sonarr=sonarr)
+            sync_episodes(series_id=series_id, connection=connection, session=http)
         if plan.complete:
             for series_id in plan.existing_ids - plan.retained_ids:
                 update_one_series(series_id, action='deleted')
@@ -176,7 +179,7 @@ def update_one_series(series_id: int | None, action: str, is_signalr: bool = Fal
         return
 
     with arr_session(session) as http:
-        general_settings = settings.general if general is None else general
+        general_settings = settings_cache.get(settings, 'general') if general is None else general
         connection = get_sonarr_connection(session=http) if connection is None else connection
         if connection is None:
             return
@@ -215,7 +218,7 @@ def update_one_series(series_id: int | None, action: str, is_signalr: bool = Fal
             # Update existing series in DB
             if not has_changed_fields(existing_series, series):
                 if sync_episodes_after_update and not is_signalr:
-                    sync_episodes(series_id=series_id, connection=connection, session=http, general=general_settings)
+                    sync_episodes(series_id=series_id, connection=connection, session=http)
                 return
 
             try:
@@ -232,7 +235,7 @@ def update_one_series(series_id: int | None, action: str, is_signalr: bool = Fal
                     # The one that gets there doesn't include the episodeChanged flag.
                     # The episodes are synced only when this function is called from the
                     # frontend sync button in the episodes' page.
-                    sync_episodes(series_id=series_id, connection=connection, session=http, general=general_settings)
+                    sync_episodes(series_id=series_id, connection=connection, session=http)
                 event_stream(type='series', action='update', payload=int(series_id))
                 logging.debug(
                     f'BAZARR updated this series into the database:{path_mappings.path_replace(series["path"])}')
