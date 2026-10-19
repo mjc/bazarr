@@ -15,16 +15,21 @@ from constants import HEADERS
 region = make_region().configure('dogpile.cache.memory')
 
 
-class InvalidSonarrStatus(ValueError):
-    """The status response does not contain a usable version string."""
-
-
-def _parse_version(payload: object) -> str:
+def _parse_version(payload: object) -> str | None:
     if isinstance(payload, dict):
         version: object = payload.get('version')
         if isinstance(version, str) and version:
             return version
-    raise InvalidSonarrStatus('Sonarr status has no nonempty version string')
+    return None
+
+
+def _request_version(url: str) -> str | None:
+    try:
+        payload: object = requests.get(url, timeout=int(settings.sonarr.http_timeout), verify=False,
+                                       headers=HEADERS).json()
+    except JSONDecodeError:
+        return None
+    return _parse_version(payload)
 
 
 class GetSonarrInfo:
@@ -43,21 +48,15 @@ class GetSonarrInfo:
         if settings.general.use_sonarr:
             try:
                 sv = f"{url_sonarr()}/api/system/status?apikey={settings.sonarr.apikey}"
-                sonarr_json: object = requests.get(sv, timeout=int(settings.sonarr.http_timeout), verify=False,
-                                                   headers=HEADERS).json()
-                sonarr_version = _parse_version(sonarr_json)
-            except (JSONDecodeError, InvalidSonarrStatus):
-                try:
+                discovered_version = _request_version(sv)
+                if discovered_version is None:
                     sv = f"{url_sonarr()}/api/v3/system/status?apikey={settings.sonarr.apikey}"
-                    sonarr_json = requests.get(sv, timeout=int(settings.sonarr.http_timeout), verify=False,
-                                               headers=HEADERS).json()
-                    sonarr_version = _parse_version(sonarr_json)
-                except (RequestException, InvalidSonarrStatus):
-                    logging.debug('BAZARR cannot get Sonarr version')
-                    sonarr_version = 'unknown'
-            except Exception:
+                    discovered_version = _request_version(sv)
+            except RequestException:
+                discovered_version = None
+            if discovered_version is None:
                 logging.debug('BAZARR cannot get Sonarr version')
-                sonarr_version = 'unknown'
+            sonarr_version = discovered_version if discovered_version is not None else 'unknown'
         logging.debug(f'BAZARR got this Sonarr version from its API: {sonarr_version}')
         region.set("sonarr_version", sonarr_version)
         return sonarr_version

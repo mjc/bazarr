@@ -21,6 +21,23 @@ def sonarr_get(monkeypatch):
     return get
 
 
+@pytest.mark.parametrize("payload", [None, [], {}, {"error": "Not Found"}, {"version": None},
+                                     {"version": 4}, {"version": ""}])
+def test_missing_or_malformed_version_returns_none(payload: object):
+    assert info._parse_version(payload) is None
+
+
+def test_valid_version_is_returned():
+    assert info._parse_version({"version": "4.0.16.2944"}) == "4.0.16.2944"
+
+
+def test_unexpected_errors_are_not_reported_as_missing_versions(sonarr_get):
+    sonarr_get.side_effect = RuntimeError("Unexpected failure")
+
+    with pytest.raises(RuntimeError, match="Unexpected failure"):
+        info.get_sonarr_info.version()
+
+
 @pytest.mark.parametrize("legacy_payload", [{}, {"error": "Not Found"}, None, [], {"version": None},
                                              {"version": 4}, {"version": ""}])
 def test_invalid_legacy_status_falls_back_to_v3(sonarr_get, legacy_payload):
