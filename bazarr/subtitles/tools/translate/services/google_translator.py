@@ -11,7 +11,7 @@ from subliminal_patch.providers.utils import FIRST_THOUSAND_OR_SO_USER_AGENTS as
 from retry.api import retry
 from ..core.translation_request import TranslationRequest
 from deep_translator import GoogleTranslator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.jobs_queue import jobs_queue
 from deep_translator.exceptions import TooManyRequests, RequestError, TranslationNotFound
 
@@ -29,71 +29,45 @@ class GoogleTranslatorService:
         try:
             subs = pysubs2.load(self.request.source_srt_file, encoding='utf-8')
             subs.remove_miscellaneous_events()
-            lines_list = [x.plaintext for x in subs]
-            lines_list_len = len(lines_list)
-
-            jobs_queue.update_job_progress(job_id=job_id, progress_max=lines_list_len,
+            line_count = len(subs)
+            jobs_queue.update_job_progress(job_id=job_id, progress_max=line_count,
                                            progress_message=self.request.source_srt_file)
 
-            translated_lines = []
-            logger.debug(f'starting translation for {self.request.source_srt_file}')
-
-            def translate_line(line_id, subtitle_line):
+            def translate_line(event: pysubs2.SSAEvent) -> str:
+                text = event.plaintext
                 try:
-                    translated_text = self._translate_text(subtitle_line, job_id)
-                    translated_lines.append({'id': line_id, 'line': translated_text})
+                    return self._translate_text(text, job_id)
                 except TranslationNotFound:
-                    logger.debug(f'Unable to translate line {subtitle_line}')
-                    translated_lines.append({'id': line_id, 'line': subtitle_line})
-                finally:
-                    jobs_queue.update_job_progress(job_id=job_id, progress_value=len(translated_lines))
+                    logger.debug('Unable to translate line %s', text)
+                    return text
 
-            logger.debug(f'BAZARR is sending {lines_list_len} blocks to Google Translate')
-            pool = ThreadPoolExecutor(max_workers=10)
-            futures = []
-            for i, line in enumerate(lines_list):
-                future = pool.submit(translate_line, i, line)
-                futures.append(future)
-            pool.shutdown(wait=True)
+            failures = 0
+            first_error: Exception | None = None
+            logger.debug('Sending %s blocks to Google Translate', line_count)
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                futures = [pool.submit(translate_line, event) for event in subs]
+                for completed, future in enumerate(as_completed(futures), start=1):
+                    try:
+                        future.result()
+                    except Exception as error:
+                        logger.error('Error in translation task: %s', error)
+                        failures += 1
+                        if first_error is None:
+                            first_error = error
+                    jobs_queue.update_job_progress(job_id=job_id, progress_value=completed)
 
-            # Surface per-line failures instead of silently swallowing them. Previously, a line
-            # that exhausted its retries (429/5xx/network error) was dropped, leaving its original
-            # text in place and the subtitle was saved as if translation had succeeded. We now
-            # collect those failures and abort so no partially-translated file is written.
-            line_errors = []
-            for future in futures:
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.error(f"Error in translation task: {e}")
-                    line_errors.append(e)
-
-            if line_errors:
-                first_error = line_errors[0]
-                message = (f'Google translation failed for {len(line_errors)}/{lines_list_len} line(s) '
+            if first_error is not None:
+                message = (f'Google translation failed for {failures}/{line_count} line(s) '
                            f'({first_error.__class__.__name__}: {first_error}). '
                            f'Subtitle was not saved to avoid leaving partially-translated content.')
-                logger.error(message)
                 jobs_queue.update_job_progress(job_id=job_id, progress_message=message)
                 raise RequestError(message)
 
-            for i, line in enumerate(translated_lines):
-                lines_list[line['id']] = line['line']
-
-            logger.debug(f'BAZARR saving translated subtitles to {self.request.dest_srt_file}')
-            for i, line in enumerate(subs):
-                try:
-                    if lines_list[i]:
-                        line.plaintext = lines_list[i]
-                    else:
-                        # we assume that there was nothing to translate if Google returns None. ex.: "♪♪"
-                        continue
-                except IndexError:
-                    logger.error(f'BAZARR is unable to translate malformed subtitles: {self.request.source_srt_file}')
-                    jobs_queue.update_job_progress(job_id=job_id,
-                                                   progress_message=f'Translation failed: Unable to translate '
-                                                                    f'malformed subtitles for {self.request.source_srt_file}')
-                    raise
+            for event, future in zip(subs, futures):
+                translated = future.result()
+                if translated:
+                    event.plaintext = translated
+            del futures
 
             subs.save(self.request.dest_srt_file)
 
