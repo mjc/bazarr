@@ -190,6 +190,9 @@ def postprocess(item, subtitles=None):
     if settings.general.embedded_subs_show_desired:
         if item.get('profileId'):
             desired_lang_list = get_desired_languages(item['profileId'])
+            if desired_lang_list is None:
+                # A removed profile has no desired embedded languages. Keep external subtitles.
+                desired_lang_list = []
 
             # Get language equals configuration
             lang_equals = core._LanguageEquals(get_language_equals())

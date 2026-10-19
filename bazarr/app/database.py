@@ -11,7 +11,7 @@ from collections import defaultdict
 from dogpile.cache import make_region
 from flask import Flask
 from datetime import datetime
-from typing import List
+from typing import List, overload
 
 from sqlalchemy import create_engine, inspect, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, text, \
     BigInteger, Boolean, Index
@@ -23,6 +23,7 @@ from alembic.migration import MigrationContext
 
 from flask_sqlalchemy import SQLAlchemy
 
+from .language_profiles import Profile, parse_profile_items, find_profile
 from .config import settings
 from .get_args import args
 from utilities.text_list import parse_text_list_or_default
@@ -517,24 +518,8 @@ def get_exclusion_clause(exclusion_type):
     return where_clause
 
 
-def parse_profile_items(profile_type, raw_items):
-    """
-    Return (items, groups) for a languages profile row.
-
-    Basic profiles store a flat list of items and groups is None. Enhanced profiles store
-    {"groups": [...]}. For those, items is the flat list of every item across all groups, so
-    consumers that only need the wanted languages keep working, and groups keeps the structure.
-    """
-    data = json.loads(raw_items)
-    if profile_type == PROFILE_TYPE_ENHANCED and isinstance(data, dict):
-        groups = data.get('groups') or []
-        items = [item for group in groups for item in (group.get('items') or [])]
-        return items, groups
-    return data, None
-
-
 @region.cache_on_arguments()
-def update_profile_id_list():
+def update_profile_id_list() -> list[Profile]:
     profiles = []
     for x in database.execute(
             select(TableLanguagesProfiles.profileId,
@@ -546,8 +531,11 @@ def update_profile_id_list():
                    TableLanguagesProfiles.originalFormat,
                    TableLanguagesProfiles.tag,
                    TableLanguagesProfiles.profileType)).all():
-        items, groups = parse_profile_items(x.profileType, x.items)
-        profile = {
+        parsed = parse_profile_items(x.profileType, x.items)
+        if parsed is None:
+            continue
+        items, groups = parsed
+        profile: Profile = {
             'profileId': x.profileId,
             'name': x.name,
             'cutoff': x.cutoff,
@@ -564,7 +552,15 @@ def update_profile_id_list():
     return profiles
 
 
-def get_profiles_list(profile_id=None):
+@overload
+def get_profiles_list(profile_id: None = None) -> list[Profile]: ...
+
+
+@overload
+def get_profiles_list(profile_id: int | str) -> Profile | list[Profile] | None: ...
+
+
+def get_profiles_list(profile_id=None) -> Profile | list[Profile] | None:
     profile_id_list = update_profile_id_list()
 
     if profile_id and profile_id != 'null':
@@ -575,10 +571,17 @@ def get_profiles_list(profile_id=None):
         return profile_id_list
 
 
-def get_desired_languages(profile_id):
-    for profile in update_profile_id_list():
-        if profile['profileId'] == profile_id:
-            return [x['language'] for x in profile['items']]
+def list_profiles() -> list[Profile]:
+    return update_profile_id_list()
+
+
+def get_profile(profile_id: int) -> Profile | None:
+    return find_profile(list_profiles(), profile_id)
+
+
+def get_desired_languages(profile_id: int) -> list[str] | None:
+    profile = get_profile(profile_id)
+    return None if profile is None else [item['language'] for item in profile['items']]
 
 
 def get_profile_id_name(profile_id):

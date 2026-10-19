@@ -120,3 +120,17 @@ def test_raw_json_upgrade_helpers_skip_enhanced_profiles(profiles_session):
         database.select(database.TableLanguagesProfiles.profileId, database.TableLanguagesProfiles.items))}
     assert json.loads(stored[1])[0]["hi"] == "True"
     assert json.loads(stored[2]) == {"groups": ENHANCED_GROUPS}
+
+
+@pytest.mark.parametrize('raw_items', ['null', '{}', '[null]', '[{"id": 1, "language": null}]', 'not json'])
+def test_malformed_profile_items_return_none(raw_items):
+    assert database.parse_profile_items('basic', raw_items) is None
+
+
+def test_list_and_lookup_interfaces_do_not_confuse_missing_profile(profiles_session):
+    profiles_session.add(database.TableLanguagesProfiles(profileId=1, name='English', items='[]'))
+    profiles_session.commit()
+    assert [profile['profileId'] for profile in database.list_profiles()] == [1]
+    assert database.get_profile(1)['name'] == 'English'
+    assert database.get_profile(999) is None
+    assert database.get_desired_languages(999) is None

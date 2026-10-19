@@ -7,6 +7,8 @@ import logging
 import subliminal
 
 from subzero.language import Language
+from subzero.cache_backends.file import SZFileBackend
+from subliminal_patch.video import Video
 from subliminal_patch.core import save_subtitles
 from subliminal_patch.core_persistent import list_all_subtitles, download_subtitles
 from subliminal_patch.score import compute_score, DEFAULT_SCORES
@@ -16,7 +18,7 @@ from app.config import settings, get_array_from
 from constants import HI_EXCLUDED
 from utilities.helper import get_target_folder, force_unicode
 from utilities.path_mappings import path_mappings
-from app.database import (database, get_profiles_list, select, TableEpisodes, TableShows, get_audio_profile_languages,
+from app.database import (database, get_profiles_list, get_profile, select, TableEpisodes, TableShows, get_audio_profile_languages,
                           get_profile_id, TableMovies)
 from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications, send_notifications_movie
@@ -66,7 +68,7 @@ def manual_search(path, profile_id, providers, sceneName, title, media_type):
     else:
         logging.info("BAZARR All providers are throttled")
         return 'All providers are throttled'
-    if video:
+    if isinstance(video, Video):
         try:
             if providers:
                 subtitles = list_all_subtitles([video], language_set, pool)
@@ -157,7 +159,9 @@ def manual_search(path, profile_id, providers, sceneName, title, media_type):
             logging.debug(f'BAZARR {len(final_subtitles)} Subtitles have been found for this file: {path}')
             logging.debug(f'BAZARR Ended searching Subtitles for this file: {path}')
 
-    subliminal.region.backend.sync()
+    backend = subliminal.region.backend
+    if isinstance(backend, SZFileBackend):
+        backend.sync()
 
     return final_subtitles
 
@@ -179,11 +183,14 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
 
     # check if trying to download HI for an excluded language
     if hi == 'True' and subtitle.hearing_impaired:
-        profile = get_profiles_list(profile_id=profile_id)
+        profile = get_profile(profile_id)
+        if profile is None:
+            logging.error("BAZARR language profile not found for manual HI download")
+            return None
         lang_alpha2 = alpha2_from_alpha3(subtitle.language.alpha3)
         for item in profile['items']:
-            if item['language'] == lang_alpha2 and item['forced'] == ('True' if subtitle.language.forced else 'False'):
-                if item['hi'] == HI_EXCLUDED:
+            if item['language'] == lang_alpha2 and item.get('forced', 'False') == ('True' if subtitle.language.forced else 'False'):
+                if item.get('hi') == HI_EXCLUDED:
                     logging.error(f"BAZARR Cannot download hearing-impaired subtitle for {lang_alpha2}: this language is set to exclude HI subtitles")
                     return 'Cannot download a hearing-impaired subtitle: this language is set to exclude HI subtitles.'
                 break
@@ -201,7 +208,7 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
 
     subtitle.mods = get_array_from(settings.general.subzero_mods)
     video = get_video(force_unicode(path), title, sceneName, providers={provider}, media_type=media_type)
-    if video:
+    if isinstance(video, Video):
         try:
             if provider:
                 download_subtitles([subtitle], _get_pool(media_type, profile_id))
@@ -249,7 +256,9 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
                         f"from another provider.")
                     return 'Something went wrong, check the logs for error'
 
-    subliminal.region.backend.sync()
+    backend = subliminal.region.backend
+    if isinstance(backend, SZFileBackend):
+        backend.sync()
 
     logging.debug(f'BAZARR Ended manually downloading Subtitles for file: {path}')
 
