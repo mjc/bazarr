@@ -52,7 +52,7 @@ class GetSonarrInfo:
         region.set("sonarr_version", sonarr_version)
         return sonarr_version
 
-    def semver(self):
+    def semver(self) -> semver.Version | None:
         semver_version = None
         if isinstance(self.version(), str) and self.version() not in ['', 'unknown']:
             split_version = self.version().split('.')

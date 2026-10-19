@@ -53,7 +53,7 @@ def check_actual_file_size(original_episode_path):
     return bazarr_file_size > MINIMUM_VIDEO_SIZE
 
 
-def sync_episodes(series_id, defer_search=False, is_signalr=False):
+def sync_episodes(series_id: int, defer_search: bool = False, is_signalr: bool = False) -> None:
     logging.debug(f'BAZARR Starting episodes sync from Sonarr for series ID {series_id}.')
     apikey_sonarr = settings.sonarr.apikey
 
@@ -76,10 +76,15 @@ def sync_episodes(series_id, defer_search=False, is_signalr=False):
     # Get episodes data for a series from Sonarr
     episodes = get_episodes_from_sonarr_api(apikey_sonarr=apikey_sonarr, series_id=series_id)
     if episodes:
-        if get_sonarr_info.is_legacy():
+        legacy = get_sonarr_info.is_legacy()
+        version = None if legacy else get_sonarr_info.semver()
+        if not legacy and version is None:
+            logging.debug("BAZARR skipping episodes sync because Sonarr version is unknown")
+            return
+        if legacy:
             # We skip this for legacy versions of Sonarr since it already have episodeFile structure included
             pass
-        elif get_sonarr_info.semver() >= semver.Version(*(4, 0, 9, 2421)):
+        elif version is not None and version >= semver.Version(*(4, 0, 9, 2421)):
             # We skip this if the episodes already contain an episodeFile structure (added with Sonarr v4.0.9.2421)
             pass
         else:
@@ -94,9 +99,10 @@ def sync_episodes(series_id, defer_search=False, is_signalr=False):
                             episode['episodeFile'] = item[0]
 
         sync_monitored = settings.sonarr.sync_only_monitored_series and settings.sonarr.sync_only_monitored_episodes
+        episodes_monitored = {}
+        skipped_count = 0
         if sync_monitored:
             episodes_monitored = get_episodes_monitored_table(series_id)
-            skipped_count = 0
 
         for episode in episodes:
             if 'hasFile' in episode and episode['hasFile'] and 'episodeFile' in episode:
@@ -141,7 +147,7 @@ def sync_episodes(series_id, defer_search=False, is_signalr=False):
     if sync_monitored:
         # try to avoid unnecessary database calls
         if settings.general.debug:
-            series_title = database.execute(select(TableShows.title).where(TableShows.sonarrSeriesId == series_id)).first()[0]
+            series_title = database.execute(select(TableShows.title).where(TableShows.sonarrSeriesId == series_id)).scalar()
             trace(f"Skipped {skipped_count} unmonitored episodes out of {len(episodes)} for {series_title}")
 
     # Remove old episodes from DB
@@ -341,7 +347,7 @@ def sync_one_episode(episode_id, defer_search=False, is_signalr=False):
         series_title = database.execute(
             select(TableShows.title)
             .where(TableShows.sonarrSeriesId == episode["sonarrSeriesId"])
-        ).first()[0]
+        ).scalar()
         episode_full_title = (f'{series_title} - S{episode["season"]:02d}E{episode["episode"]:02d} - '
                               f'{episode["title"]}')
 
@@ -365,7 +371,7 @@ def sync_one_episode(episode_id, defer_search=False, is_signalr=False):
                           f': {episode_full_title}')
 
 
-def _is_there_missing_subtitles(series_id: int = None, episode_id: int = None) -> bool:
+def _is_there_missing_subtitles(series_id: int | None = None, episode_id: int | None = None) -> bool:
     """
     Determines whether there are missing subtitles for a given series or episode.
 
