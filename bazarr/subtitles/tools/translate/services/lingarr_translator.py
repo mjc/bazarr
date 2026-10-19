@@ -1,7 +1,7 @@
 # coding=utf-8
-
 import logging
 import os
+from typing import TypedDict
 import pysubs2
 import requests
 
@@ -17,6 +17,26 @@ from sonarr.history import history_log
 from ..core.translator_utils import add_translator_info, create_process_result, get_title
 
 logger = logging.getLogger(__name__)
+
+
+class TranslationLine(TypedDict):
+    position: int
+    line: str
+
+
+def parse_translation_batch(payload: object) -> list[TranslationLine] | None:
+    if not isinstance(payload, list):
+        return None
+    result: list[TranslationLine] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            return None
+        position: object = item.get('position')
+        line: object = item.get('line')
+        if not isinstance(position, int) or isinstance(position, bool) or not isinstance(line, str):
+            return None
+        result.append({'position': position, 'line': line})
+    return result
 
 
 class LingarrTranslatorService:
@@ -61,7 +81,7 @@ class LingarrTranslatorService:
                 logger.error(f'Translation failed for {self.source_srt_file}')
                 jobs_queue.update_job_progress(job_id=job_id,
                                                progress_message=f'Translation failed for {self.source_srt_file}')
-                raise RuntimeError(f'Translation failed for {self.source_srt_file}')
+                return None
 
             logger.debug(f'BAZARR saving Lingarr translated subtitles to {self.dest_srt_file}')
             translation_map = {}
@@ -109,7 +129,7 @@ class LingarrTranslatorService:
 
     @retry(exceptions=(TooManyRequests, RequestError, requests.exceptions.RequestException), tries=3, delay=1,
            backoff=2, jitter=(0, 1))
-    def _translate_content(self, lines_list, job_id):
+    def _translate_content(self, lines_list: list[str], job_id: int | None) -> list[TranslationLine] | None:
         try:
             source_lang = self.language_code_convert_dict.get(self.from_lang, self.from_lang)
             target_lang = self.language_code_convert_dict.get(self.orig_to_lang, self.orig_to_lang)
@@ -169,17 +189,10 @@ class LingarrTranslatorService:
             )
 
             if response.status_code == 200:
-                translated_batch = response.json()
-                # Validate response
-                if isinstance(translated_batch, list):
-                    for item in translated_batch:
-                        if not isinstance(item, dict) or 'position' not in item or 'line' not in item:
-                            logger.error(f'Invalid response format from Lingarr API for {self.source_srt_file}: {item}')
-                            return None
-                    return translated_batch
-                else:
-                    logger.error(f'Unexpected response format from Lingarr API: {translated_batch}')
-                    return None
+                translated_batch = parse_translation_batch(response.json())
+                if translated_batch is None:
+                    logger.error('Unexpected response format from Lingarr API')
+                return translated_batch
             elif response.status_code == 401:
                 raise RequestError("Authentication failed: Invalid or missing API key")
             elif response.status_code == 429:

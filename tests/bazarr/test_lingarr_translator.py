@@ -1,4 +1,14 @@
 from bazarr.subtitles.tools.translate.services import lingarr_translator
+import pytest
+
+
+@pytest.mark.parametrize('payload', [
+    [{'position': [], 'line': 'Hello'}], [{'position': '0', 'line': 'Hello'}],
+    [{'position': True, 'line': 'Hello'}], [{'position': 0, 'line': None}],
+    [{'position': 0, 'line': 123}],
+])
+def test_malformed_translation_values_return_none(payload):
+    assert lingarr_translator.parse_translation_batch(payload) is None
 
 
 def _build_service(tmp_path):
