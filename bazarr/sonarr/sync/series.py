@@ -211,7 +211,7 @@ def update_one_series(series_id, action, is_signalr=False, sync_episodes_after_u
         series = seriesParser(series_payload, action='update', tags_dict=tagsDict,
                               language_profiles=language_profiles,
                               serie_default_profile=serie_default_profile,
-                              audio_profiles=audio_profiles)
+                              audio_profiles=audio_profiles, general=general)
         if not has_changed_fields(existing_series, series):
             if sync_episodes_after_update and not is_signalr:
                 sync_episodes(series_id=int(series_id))
@@ -240,7 +240,7 @@ def update_one_series(series_id, action, is_signalr=False, sync_episodes_after_u
         series = seriesParser(series_payload, action='insert', tags_dict=tagsDict,
                               language_profiles=language_profiles,
                               serie_default_profile=serie_default_profile,
-                              audio_profiles=audio_profiles)
+                              audio_profiles=audio_profiles, general=general)
 
         try:
             series['created_at_timestamp'] = datetime.now()

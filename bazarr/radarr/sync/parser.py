@@ -2,6 +2,8 @@
 
 import os
 
+from dynaconf.utils.boxing import DynaBox
+
 from app.config import settings
 from languages.get_languages import audio_language_from_name
 from radarr.info import get_radarr_info
@@ -21,7 +23,8 @@ def get_matching_profile(tags, language_profiles):
     return matching_profile
 
 
-def movieParser(movie, action, tags_dict, language_profiles, movie_default_profile, audio_profiles):
+def movieParser(movie, action, tags_dict, language_profiles, movie_default_profile, audio_profiles,
+                *, general: DynaBox | None = None):
     if 'movieFile' in movie:
         try:
             overview = str(movie['overview'])
@@ -96,8 +99,8 @@ def movieParser(movie, action, tags_dict, language_profiles, movie_default_profi
             videoCodec = None
             audioCodec = None
 
-        general = settings.general
-        if general.parse_embedded_audio_track:
+        general_settings = settings.general if general is None else general
+        if general_settings.parse_embedded_audio_track:
             audio_language = embedded_audio_reader(path_mappings.path_replace_movie(movie['movieFile']['path']),
                                                    file_size=movie['movieFile']['size'],
                                                    movie_file_id=movie['movieFile']['id'],
@@ -150,11 +153,11 @@ def movieParser(movie, action, tags_dict, language_profiles, movie_default_profi
         if action == 'insert':
             parsed_movie['profileId'] = movie_default_profile
 
-        if general.movie_tag_enabled:
+        if general_settings.movie_tag_enabled:
             tag_profile = get_matching_profile(tags, language_profiles)
             if tag_profile:
                 parsed_movie['profileId'] = tag_profile
-            remove_profile_tags_list = general.remove_profile_tags
+            remove_profile_tags_list = general_settings.remove_profile_tags
             if len(remove_profile_tags_list) > 0:
                 if set(tags) & set(remove_profile_tags_list):
                     parsed_movie['profileId'] = None

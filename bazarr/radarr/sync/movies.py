@@ -270,8 +270,9 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                                                            tags_dict=tagsDict,
                                                            language_profiles=language_profiles,
                                                            movie_default_profile=movie_default_profile,
-                                                           audio_profiles=audio_profiles)
-                                if has_changed_fields(current_movies_in_db[movie_id], parsed_movie):
+                                                           audio_profiles=audio_profiles, general=general)
+                                if (parsed_movie is not None and
+                                        has_changed_fields(current_movies_in_db[movie_id], parsed_movie)):
                                     update_movie(parsed_movie)
                                     movies_updated.append(parsed_movie['title'])
                             else:
@@ -279,9 +280,10 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                                                            tags_dict=tagsDict,
                                                            language_profiles=language_profiles,
                                                            movie_default_profile=movie_default_profile,
-                                                           audio_profiles=audio_profiles)
-                                add_movie(parsed_movie)
-                                movies_added.append(parsed_movie['title'])
+                                                           audio_profiles=audio_profiles, general=general)
+                                if parsed_movie is not None:
+                                    add_movie(parsed_movie)
+                                    movies_added.append(parsed_movie['title'])
                         else:
                             trace(f"{i}: (Skipped File Missing) {movie.get('title', 'Unknown')}")
                             files_missing += 1
@@ -356,10 +358,12 @@ def update_one_movie(movie_id, action, defer_search=False, is_signalr=False):
         else:
             if action == 'updated' and existing_movie:
                 movie = movieParser(movie_data, action='update', tags_dict=tagsDict, language_profiles=language_profiles,
-                                    movie_default_profile=movie_default_profile, audio_profiles=audio_profiles)
+                                    movie_default_profile=movie_default_profile, audio_profiles=audio_profiles,
+                                    general=general)
             elif action == 'updated' and not existing_movie:
                 movie = movieParser(movie_data, action='insert', tags_dict=tagsDict, language_profiles=language_profiles,
-                                    movie_default_profile=movie_default_profile, audio_profiles=audio_profiles)
+                                    movie_default_profile=movie_default_profile, audio_profiles=audio_profiles,
+                                    general=general)
     except Exception:
         logging.exception('BAZARR cannot get movie returned by SignalR feed from Radarr API.')
         return
