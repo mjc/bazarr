@@ -135,7 +135,6 @@ def test_unresolved_upload_language_stops_before_saving(
     upload_module, movie_row_factory, monkeypatch, mocker, missing_field
 ):
     movie_row_factory(radarrId=7, profileId=44)
-    monkeypatch.setattr(upload_module, 'get_profiles_list', lambda profile_id: {})
     entry = {'code2': 'en', 'code3': 'eng', 'code3b': None, 'name': 'English'}
     entry[missing_field] = None
     monkeypatch.setattr(get_languages, 'languages_dict', [entry])
