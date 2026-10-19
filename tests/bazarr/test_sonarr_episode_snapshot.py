@@ -9,19 +9,19 @@ from sonarr.episode_snapshot import complete_episode_snapshot
 
 @pytest.mark.parametrize("files", [None, [], [{"id": 99, "path": "/other.mkv", "size": 100}]])
 def test_incomplete_episode_files_do_not_authorize_reconciliation(files):
-    episodes = [{"id": 101, "hasFile": True, "episodeFileId": 11}]
+    episodes = [{"id": 101, "title": "Pilot", "monitored": True, "hasFile": True, "episodeFileId": 11}]
     assert complete_episode_snapshot(episodes, files) is None
 
 
 def test_complete_snapshot_attaches_files():
     file = {"id": 11, "path": "/episode.mkv", "size": 100}
-    result = complete_episode_snapshot([{"id": 101, "hasFile": True, "episodeFileId": 11}], [file])
+    result = complete_episode_snapshot([{"id": 101, "title": "Pilot", "monitored": True, "hasFile": True, "episodeFileId": 11}], [file])
     assert result is not None
     assert result.episodes[0]["episodeFile"] == file
 
 
 def test_successful_empty_files_for_episodes_without_media_is_complete():
-    assert complete_episode_snapshot([{"id": 101, "hasFile": False}], []) is not None
+    assert complete_episode_snapshot([{"id": 101, "title": "Pilot", "monitored": True, "hasFile": False}], []) is not None
 
 
 @pytest.mark.parametrize("files", [None, []])
@@ -36,7 +36,7 @@ def test_failed_secondary_fetch_preserves_existing_episode(memory_session, monke
     monkeypatch.setattr(sync.get_sonarr_info, "semver", lambda: semver.Version(3, 0, 0))
     monkeypatch.setattr(sync.settings.sonarr, "sync_only_monitored_series", False)
     monkeypatch.setattr(sync, "get_episodes_from_sonarr_api", lambda **kwargs: [
-        {"id": 101, "hasFile": True, "episodeFileId": 11}])
+        {"id": 101, "title": "Pilot", "monitored": True, "hasFile": True, "episodeFileId": 11}])
     monkeypatch.setattr(sync, "get_episodesFiles_from_sonarr_api", lambda **kwargs: files)
     delete = Mock(return_value=[])
     monkeypatch.setattr(sync, "delete_media_and_wanted_search_state", delete)

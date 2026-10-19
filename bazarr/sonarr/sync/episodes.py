@@ -100,10 +100,8 @@ def sync_episodes(series_id, defer_search=False, is_signalr=False):
         for episode in episodes:
             if 'hasFile' in episode and episode['hasFile'] and 'episodeFile' in episode:
                 if sync_monitored:
-                    try:
-                        monitored_status_db = bool_map[episodes_monitored[episode['episodeFileId']]]
-                    except KeyError:
-                        monitored_status_db = None
+                    stored_monitored = episodes_monitored.get(episode['episodeFile']['id'])
+                    monitored_status_db = None if stored_monitored is None else bool_map.get(stored_monitored)
 
                     if monitored_status_db is None:
                         # not in db, might need to add, if we have a file on disk

@@ -12,6 +12,8 @@ class EpisodeFile(TypedDict):
 class Episode(TypedDict):
     id: int
     hasFile: bool
+    monitored: bool
+    title: str
     episodeFileId: NotRequired[int]
     episodeFile: NotRequired[EpisodeFile]
 
