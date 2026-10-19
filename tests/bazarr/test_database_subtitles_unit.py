@@ -1,4 +1,7 @@
 from languages.registry import LanguageRegistry
+from collections.abc import Iterator
+from types import SimpleNamespace, TracebackType
+from unittest.mock import Mock
 import pytest
 
 from app import database
@@ -70,3 +73,57 @@ def test_sort_subtitles_preserves_unknown_language_metadata(
         'forced': False, 'hi': True, 'file_size': None, 'embedded_track_id': 1,
     }
     assert subtitles == ([*unknown, known] if unknown_first else [known, *unknown])
+
+
+@pytest.mark.parametrize('media_type', ['series', 'movie'])
+@pytest.mark.parametrize('use_query', [False, True])
+@pytest.mark.parametrize('payload_error', [False, True])
+def test_subtitle_map_bounds_buffering_and_closes_results(
+    media_type: str, use_query: bool, payload_error: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Rows:
+        closed = False
+
+        def yield_per(self, size: int) -> 'Rows':
+            assert size == 500
+            return self
+
+        def __enter__(self) -> 'Rows':
+            return self
+
+        def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None,
+                     traceback: TracebackType | None) -> None:
+            self.closed = True
+
+        def __iter__(self) -> Iterator[tuple[int, str, str, bool, bool, int, None, int]]:
+            for number in range(501):
+                yield 1, f'/video-{number}.srt', 'en', False, True, 100, None, number
+
+    rows = Rows()
+    execute = Mock(return_value=rows)
+    monkeypatch.setattr(database, 'database', SimpleNamespace(execute=execute))
+    monkeypatch.setattr(get_languages, '_language_registry', LanguageRegistry([
+        {'code2': 'en', 'code3': 'eng', 'code3b': None, 'name': 'English'},
+    ]))
+    if payload_error:
+        monkeypatch.setattr(database, '_subtitle_payload', Mock(side_effect=ValueError('payload failure')))
+
+    def load() -> dict[int, list[SubtitleFile]]:
+        if use_query:
+            table, column = ((database.TableEpisodes, database.TableEpisodes.sonarrEpisodeId)
+                             if media_type == 'series' else (database.TableMovies, database.TableMovies.radarrId))
+            return database.get_subtitles_for_query(media_type, database.select(column).select_from(table))
+        return database.get_subtitles_map(media_type, [1])
+
+    if payload_error:
+        with pytest.raises(ValueError, match='payload failure'):
+            load()
+    else:
+        result = load()
+        assert len(result[1]) == 501
+        assert [item['id'] for item in result[1]] == list(range(501))
+        assert result[1][0]['name'] == 'English'
+        assert result[1][0]['hi'] is True
+    assert rows.closed
+    options = execute.call_args.args[0].get_execution_options()
+    assert 'yield_per' not in options and 'stream_results' not in options

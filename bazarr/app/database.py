@@ -776,10 +776,10 @@ def _load_subtitles_map(
         return {}
 
     for selection in selections:
-        rows = database.execute(
+        with database.execute(
             select(*subtitle_columns).where(media_id_column.in_(selection))
-        )
-        for media_id, path, language, forced, hi, size, embedded_id, subtitle_id in rows:
-            subtitles_by_media_id[media_id].append(
-                _subtitle_payload(path, language, forced, hi, size, embedded_id, subtitle_id, replace_path))
+        ).yield_per(500) as rows:
+            for media_id, path, language, forced, hi, size, embedded_id, subtitle_id in rows:
+                subtitles_by_media_id[media_id].append(
+                    _subtitle_payload(path, language, forced, hi, size, embedded_id, subtitle_id, replace_path))
     return {media_id: _sort_subtitles(subtitles) for media_id, subtitles in subtitles_by_media_id.items()}

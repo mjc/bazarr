@@ -98,3 +98,34 @@ def test_language_collection_preserves_autoflush_controls_on_postgres_autocommit
     with session.no_autoflush:
         assert wanted_state.get_missing_languages_map('series', [1]) == {1: []}
     assert wanted_state.get_missing_languages_map('series', [1]) == {1: ['en']}
+
+
+@pytest.mark.parametrize('media_type', ['series', 'movie'])
+def test_subtitle_maps_work_with_postgres_autocommit(
+    postgres_language_session: Session, media_type: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = postgres_language_session
+    monkeypatch.setattr(app_database, 'database', session)
+    episode = media_type == 'series'
+    if episode:
+        session.add(TableShows(sonarrSeriesId=1, title='Show', path='/show'))
+        session.flush()
+        session.add(TableEpisodes(sonarrEpisodeId=1, sonarrSeriesId=1, title='Episode',
+                                  path='/show/1.mkv', season=1, episode=1))
+        media_ids = select(TableEpisodes.sonarrEpisodeId)
+    else:
+        session.add(app_database.TableMovies(radarrId=1, title='Movie', path='/movie', tmdbId='1'))
+        media_ids = select(app_database.TableMovies.radarrId)
+    session.flush()
+    sidecar = app_database.TableEpisodesSubtitles if episode else app_database.TableMoviesSubtitles
+    for number in range(600):
+        values: dict[str, str | bool | int] = {
+            'language': 'en', 'path': f'/video-{number}.srt', 'forced': False, 'hi': False,
+        }
+        values.update({'sonarrEpisodeId': 1, 'sonarrSeriesId': 1} if episode else {'radarrId': 1})
+        session.add(sidecar(**values))
+    session.flush()
+    by_ids = app_database.get_subtitles_map(media_type, [1])
+    by_query = app_database.get_subtitles_for_query(media_type, media_ids)
+    assert len(by_ids[1]) == 600
+    assert by_query == by_ids
