@@ -1,6 +1,9 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
+
+from api.response_types import ListResponse
+from api.marshalling import marshal_rows
 
 from app.database import TableEpisodes, TableShows, TableBlacklist, database, select, TableEpisodesSubtitles
 from subtitles.tools.delete import delete_subtitles
@@ -40,7 +43,7 @@ class EpisodesBlacklist(Resource):
     @authenticate
     @api_ns_episodes_blacklist.response(401, 'Not Authenticated')
     @api_ns_episodes_blacklist.expect(get_request_parser)
-    def get(self):
+    def get(self) -> ListResponse:
         """List blacklisted episodes subtitles"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -62,7 +65,7 @@ class EpisodesBlacklist(Resource):
             stmt = stmt.limit(length).offset(start)
 
         formatter = load_formatter()
-        return marshal([formatter.blacklist({
+        results = (formatter.blacklist({
             'seriesTitle': x.seriesTitle,
             'episode_number': x.episode_number,
             'episodeTitle': x.episodeTitle,
@@ -71,7 +74,8 @@ class EpisodesBlacklist(Resource):
             'subs_id': x.subs_id,
             'language': x.language,
             'timestamp': x.timestamp,
-        }) for x in database.execute(stmt).all()], self.get_response_model, envelope='data')
+        }) for x in database.execute(stmt).all())
+        return {'data': marshal_rows(results, self.get_response_model)}
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('seriesid', type=int, required=True, help='Series ID')

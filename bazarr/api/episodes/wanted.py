@@ -2,7 +2,10 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
+
+from api.response_types import PageResponse
+from api.marshalling import marshal_rows
 from functools import reduce
 
 from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableMissingSubtitles, database, select, func
@@ -45,7 +48,7 @@ class EpisodesWanted(Resource):
     @authenticate
     @api_ns_episodes_wanted.response(401, 'Not Authenticated')
     @api_ns_episodes_wanted.expect(get_request_parser)
-    def get(self):
+    def get(self) -> PageResponse:
         """List episodes wanted subtitles"""
         args = self.get_request_parser.parse_args()
         episodeid = args.get('episodeid[]')
@@ -84,7 +87,7 @@ class EpisodesWanted(Resource):
         missing_languages = get_missing_languages_map('series', [x.sonarrEpisodeId for x in episodes])
         formatter = load_formatter()
 
-        results = [formatter.wanted({
+        results = (formatter.wanted({
             'seriesTitle': x.seriesTitle,
             'episode_number': x.episode_number,
             'episodeTitle': x.episodeTitle,
@@ -94,7 +97,7 @@ class EpisodesWanted(Resource):
             'sceneName': x.sceneName,
             'tags': x.tags,
             'seriesType': x.seriesType,
-        }) for x in episodes]
+        }) for x in episodes)
 
         count = database.execute(
             select(func.count())
@@ -103,4 +106,4 @@ class EpisodesWanted(Resource):
             .where(wanted_condition)) \
             .scalar()
 
-        return marshal({'data': results, 'total': count}, self.get_response_model)
+        return {'data': marshal_rows(results, self.data_model), 'total': count}

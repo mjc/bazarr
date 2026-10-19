@@ -1,6 +1,9 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
+
+from api.response_types import MarshalledRow
+from api.marshalling import marshal_rows
 
 from sonarr.filesystem import browse_sonarr_filesystem
 
@@ -24,17 +27,16 @@ class BrowseSonarrFS(Resource):
     @authenticate
     @api_ns_files_sonarr.response(401, 'Not Authenticated')
     @api_ns_files_sonarr.expect(get_request_parser)
-    def get(self):
+    def get(self) -> list[MarshalledRow]:
         """List Sonarr file system content"""
         args = self.get_request_parser.parse_args()
         path = args.get('path')
-        data = []
         try:
             result = browse_sonarr_filesystem(path)
             if result is None:
                 raise ValueError
         except Exception:
             return []
-        for item in result['directories']:
-            data.append({'name': item['name'], 'children': True, 'path': item['path']})
-        return marshal(data, self.get_response_model)
+        return marshal_rows(
+            ({'name': item['name'], 'children': True, 'path': item['path']} for item in result['directories']),
+            self.get_response_model)

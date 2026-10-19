@@ -1,5 +1,6 @@
 # coding=utf-8
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Literal, TypeAlias, TypedDict
 
@@ -8,8 +9,17 @@ from utilities.subtitle_metadata import SubtitleFile
 
 JsonValue: TypeAlias = str | int | float | bool | None | list['JsonValue'] | dict[str, 'JsonValue']
 JsonObject: TypeAlias = dict[str, JsonValue]
+MarshalledRow: TypeAlias = Mapping[str, JsonValue]
 AudioValue: TypeAlias = list[LanguageInfo] | Literal[''] | None
 LanguageValue: TypeAlias = SubtitleLanguage | Literal[''] | None
+
+
+class ListResponse(TypedDict):
+    data: list[MarshalledRow]
+
+
+class PageResponse(ListResponse):
+    total: int | None
 
 
 class MediaMetadata(TypedDict, total=False):
