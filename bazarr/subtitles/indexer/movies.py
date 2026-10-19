@@ -16,7 +16,7 @@ from utilities.helper import get_subtitle_destination_folder
 from utilities.path_mappings import path_mappings
 from utilities.video_analyzer import embedded_subs_reader
 from app.event_handler import event_stream
-from subtitles.indexer.utils import guess_external_subtitles, get_external_subtitles_path
+from subtitles.indexer.utils import guess_external_subtitles, get_external_subtitle_file
 from subtitles.pool import get_language_equals
 from subtitles.indexer.profile_requirements import calculate_missing_subtitles, \
     calculate_enhanced_missing_subtitles
@@ -183,13 +183,12 @@ def store_subtitles_movie(radarr_id, use_cache=True):
                         logging.debug(f'{language.alpha3} is an unsupported language code.')
                     continue
 
-                subtitle_path = get_external_subtitles_path(mapped_path, subtitle)
-
-                try:
-                    subtitle_size = os.stat(subtitle_path).st_size
-                except FileNotFoundError:
-                    logging.debug(f"BAZARR skipping missing subtitle file: {subtitle_path}")
+                subtitle_file = get_external_subtitle_file(mapped_path, subtitle)
+                if subtitle_file is None:
+                    logging.debug(f"BAZARR skipping missing subtitle file: {subtitle}")
                     continue
+                subtitle_path = subtitle_file.path
+                subtitle_size = subtitle_file.size
 
                 # We get custom language external subtitles
                 custom = CustomLanguage.found_external(subtitle, subtitle_path)

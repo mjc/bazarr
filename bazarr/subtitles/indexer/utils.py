@@ -2,6 +2,7 @@
 
 import os
 import logging
+from dataclasses import dataclass
 
 from guess_language import guess_language
 from subliminal_patch import core
@@ -14,7 +15,7 @@ from utilities.path_mappings import path_mappings
 from languages.custom_lang import CustomLanguage
 
 
-def get_external_subtitles_path(file, subtitle):
+def get_external_subtitles_path(file: str, subtitle: str) -> str | None:
     fld = os.path.dirname(file)
 
     if settings.general.subfolder == "current":
@@ -39,6 +40,22 @@ def get_external_subtitles_path(file, subtitle):
         path = None
 
     return path
+
+
+@dataclass(frozen=True)
+class ExternalSubtitleFile:
+    path: str
+    size: int
+
+
+def get_external_subtitle_file(file: str, subtitle: str) -> ExternalSubtitleFile | None:
+    path = get_external_subtitles_path(file, subtitle)
+    if path is None:
+        return None
+    try:
+        return ExternalSubtitleFile(path, os.stat(path).st_size)
+    except FileNotFoundError:
+        return None
 
 
 def guess_external_subtitles(dest_folder, subtitles, previously_indexed_subtitles_to_exclude=None):
