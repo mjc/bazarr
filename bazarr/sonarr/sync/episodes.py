@@ -19,6 +19,7 @@ from subtitles.indexer.series import store_subtitles, series_full_scan_subtitles
 from subtitles.mass_download import episode_download_subtitles
 from app.event_handler import event_stream
 from sonarr.info import get_sonarr_info
+from sonarr.episode_snapshot import complete_episode_snapshot
 from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications
 from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due_missing_languages_map
@@ -86,12 +87,10 @@ def sync_episodes(series_id, defer_search=False, is_signalr=False):
             # For Sonarr v3 or greater but lower than 4.0.9.2421, we need to update episodes to integrate the
             # episodeFile API endpoint results
             episodeFiles = get_episodesFiles_from_sonarr_api(apikey_sonarr=apikey_sonarr, series_id=series_id)
-            if episodeFiles:
-                for episode in episodes:
-                    if episodeFiles and episode['hasFile']:
-                        item = [x for x in episodeFiles if x['id'] == episode['episodeFileId']]
-                        if item:
-                            episode['episodeFile'] = item[0]
+            snapshot = complete_episode_snapshot(episodes, episodeFiles)
+            if snapshot is None:
+                return
+            episodes = snapshot.episodes
 
         sync_monitored = settings.sonarr.sync_only_monitored_series and settings.sonarr.sync_only_monitored_episodes
         if sync_monitored:

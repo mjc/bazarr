@@ -1,5 +1,5 @@
 [tool.basedpyright]
-include = ["bazarr/utilities"]
+include = ["bazarr/utilities", "bazarr/sonarr/episode_snapshot.py"]
 pythonVersion = "3.10"
 pythonPlatform = "All"
 extraPaths = ["bazarr", "custom_libs", "libs"]
