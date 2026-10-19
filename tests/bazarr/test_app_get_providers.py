@@ -1,7 +1,11 @@
 import datetime
 import inspect
+import socket
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
+import requests
 from subliminal_patch.core import Language
 
 from bazarr.app import get_providers
@@ -198,3 +202,62 @@ def test_reset_throttled_providers_also_resets_the_count(monkeypatch, _throttle_
     get_providers.reset_throttled_providers()
 
     assert "provider" not in _throttle_count
+
+
+@pytest.fixture
+def throttle_effects(monkeypatch, _throttle_count):
+    persisted = Mock()
+    tracker = Mock()
+    monkeypatch.setattr(get_providers, "tp", {})
+    monkeypatch.setattr(get_providers, "set_throttled_providers", persisted)
+    monkeypatch.setattr(get_providers, "event_tracker", tracker)
+    monkeypatch.setattr(get_providers, "update_throttled_provider", lambda: None)
+    return persisted, tracker
+
+
+@pytest.mark.parametrize("error_type", [requests.exceptions.Timeout, requests.exceptions.ConnectTimeout,
+                                       requests.exceptions.ReadTimeout, socket.timeout,
+                                       get_providers.TooManyRequests, get_providers.ServiceUnavailable,
+                                       get_providers.APIThrottled])
+def test_provider_throttle_counts_five_failures_before_disabling(error_type, throttle_effects):
+    persisted, tracker = throttle_effects
+    for count in range(1, 5):
+        get_providers.provider_throttle("provider", error_type("Temporary failure"))
+
+        assert "provider" not in get_providers.tp
+        assert get_providers.throttle_count["provider"]["count"] == count
+        persisted.assert_not_called()
+        tracker.track_throttling.assert_not_called()
+
+    get_providers.provider_throttle("provider", error_type("Temporary failure"))
+
+    assert get_providers.tp["provider"][0] == error_type.__name__
+    assert "provider" not in get_providers.throttle_count
+    persisted.assert_called_once()
+    tracker.track_throttling.assert_called_once()
+
+
+def test_provider_throttle_keeps_immediate_authentication_failures(throttle_effects):
+    persisted, tracker = throttle_effects
+
+    get_providers.provider_throttle("provider", get_providers.AuthenticationError("Invalid credentials"))
+
+    assert get_providers.tp["provider"][0] == "AuthenticationError"
+    assert "provider" not in get_providers.throttle_count
+    persisted.assert_called_once()
+    tracker.track_throttling.assert_called_once()
+
+
+def test_provider_throttle_preserves_incompatible_pickle_cleanup(monkeypatch, tmp_path, throttle_effects):
+    backend = get_providers.SZFileBackend({"appname": "provider-test", "app_cache_dir": str(tmp_path)})
+    backend.set("cached", "content")
+    backend.sync()
+    filenames = list(backend.all_filenames)
+    assert filenames
+    monkeypatch.setattr(get_providers, "subliminal_cache_region", SimpleNamespace(backend=backend))
+
+    get_providers.provider_throttle("provider", ValueError("unsupported pickle protocol: 99"))
+
+    assert all(not get_providers.os.path.exists(filename) for filename in filenames)
+    assert "provider" not in get_providers.tp
+    throttle_effects[0].assert_not_called()
