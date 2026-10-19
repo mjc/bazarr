@@ -30,7 +30,7 @@ def _translate(mocker, *, translator_result):
         sonarr_episode_id=None,
         radarr_id=1,
         metadata={},
-        job_id="job-1",
+        job_id=1,
     )
     return result, translator, postprocess
 
@@ -38,6 +38,6 @@ def _translate(mocker, *, translator_result):
 def test_translation_skips_postprocessing_when_service_returns_none(mocker):
     result, translator, postprocess = _translate(mocker, translator_result=None)
 
-    translator.translate.assert_called_once_with(job_id="job-1")
+    translator.translate.assert_called_once_with(job_id=1)
     assert result is None
     postprocess.assert_not_called()
