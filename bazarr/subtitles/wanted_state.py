@@ -1,12 +1,14 @@
 # coding=utf-8
 
-from sqlalchemy import Table
+from sqlalchemy import Select, Table
+from collections.abc import Iterable, Iterator
 
 from datetime import datetime
 from contextlib import contextmanager
 
 from sqlalchemy import case, func, or_
 from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Session, scoped_session
 
 from app.database import (
     TableEpisodes,
@@ -20,6 +22,7 @@ from app.database import (
     select,
 )
 from subtitles.adaptive_searching import (
+    AdaptiveSearchPolicy,
     get_adaptive_search_policy,
     get_active_search_languages,
     get_attempt_windows,
@@ -31,6 +34,18 @@ WANTED_STATE_QUERY_BATCH_SIZE = 5000
 # Leave room for the media-type parameter under SQLite's older bind limit.
 WANTED_STATE_ID_QUERY_BATCH_SIZE = 900
 FAILED_ATTEMPT_UPSERT_BATCH_SIZE = 100
+
+
+def append_missing_language_rows(
+    session: Session | scoped_session[Session], statement: Select[tuple[int, str]],
+    languages: dict[int, list[str]], codes: dict[str, str],
+) -> None:
+    with session.execute(statement).yield_per(500) as rows:
+        for media_id, language in rows:
+            values = languages.get(media_id)
+            if values is None:
+                values = languages[media_id] = []
+            values.append(codes.setdefault(language, language))
 
 
 def _iter_chunks(items, batch_size=None):
@@ -258,20 +273,22 @@ def missing_subtitles_need_calculation(calculated: bool) -> bool:
     return not calculated
 
 
-def get_missing_languages_map(media_type, media_ids):
+def get_missing_languages_map(media_type: str, media_ids: int | Iterable[int]) -> dict[int, list[str]]:
     media_ids = _normalize_media_ids(media_ids)
     missing_languages = {media_id: [] for media_id in media_ids}
     if not media_ids:
         return missing_languages
 
+    codes: dict[str, str] = {}
     for media_id_chunk in _iter_chunks(media_ids, WANTED_STATE_ID_QUERY_BATCH_SIZE):
-        for row in database.execute(
+        append_missing_language_rows(
+            database,
             select(TableMissingSubtitles.media_id, TableMissingSubtitles.language)
             .where(TableMissingSubtitles.media_type == media_type)
             .where(TableMissingSubtitles.media_id.in_(media_id_chunk))
-            .order_by(TableMissingSubtitles.id)
-        ):
-            missing_languages[row.media_id].append(row.language)
+            .order_by(TableMissingSubtitles.id),
+            missing_languages, codes,
+        )
 
     return missing_languages
 
@@ -372,7 +389,9 @@ def get_due_missing_languages_for_media(media_type, media_id, adaptive_search_po
     )
 
 
-def due_missing_languages_statement(media_type, adaptive_search_policy):
+def due_missing_languages_statement(
+    media_type: str, adaptive_search_policy: AdaptiveSearchPolicy | None,
+) -> Select[tuple[int, str]]:
     statement = (
         select(TableMissingSubtitles.media_id, TableMissingSubtitles.language)
         .where(TableMissingSubtitles.media_type == media_type)
@@ -411,8 +430,10 @@ def count_due_missing_media(media_type, adaptive_search_policy=None):
     ).scalar() or 0
 
 
-def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, batch_size=None,
-                                   eligible_media_ids=None):
+def iter_due_missing_languages_maps(
+    media_type: str, adaptive_search_policy: AdaptiveSearchPolicy | None = None, batch_size: int | None = None,
+    eligible_media_ids: Select[tuple[int]] | None = None,
+) -> Iterator[dict[int, list[str]]]:
     if batch_size is None:
         batch_size = WANTED_STATE_QUERY_BATCH_SIZE
     if batch_size < 1:
@@ -424,6 +445,7 @@ def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, bat
     if eligible_media_ids is not None:
         statement = statement.where(TableMissingSubtitles.media_id.in_(eligible_media_ids))
     last_media_id = None
+    codes: dict[str, str] = {}
     while True:
         # Keyset pagination bounds ORM buffering and tolerates searches deleting
         # earlier rows between batches. Fetch all languages for each selected ID.
@@ -436,54 +458,57 @@ def iter_due_missing_languages_maps(media_type, adaptive_search_policy=None, bat
         media_ids = database.execute(ids_statement).scalars().all()
         if not media_ids:
             return
-        due_languages = {}
+        due_languages: dict[int, list[str]] = {}
         for media_id_chunk in _iter_chunks(media_ids, WANTED_STATE_ID_QUERY_BATCH_SIZE):
-            for row in database.execute(
+            append_missing_language_rows(
+                database,
                 statement.where(TableMissingSubtitles.media_id.in_(media_id_chunk))
-                .order_by(TableMissingSubtitles.media_id, TableMissingSubtitles.id)
-            ):
-                due_languages.setdefault(row.media_id, []).append(row.language)
+                .order_by(TableMissingSubtitles.media_id, TableMissingSubtitles.id),
+                due_languages, codes,
+            )
         last_media_id = media_ids[-1]
         yield due_languages
 
 
-def get_due_missing_languages_map(media_type, media_ids=None, adaptive_search_policy=None):
-    has_media_filter = media_ids is not None
-    if has_media_filter:
+def get_due_missing_languages_map(
+    media_type: str, media_ids: Iterable[int] | None = None,
+    adaptive_search_policy: AdaptiveSearchPolicy | None = None,
+) -> dict[int, list[str]]:
+    if media_ids is not None:
         media_ids = list(dict.fromkeys(media_ids))
-        due_languages = {media_id: [] for media_id in media_ids}
+        due_languages: dict[int, list[str]] = {media_id: [] for media_id in media_ids}
         if not media_ids:
             return due_languages
     else:
         due_languages = {}
 
+    codes: dict[str, str] = {}
     if adaptive_search_policy is None:
         adaptive_search_policy = get_adaptive_search_policy()
 
     if adaptive_search_policy is None:
-        if has_media_filter:
+        if media_ids is not None:
             return get_missing_languages_map(media_type, media_ids)
 
-        for row in database.execute(
+        append_missing_language_rows(
+            database,
             select(TableMissingSubtitles.media_id, TableMissingSubtitles.language)
             .where(TableMissingSubtitles.media_type == media_type)
-            .order_by(TableMissingSubtitles.id)
-        ):
-            due_languages.setdefault(row.media_id, []).append(row.language)
+            .order_by(TableMissingSubtitles.id),
+            due_languages, codes,
+        )
         return due_languages
 
     statement = (
         due_missing_languages_statement(media_type, adaptive_search_policy)
         .order_by(TableMissingSubtitles.id)
     )
-    if has_media_filter:
+    if media_ids is not None:
         for media_id_chunk in _iter_chunks(media_ids, WANTED_STATE_ID_QUERY_BATCH_SIZE):
-            for row in database.execute(
-                statement.where(TableMissingSubtitles.media_id.in_(media_id_chunk))
-            ):
-                due_languages.setdefault(row.media_id, []).append(row.language)
+            append_missing_language_rows(
+                database, statement.where(TableMissingSubtitles.media_id.in_(media_id_chunk)), due_languages, codes,
+            )
     else:
-        for row in database.execute(statement):
-            due_languages.setdefault(row.media_id, []).append(row.language)
+        append_missing_language_rows(database, statement, due_languages, codes)
 
     return due_languages

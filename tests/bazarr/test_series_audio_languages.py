@@ -3,6 +3,7 @@ from pytest import MonkeyPatch
 from pytest_mock import MockerFixture
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
+import pytest
 
 from api import formatting, response_data
 from app.database import TableEpisodes, TableShows
@@ -10,6 +11,39 @@ from app.database import TableEpisodes, TableShows
 
 def selected_series(*series_ids: int) -> Select[tuple[int]]:
     return select(TableShows.sonarrSeriesId).where(TableShows.sonarrSeriesId.in_(series_ids))
+
+
+def test_audio_language_result_is_bounded_and_closed_on_parse_error(
+    memory_session: Session, monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(response_data, 'database', memory_session)
+    add_series(memory_session, 1)
+    add_episode(memory_session, 1, 1, "['English']")
+    memory_session.commit()
+    execute = memory_session.execute
+    results = []
+
+    def record(statement):
+        assert 'yield_per' not in statement.get_execution_options()
+        assert 'stream_results' not in statement.get_execution_options()
+        result = execute(statement)
+        yielded = result.yield_per
+
+        def bounded(size):
+            assert size == 500
+            return yielded(size)
+
+        monkeypatch.setattr(result, 'yield_per', bounded)
+        results.append(result)
+        return result
+
+    def fail_parse(value: str) -> tuple[str | None, ...]:
+        raise ValueError('Cannot parse this audio language')
+
+    monkeypatch.setattr(memory_session, 'execute', record)
+    with pytest.raises(ValueError, match='Cannot parse this audio language'):
+        response_data.load_series_audio_languages(selected_series(1), fail_parse)
+    assert len(results) == 1 and results[0].closed
 
 
 def add_series(session: Session, series_id: int, audio_language: str | None = '[]') -> None:

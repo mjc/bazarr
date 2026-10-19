@@ -13,6 +13,7 @@ from languages.custom_lang import CustomLanguage
 from languages.get_languages import language_from_alpha2
 from subliminal_patch import core
 from subtitles.pool import get_language_equals
+from subtitles.wanted_state import append_missing_language_rows
 from utilities.path_mappings import path_mappings
 
 
@@ -50,26 +51,27 @@ def load_series_audio_languages(
     series_ids: Select[tuple[int]], parse: Callable[[str], tuple[str | None, ...]],
 ) -> dict[int, tuple[str | None, ...]]:
     names: dict[int, set[str | None]] = defaultdict(set)
-    rows = database.execute(
+    with database.execute(
         select(TableEpisodes.sonarrSeriesId, TableEpisodes.audio_language)
         .where(TableEpisodes.sonarrSeriesId.in_(series_ids.correlate(None)))
         .distinct()
-    )
-    for series_id, value in rows:
-        names[series_id].update(parse(value or '[]'))
+    ).yield_per(500) as rows:
+        for series_id, value in rows:
+            names[series_id].update(parse(value or '[]'))
     return {series_id: tuple(values) for series_id, values in names.items()}
 
 
 def load_missing_languages(media_type: str, media_ids: Select[tuple[int]]) -> dict[int, list[str]]:
     languages: dict[int, list[str]] = defaultdict(list)
-    rows = database.execute(
+    codes: dict[str, str] = {}
+    append_missing_language_rows(
+        database,
         select(TableMissingSubtitles.media_id, TableMissingSubtitles.language)
         .where(TableMissingSubtitles.media_type == media_type)
         .where(TableMissingSubtitles.media_id.in_(media_ids.correlate(None)))
-        .order_by(TableMissingSubtitles.id)
+        .order_by(TableMissingSubtitles.id),
+        languages, codes,
     )
-    for media_id, language in rows:
-        languages[media_id].append(language)
     return languages
 
 
