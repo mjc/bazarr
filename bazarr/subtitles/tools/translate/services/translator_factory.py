@@ -5,7 +5,7 @@ TranslatorName = Literal['google_translate', 'gemini', 'lingarr']
 
 
 class Translator(Protocol):
-    def translate(self, job_id: int | str | None) -> str: ...
+    def translate(self, job_id: int | str | None) -> str | None: ...
 
 
 def resolve_translator_name(value: object) -> TranslatorName | None:
