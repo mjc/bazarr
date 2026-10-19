@@ -2,10 +2,9 @@
 
 from flask_restx import Resource, Namespace, reqparse
 from itertools import chain
-from operator import itemgetter
 
 from app.database import TableHistory, TableHistoryMovie, TableSettingsLanguages, database, select
-from languages.get_languages import alpha2_from_alpha3, language_from_alpha2, alpha3_from_alpha2
+from languages.get_languages import get_language_registry
 from languages.formatting import LanguageInfo
 
 from ..utils import authenticate, False_Keys
@@ -38,29 +37,28 @@ class Languages(Resource):
                 )
             )
             languages_dicts: list[MenuLanguage] = []
-            seen_codes: set[str | None] = set()
+            seen_codes: set[str] = set()
+            registry = get_language_registry()
             for token in languages:
                 language = token.split(':', 1)[0]
                 code2 = None
                 if len(language) == 2:
                     code2 = language
+                    record = registry.from_code2(language)
                 elif len(language) == 3:
-                    code2 = alpha2_from_alpha3(language)
+                    record = registry.from_code3(language)
+                    code2 = record.code2 if record is not None else None
                 else:
                     continue
 
-                if code2 not in seen_codes:
-                    try:
-                        languages_dicts.append({
-                            'code2': code2,
-                            'code3': alpha3_from_alpha2(code2),
-                            'name': language_from_alpha2(code2),
-                            # Compatibility: Use false temporarily
-                            'enabled': False
-                        })
-                        seen_codes.add(code2)
-                    except Exception:
-                        continue
+                if code2 is not None and code2 not in seen_codes:
+                    languages_dicts.append({
+                        'code2': code2,
+                        'code3': record.code3 if record is not None else None,
+                        'name': record.name if record is not None else None,
+                        'enabled': False,
+                    })
+                    seen_codes.add(code2)
         else:
             languages_dicts = [{
                 'name': x.name,
@@ -75,4 +73,4 @@ class Languages(Resource):
                 .order_by(TableSettingsLanguages.name))
                 .all()]
 
-        return sorted(languages_dicts, key=itemgetter('name'))
+        return sorted(languages_dicts, key=lambda language: language['name'] or '')
