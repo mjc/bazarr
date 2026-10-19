@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import logging
+import requests
 import os
 import operator
 
@@ -11,6 +12,7 @@ from dynaconf.utils.boxing import DynaBox
 from radarr.info import RadarrConnection, get_radarr_connection
 from radarr.movie_snapshot import MovieChange, MovieSyncPlan, MovieValues, is_movie, movie_file_size
 from utilities.arr_types import is_arr_tags
+from utilities.arr import arr_session
 from utilities.json_types import JsonValue
 from functools import reduce
 
@@ -146,8 +148,8 @@ def _default_movie_profile(general: DynaBox) -> int | None:
 
 
 def _prepare_movie_sync(connection: RadarrConnection, radarr: DynaBox,
-                        general: DynaBox) -> MovieSyncPlan | None:
-    payload = get_movies_from_radarr_api(apikey_radarr=connection.apikey, connection=connection)
+                        general: DynaBox, *, session: requests.Session | None = None) -> MovieSyncPlan | None:
+    payload = get_movies_from_radarr_api(apikey_radarr=connection.apikey, connection=connection, session=session)
     if not isinstance(payload, list):
         return None
     current: dict[int, RowMapping] = {
@@ -157,8 +159,8 @@ def _prepare_movie_sync(connection: RadarrConnection, radarr: DynaBox,
     }
     if not payload:
         return MovieSyncPlan([], list(current), 0, 0)
-    audio_profiles = get_profile_list(connection=connection)
-    tags = get_tags(connection=connection)
+    audio_profiles = get_profile_list(connection=connection, session=session)
+    tags = get_tags(connection=connection, session=session)
     if audio_profiles is None or not is_arr_tags(tags):
         return None
     language_profiles = get_language_profiles()
@@ -217,11 +219,13 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
         return
     radarr = settings.radarr
     general = settings.general
-    connection = get_radarr_connection(radarr)
-    if connection is None:
-        return
-    check_radarr_rootfolder()
-    plan = _prepare_movie_sync(connection, radarr, general)
+    with arr_session() as http:
+        connection = get_radarr_connection(radarr, session=http)
+        if connection is None:
+            return
+        check_radarr_rootfolder(connection=connection, session=http)
+        plan = _prepare_movie_sync(connection, radarr, general, session=http)
+    del http
     if plan is None:
         logging.debug('BAZARR Radarr movie sync returned an invalid payload. Skipping sync.')
         jobs_queue.update_job_name(job_id=job_id, new_job_name='Synced movies with Radarr')
@@ -301,30 +305,31 @@ def update_one_movie(movie_id: int | None, action: str, defer_search: bool = Fal
     if action not in ('updated', 'added'):
         return
     general = settings.general
-    connection = get_radarr_connection()
-    if connection is None:
-        return
-    movie_data = get_movies_from_radarr_api(apikey_radarr=connection.apikey, radarr_id=movie_id,
-                                           connection=connection)
-    if not isinstance(movie_data, dict) or type(movie_data.get('id')) is not int or movie_data['id'] != movie_id:
-        return
-    usable = _has_usable_movie_file(movie_data, general=general)
-    if usable is None:
-        return
-    movie = None
-    if usable:
-        if not is_movie(movie_data):
+    with arr_session() as http:
+        connection = get_radarr_connection(session=http)
+        if connection is None:
             return
-        audio_profiles = get_profile_list(connection=connection)
-        tags = get_tags(connection=connection)
-        if audio_profiles is None or not is_arr_tags(tags):
+        movie_data = get_movies_from_radarr_api(apikey_radarr=connection.apikey, radarr_id=movie_id,
+                                               connection=connection, session=http)
+        if not isinstance(movie_data, dict) or type(movie_data.get('id')) is not int or movie_data['id'] != movie_id:
             return
-        movie = movieParser(movie_data, action='update' if existing_movie else 'insert', tags_dict=tags,
-                            language_profiles=get_language_profiles(), movie_default_profile=_default_movie_profile(general),
-                            audio_profiles=audio_profiles, general=general, capabilities=connection.capabilities)
-        if movie is None:
+        usable = _has_usable_movie_file(movie_data, general=general)
+        if usable is None:
             return
-    del movie_data
+        movie = None
+        if usable:
+            if not is_movie(movie_data):
+                return
+            audio_profiles = get_profile_list(connection=connection, session=http)
+            tags = get_tags(connection=connection, session=http)
+            if audio_profiles is None or not is_arr_tags(tags):
+                return
+            movie = movieParser(movie_data, action='update' if existing_movie else 'insert', tags_dict=tags,
+                                language_profiles=get_language_profiles(), movie_default_profile=_default_movie_profile(general),
+                                audio_profiles=audio_profiles, general=general, capabilities=connection.capabilities)
+            if movie is None:
+                return
+    del movie_data, http
 
     if movie is None:
         if existing_movie is None:

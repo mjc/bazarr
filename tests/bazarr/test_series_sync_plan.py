@@ -17,7 +17,7 @@ def series_sync(memory_session, monkeypatch):
     memory_session.commit()
     monkeypatch.setattr(sync, 'database', memory_session)
     monkeypatch.setattr(sync, 'get_sonarr_connection', Mock(return_value=sonarr_connection()))
-    monkeypatch.setattr(sync, 'check_sonarr_rootfolder', lambda: None)
+    monkeypatch.setattr(sync, 'check_sonarr_rootfolder', lambda **kwargs: None)
     monkeypatch.setattr(sync.settings.general, 'serie_default_enabled', False)
     monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', False)
     monkeypatch.setattr(sync.settings.general, 'serie_tag_enabled', False)
@@ -57,7 +57,7 @@ def test_successful_empty_catalogue_authorizes_series_deletion(series_sync, monk
 
 def test_unknown_capabilities_prevent_catalogue_fetch(series_sync, monkeypatch):
     _, deleted, _ = series_sync
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: None)
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: None)
     fetch = Mock()
     monkeypatch.setattr(sync, 'get_series_from_sonarr_api', fetch)
     sync.update_series(job_id=1)

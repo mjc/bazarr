@@ -3,10 +3,12 @@
 import os
 import logging
 import operator
+import requests
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import RowMapping
 from dynaconf.utils.boxing import DynaBox
+from utilities.arr import arr_session
 from utilities.json_types import JsonValue
 from datetime import datetime
 from functools import reduce
@@ -37,9 +39,10 @@ def trace(message: str) -> None:
 
 
 def _load_episode_snapshot(connection: SonarrConnection, *, series_id: int | None = None,
-                           episode_id: int | None = None) -> EpisodeSnapshot | None:
+                           episode_id: int | None = None,
+                           session: requests.Session | None = None) -> EpisodeSnapshot | None:
     payload: JsonValue = get_episodes_from_sonarr_api(apikey_sonarr=connection.apikey, series_id=series_id,
-                                          episode_id=episode_id, connection=connection)
+                                          episode_id=episode_id, connection=connection, session=session)
     if episode_id is not None:
         if not isinstance(payload, dict):
             return None
@@ -53,13 +56,13 @@ def _load_episode_snapshot(connection: SonarrConnection, *, series_id: int | Non
     if separate:
         if series_id is not None:
             files = get_episodesFiles_from_sonarr_api(apikey_sonarr=connection.apikey, series_id=series_id,
-                                                       connection=connection)
+                                                       connection=connection, session=session)
         elif payload and isinstance(payload[0], dict) and payload[0].get('hasFile') is True:
             file_id = payload[0].get('episodeFileId')
             if type(file_id) is not int:
                 return None
             file = get_episodesFiles_from_sonarr_api(apikey_sonarr=connection.apikey,
-                                                      episode_file_id=file_id, connection=connection)
+                                                      episode_file_id=file_id, connection=connection, session=session)
             files = [file] if isinstance(file, dict) else None
         else:
             files = []
@@ -71,8 +74,8 @@ def _load_episode_snapshot(connection: SonarrConnection, *, series_id: int | Non
 
 
 def _prepare_episode_sync(connection: SonarrConnection, series_id: int, general: DynaBox,
-                          sync_monitored: bool) -> EpisodeSyncPlan | None:
-    snapshot = _load_episode_snapshot(connection, series_id=series_id)
+                          sync_monitored: bool, *, session: requests.Session | None = None) -> EpisodeSyncPlan | None:
+    snapshot = _load_episode_snapshot(connection, series_id=series_id, session=session)
     if snapshot is None:
         return None
     # Retain the existing conservative behavior for an empty episode catalogue.
@@ -113,19 +116,21 @@ def _prepare_episode_sync(connection: SonarrConnection, series_id: int, general:
 
 
 def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr: bool = False,
-                  *, connection: SonarrConnection | None = None) -> None:
+                  *, connection: SonarrConnection | None = None, session: requests.Session | None = None) -> None:
     logging.debug(f'BAZARR Starting episodes sync from Sonarr for series ID {series_id}.')
     sonarr = settings.sonarr
 
     if not series_id:
         return
     general = settings.general
-    connection = get_sonarr_connection(sonarr) if connection is None else connection
-    if connection is None:
-        logging.debug('BAZARR skipping episodes sync because Sonarr version is unknown')
-        return
-    sync_monitored = bool(sonarr.sync_only_monitored_series and sonarr.sync_only_monitored_episodes)
-    plan = _prepare_episode_sync(connection, series_id, general, sync_monitored)
+    with arr_session(session) as http:
+        connection = get_sonarr_connection(sonarr, session=http) if connection is None else connection
+        if connection is None:
+            logging.debug('BAZARR skipping episodes sync because Sonarr version is unknown')
+            return
+        sync_monitored = bool(sonarr.sync_only_monitored_series and sonarr.sync_only_monitored_episodes)
+        plan = _prepare_episode_sync(connection, series_id, general, sync_monitored, session=http)
+    del http
     if plan is None:
         logging.debug('BAZARR skipping episodes sync because Sonarr returned an incomplete snapshot')
         return
@@ -244,10 +249,12 @@ def sync_one_episode(episode_id: int, defer_search: bool = False, is_signalr: bo
         .where(TableEpisodes.sonarrEpisodeId == episode_id)) \
         .first()
 
-    connection = get_sonarr_connection()
-    if connection is None:
-        return
-    snapshot = _load_episode_snapshot(connection, episode_id=episode_id)
+    with arr_session() as http:
+        connection = get_sonarr_connection(session=http)
+        if connection is None:
+            return
+        snapshot = _load_episode_snapshot(connection, episode_id=episode_id, session=http)
+    del http
     if snapshot is None or not snapshot.episodes:
         logging.debug('BAZARR skipping episode sync because Sonarr returned an incomplete snapshot')
         return

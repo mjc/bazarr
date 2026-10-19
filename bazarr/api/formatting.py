@@ -28,6 +28,16 @@ def format_directories(directories: Iterable[DirectoryEntry | Mapping[str, JsonV
     ]
 
 
+def format_directory_response(payload: JsonValue) -> list[FileBrowserEntry]:
+    if not isinstance(payload, dict):
+        return []
+    directories = payload.get('directories')
+    if not isinstance(directories, list):
+        return []
+    return format_directories(item for item in directories
+                              if isinstance(item, dict) and 'name' in item and 'path' in item)
+
+
 @dataclass(frozen=True)
 class ResponseFormatter:
     show_desired_subtitles: bool

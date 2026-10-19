@@ -10,9 +10,9 @@ from tests.helpers.arr_fixtures import series_payload, sonarr_connection, movie_
 @pytest.fixture(autouse=True)
 def configured_sonarr_connection(monkeypatch):
     from sonarr.sync import series
-    monkeypatch.setattr(series, 'get_sonarr_connection', lambda *args: sonarr_connection())
+    monkeypatch.setattr(series, 'get_sonarr_connection', lambda *args, **kwargs: sonarr_connection())
     from radarr.sync import movies
-    monkeypatch.setattr(movies, 'get_radarr_connection', lambda *args: radarr_connection())
+    monkeypatch.setattr(movies, 'get_radarr_connection', lambda *args, **kwargs: radarr_connection())
 
 
 class _Result:
@@ -100,7 +100,7 @@ def test_update_series_runs_one_explicit_episode_sync(monkeypatch):
             sonarr=SimpleNamespace(apikey="sonarr-key", sync_only_monitored_series=False),
         ),
     )
-    monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda: None)
+    monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(series_sync, "get_series_from_sonarr_api", lambda **kwargs: [series_payload()])
     monkeypatch.setattr(series_sync, "get_profile_list", lambda **kwargs: [])
     monkeypatch.setattr(series_sync, "get_tags", lambda **kwargs: [])
@@ -162,7 +162,7 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
             ),
         ),
     )
-    monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda: None)
+    monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda **kwargs: None)
     # The API helper swallows ConnectionError/Timeout errors and returns None.
     monkeypatch.setattr(
         series_sync,
@@ -319,7 +319,7 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
             radarr=SimpleNamespace(apikey="radarr-key", sync_only_monitored_movies=False),
         ),
     )
-    monkeypatch.setattr(movies_sync, "check_radarr_rootfolder", lambda: None)
+    monkeypatch.setattr(movies_sync, "check_radarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(movies_sync, "get_profile_list", lambda **kwargs: [])
     monkeypatch.setattr(movies_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(movies_sync, "get_language_profiles", lambda: [])

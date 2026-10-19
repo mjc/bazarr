@@ -54,7 +54,9 @@ def arr(request, db):
             mock.patch.object(module, "settings", settings), \
             mock.patch.object(module, "path_mappings", path_mappings), \
             mock.patch.object(module, f"url_api_{arr_name}", return_value=f"http://{arr_name}/api/v3/"), \
-            mock.patch.object(module.requests, "get") as get:
+            mock.patch.object(module.requests.Session, "get") as get:
+
+        get.return_value.__enter__.return_value = get.return_value
 
         def add_series(path, number):
             if is_sonarr:

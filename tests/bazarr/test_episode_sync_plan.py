@@ -44,7 +44,7 @@ def live_sync(memory_session, monkeypatch):
                                      monitored='True'))
     memory_session.commit()
     monkeypatch.setattr(sync, 'database', memory_session)
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection())
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: connection())
     monkeypatch.setattr(sync.settings.sonarr, 'sync_only_monitored_series', False)
     monkeypatch.setattr(sync.settings.sonarr, 'sync_only_monitored_episodes', False)
     monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', False)
@@ -81,7 +81,7 @@ def test_missing_secondary_files_cannot_change_existing_rows(live_sync, monkeypa
 @pytest.mark.parametrize('single', [False, True])
 def test_unknown_version_cannot_fetch_or_reconcile(live_sync, monkeypatch, single):
     _, effects, statements = live_sync
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: None)
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: None)
     fetch = Mock()
     monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', fetch)
     sync.sync_one_episode(101) if single else sync.sync_episodes(7)
@@ -108,7 +108,7 @@ def test_invalid_catalogues_do_not_reconcile(live_sync, monkeypatch, invalid):
 @pytest.mark.parametrize('single', [False, True])
 def test_valid_snapshot_selects_file_api_and_updates_real_row(live_sync, monkeypatch, version, secondary, single):
     session, effects, _ = live_sync
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection(version))
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: connection(version))
     payload = episode()
     payload['title'] = 'Updated'
     if secondary:
@@ -185,7 +185,7 @@ def test_inline_monitored_lookup_uses_file_id_without_top_level_reference(live_s
     payload = episode()
     payload.pop('episodeFileId')
     payload['monitored'] = False
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: connection('4.0.9.2421'))
     monkeypatch.setattr(sync.settings.sonarr, 'sync_only_monitored_series', True)
     monkeypatch.setattr(sync.settings.sonarr, 'sync_only_monitored_episodes', True)
     monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', lambda **kwargs: [payload])
@@ -200,7 +200,7 @@ def test_series_audio_language_fallback_is_loaded_once_per_plan(live_sync, monke
     session.get(TableShows, 7).audio_language = "['English']"
     session.commit()
     monkeypatch.setattr(parser, 'database', session)
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: connection('4.0.9.2421'))
     first = episode()
     first['episodeFile'].pop('language')
     second = deepcopy(first)
@@ -231,7 +231,7 @@ def test_single_episode_accepts_authoritative_series_reassignment(live_sync, mon
     session.add(TableShows(sonarrSeriesId=8, title='New Series', path='/new'))
     session.commit()
     payload = dict(episode(), seriesId=8)
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: connection('4.0.9.2421'))
     monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', lambda **kwargs: payload)
     sync.sync_one_episode(101, defer_search=True)
     session.expire_all()
@@ -244,7 +244,7 @@ def test_episode_rechecks_current_file_before_deciding_to_skip_indexing(live_syn
     session, effects, _ = live_sync
     payload = episode()
     payload['title'] = 'Updated'
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: connection('4.0.9.2421'))
     monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', lambda **kwargs: [payload])
     prepare = sync._prepare_episode_sync
 
@@ -268,7 +268,7 @@ def test_comparison_rows_are_released_before_subtitle_indexing(live_sync, monkey
     session, _, _ = live_sync
     payload = episode()
     payload['episodeFile']['path'] = '/updated.mkv'
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: connection('4.0.9.2421'))
     monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', lambda **kwargs: [payload])
     references = []
     first_query = True
@@ -309,7 +309,7 @@ def test_episode_monitored_comparison_is_read_after_the_http_snapshot(live_sync,
                         .values(monitored='True'))
         return [payload]
 
-    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args: connection('4.0.9.2421'))
+    monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: connection('4.0.9.2421'))
     monkeypatch.setattr(sync, 'get_episodes_from_sonarr_api', fetch)
     monkeypatch.setattr(sync.settings.sonarr, 'sync_only_monitored_series', True)
     monkeypatch.setattr(sync.settings.sonarr, 'sync_only_monitored_episodes', True)

@@ -7,61 +7,72 @@ import logging
 from app.config import settings
 from utilities.path_mappings import path_mappings
 from app.database import TableMoviesRootfolder, TableMovies, database, delete, update, insert, select
-from radarr.info import url_api_radarr
+from radarr.info import RadarrConnection, url_api_radarr
+from utilities.arr import arr_session
+from utilities.json_types import JsonValue
 from constants import HEADERS
 
 
-def get_radarr_rootfolder():
-    apikey_radarr = settings.radarr.apikey
+def get_radarr_rootfolder(*, connection: RadarrConnection | None = None,
+                          session: requests.Session | None = None) -> list[JsonValue] | None:
     radarr_rootfolder = []
 
     # Get root folder data from Radarr
-    url_radarr_api_rootfolder = f"{url_api_radarr()}rootfolder?apikey={apikey_radarr}"
+    with arr_session(session) as http:
+        api_url = url_api_radarr(session=http) if connection is None else connection.api_url
+        apikey_radarr = settings.radarr.apikey if connection is None else connection.apikey
+        timeout = int(settings.radarr.http_timeout) if connection is None else connection.timeout
+        url_radarr_api_rootfolder = f"{api_url}rootfolder?apikey={apikey_radarr}"
 
-    try:
-        rootfolder = requests.get(url_radarr_api_rootfolder, timeout=int(settings.radarr.http_timeout), verify=False, headers=HEADERS)
-    except requests.exceptions.ConnectionError:
-        logging.exception("BAZARR Error trying to get rootfolder from Radarr. Connection Error.")
-        return []
-    except requests.exceptions.Timeout:
-        logging.exception("BAZARR Error trying to get rootfolder from Radarr. Timeout Error.")
-        return []
-    except requests.exceptions.RequestException:
-        logging.exception("BAZARR Error trying to get rootfolder from Radarr.")
-        return []
-    else:
-        for folder in rootfolder.json():
-            if any(item.path.startswith(folder['path']) for item in database.execute(
-                    select(TableMovies.path))
-                    .all()):
-                radarr_rootfolder.append({'id': folder['id'], 'path': folder['path']})
-        db_rootfolder = database.execute(
-            select(TableMoviesRootfolder.id, TableMoviesRootfolder.path))\
-            .all()
-        rootfolder_to_remove = [x for x in db_rootfolder if not
-                                next((item for item in radarr_rootfolder if item['id'] == x.id), False)]
-        rootfolder_to_update = [x for x in radarr_rootfolder if
-                                next((item for item in db_rootfolder if item.id == x['id']), False)]
-        rootfolder_to_insert = [x for x in radarr_rootfolder if not
-                                next((item for item in db_rootfolder if item.id == x['id']), False)]
+        try:
+            with http.get(url_radarr_api_rootfolder, timeout=timeout, verify=False, headers=HEADERS) as response:
+                pass
+        except requests.exceptions.ConnectionError:
+            logging.exception("BAZARR Error trying to get rootfolder from Radarr. Connection Error.")
+            return []
+        except requests.exceptions.Timeout:
+            logging.exception("BAZARR Error trying to get rootfolder from Radarr. Timeout Error.")
+            return []
+        except requests.exceptions.RequestException:
+            logging.exception("BAZARR Error trying to get rootfolder from Radarr.")
+            return []
+        else:
+            folders = response.json()
+            del response
 
-        for item in rootfolder_to_remove:
-            database.execute(
-                delete(TableMoviesRootfolder)
-                .where(TableMoviesRootfolder.id == item.id))
-        for item in rootfolder_to_update:
-            database.execute(
-                update(TableMoviesRootfolder)
-                .values(path=item['path'])
-                .where(TableMoviesRootfolder.id == item['id']))
-        for item in rootfolder_to_insert:
-            database.execute(
-                insert(TableMoviesRootfolder)
-                .values(id=item['id'], path=item['path']))
+    for folder in folders:
+        if any(item.path.startswith(folder['path']) for item in database.execute(
+                select(TableMovies.path))
+                .all()):
+            radarr_rootfolder.append({'id': folder['id'], 'path': folder['path']})
+    db_rootfolder = database.execute(
+        select(TableMoviesRootfolder.id, TableMoviesRootfolder.path))\
+        .all()
+    rootfolder_to_remove = [x for x in db_rootfolder if not
+                            next((item for item in radarr_rootfolder if item['id'] == x.id), False)]
+    rootfolder_to_update = [x for x in radarr_rootfolder if
+                            next((item for item in db_rootfolder if item.id == x['id']), False)]
+    rootfolder_to_insert = [x for x in radarr_rootfolder if not
+                            next((item for item in db_rootfolder if item.id == x['id']), False)]
+
+    for item in rootfolder_to_remove:
+        database.execute(
+            delete(TableMoviesRootfolder)
+            .where(TableMoviesRootfolder.id == item.id))
+    for item in rootfolder_to_update:
+        database.execute(
+            update(TableMoviesRootfolder)
+            .values(path=item['path'])
+            .where(TableMoviesRootfolder.id == item['id']))
+    for item in rootfolder_to_insert:
+        database.execute(
+            insert(TableMoviesRootfolder)
+            .values(id=item['id'], path=item['path']))
 
 
-def check_radarr_rootfolder():
-    get_radarr_rootfolder()
+def check_radarr_rootfolder(*, connection: RadarrConnection | None = None,
+                            session: requests.Session | None = None) -> None:
+    get_radarr_rootfolder(connection=connection, session=session)
     rootfolder = database.execute(
         select(TableMoviesRootfolder.id, TableMoviesRootfolder.path))\
         .all()

@@ -20,7 +20,7 @@ def movie_sync(memory_session, monkeypatch):
     memory_session.commit()
     monkeypatch.setattr(sync, 'database', memory_session)
     monkeypatch.setattr(sync, 'get_radarr_connection', Mock(return_value=radarr_connection()))
-    monkeypatch.setattr(sync, 'check_radarr_rootfolder', lambda: None)
+    monkeypatch.setattr(sync, 'check_radarr_rootfolder', lambda **kwargs: None)
     monkeypatch.setattr(sync.settings.general, 'movie_default_enabled', False)
     monkeypatch.setattr(sync.settings.general, 'parse_embedded_audio_track', False)
     monkeypatch.setattr(sync.settings.general, 'movie_tag_enabled', False)
@@ -60,7 +60,7 @@ def test_invalid_movie_catalogue_preserves_rows(movie_sync, monkeypatch, payload
 @pytest.mark.parametrize('single', [False, True])
 def test_unknown_capabilities_prevent_fetch_and_effects(movie_sync, monkeypatch, single):
     _, deleted, events, store, statements = movie_sync
-    monkeypatch.setattr(sync, 'get_radarr_connection', lambda *args: None)
+    monkeypatch.setattr(sync, 'get_radarr_connection', lambda *args, **kwargs: None)
     fetch = Mock()
     monkeypatch.setattr(sync, 'get_movies_from_radarr_api', fetch)
     sync.update_one_movie(1, 'updated') if single else sync.update_movies(job_id=1)

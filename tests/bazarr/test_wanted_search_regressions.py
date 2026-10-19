@@ -334,8 +334,8 @@ def test_unchanged_missing_state_notifies_rescan_without_rewriting(runtime_datab
 def configure_sync(monkeypatch, module, payload):
     movie_sync = module is radarr
     service = 'radarr' if movie_sync else 'sonarr'
-    monkeypatch.setattr(module, f'check_{service}_rootfolder', lambda: None)
-    monkeypatch.setattr(module, f'get_{service}_connection', lambda *args: radarr_connection() if movie_sync else sonarr_connection())
+    monkeypatch.setattr(module, f'check_{service}_rootfolder', lambda **kwargs: None)
+    monkeypatch.setattr(module, f'get_{service}_connection', lambda *args, **kwargs: radarr_connection() if movie_sync else sonarr_connection())
     monkeypatch.setattr(module, 'get_movies_from_radarr_api' if movie_sync else 'get_series_from_sonarr_api',
                         lambda *args, **kwargs: payload)
     for name in ['get_profile_list', 'get_tags', 'get_language_profiles']:

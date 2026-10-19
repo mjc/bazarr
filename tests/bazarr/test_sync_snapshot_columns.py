@@ -25,7 +25,7 @@ def test_sync_snapshot_omits_cached_video_metadata_and_preserves_other_columns(
     cached_metadata = b'cached metadata' * 65536
     if media_type == 'episode':
         model = TableEpisodes
-        monkeypatch.setattr(episodes, 'get_sonarr_connection', lambda *args: sonarr_connection())
+        monkeypatch.setattr(episodes, 'get_sonarr_connection', lambda *args, **kwargs: sonarr_connection())
         monkeypatch.setattr(episodes, '_load_episode_snapshot', lambda *args, **kwargs: EpisodeSnapshot([episode_payload(series_id=1, episode_id=1)]))
         memory_session.add(TableShows(sonarrSeriesId=1, path='/show', title='Show'))
         memory_session.flush()
@@ -37,13 +37,13 @@ def test_sync_snapshot_omits_cached_video_metadata_and_preserves_other_columns(
             episodes.sync_episodes(series_id=1)
     elif media_type == 'movie':
         model = TableMovies
-        monkeypatch.setattr(movies, 'get_radarr_connection', lambda *args: radarr_connection())
+        monkeypatch.setattr(movies, 'get_radarr_connection', lambda *args, **kwargs: radarr_connection())
         memory_session.add(TableMovies(radarrId=1, tmdbId=1, path='/movie.mkv', title='Movie',
                                        ffprobe_cache=cached_metadata))
         monkeypatch.setattr(movies, 'database', SimpleNamespace(execute=execute))
         monkeypatch.setattr(movies, 'settings', SimpleNamespace(
             general=SimpleNamespace(movie_default_enabled=False), radarr=SimpleNamespace(apikey='key')))
-        monkeypatch.setattr(movies, 'check_radarr_rootfolder', lambda: None)
+        monkeypatch.setattr(movies, 'check_radarr_rootfolder', lambda **kwargs: None)
         monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: [])
         for name in ('get_profile_list', 'get_tags', 'get_language_profiles'):
             monkeypatch.setattr(movies, name, lambda **kwargs: [])

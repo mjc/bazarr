@@ -73,7 +73,7 @@ def test_sonarr_capabilities_compare_numeric_revision_once(monkeypatch, version,
 
 @pytest.mark.parametrize('version', ['', 'unknown', '4.0', '4.0.x.1', '4.0.0.1.2', '４.0.0'])
 def test_invalid_version_has_no_capabilities(monkeypatch, version):
-    monkeypatch.setattr(sonarr.get_sonarr_info, 'version', lambda: version)
+    monkeypatch.setattr(sonarr.get_sonarr_info, 'version', lambda *args, **kwargs: version)
     assert sonarr.get_sonarr_info.capabilities() is None
 
 

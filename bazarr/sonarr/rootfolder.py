@@ -7,61 +7,72 @@ import logging
 from app.config import settings
 from app.database import TableShowsRootfolder, TableShows, database, insert, update, delete, select
 from utilities.path_mappings import path_mappings
-from sonarr.info import url_api_sonarr
+from sonarr.info import SonarrConnection, url_api_sonarr
+from utilities.arr import arr_session
+from utilities.json_types import JsonValue
 from constants import HEADERS
 
 
-def get_sonarr_rootfolder():
-    apikey_sonarr = settings.sonarr.apikey
+def get_sonarr_rootfolder(*, connection: SonarrConnection | None = None,
+                          session: requests.Session | None = None) -> list[JsonValue] | None:
     sonarr_rootfolder = []
 
     # Get root folder data from Sonarr
-    url_sonarr_api_rootfolder = f"{url_api_sonarr()}rootfolder?apikey={apikey_sonarr}"
+    with arr_session(session) as http:
+        api_url = url_api_sonarr(session=http) if connection is None else connection.api_url
+        apikey_sonarr = settings.sonarr.apikey if connection is None else connection.apikey
+        timeout = int(settings.sonarr.http_timeout) if connection is None else connection.timeout
+        url_sonarr_api_rootfolder = f"{api_url}rootfolder?apikey={apikey_sonarr}"
 
-    try:
-        rootfolder = requests.get(url_sonarr_api_rootfolder, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
-    except requests.exceptions.ConnectionError:
-        logging.exception("BAZARR Error trying to get rootfolder from Sonarr. Connection Error.")
-        return []
-    except requests.exceptions.Timeout:
-        logging.exception("BAZARR Error trying to get rootfolder from Sonarr. Timeout Error.")
-        return []
-    except requests.exceptions.RequestException:
-        logging.exception("BAZARR Error trying to get rootfolder from Sonarr.")
-        return []
-    else:
-        for folder in rootfolder.json():
-            if any(item.path.startswith(folder['path']) for item in database.execute(
-                    select(TableShows.path))
-                    .all()):
-                sonarr_rootfolder.append({'id': folder['id'], 'path': folder['path']})
-        db_rootfolder = database.execute(
-            select(TableShowsRootfolder.id, TableShowsRootfolder.path))\
-            .all()
-        rootfolder_to_remove = [x for x in db_rootfolder if not
-                                next((item for item in sonarr_rootfolder if item['id'] == x.id), False)]
-        rootfolder_to_update = [x for x in sonarr_rootfolder if
-                                next((item for item in db_rootfolder if item.id == x['id']), False)]
-        rootfolder_to_insert = [x for x in sonarr_rootfolder if not
-                                next((item for item in db_rootfolder if item.id == x['id']), False)]
+        try:
+            with http.get(url_sonarr_api_rootfolder, timeout=timeout, verify=False, headers=HEADERS) as response:
+                pass
+        except requests.exceptions.ConnectionError:
+            logging.exception("BAZARR Error trying to get rootfolder from Sonarr. Connection Error.")
+            return []
+        except requests.exceptions.Timeout:
+            logging.exception("BAZARR Error trying to get rootfolder from Sonarr. Timeout Error.")
+            return []
+        except requests.exceptions.RequestException:
+            logging.exception("BAZARR Error trying to get rootfolder from Sonarr.")
+            return []
+        else:
+            folders = response.json()
+            del response
 
-        for item in rootfolder_to_remove:
-            database.execute(
-                delete(TableShowsRootfolder)
-                .where(TableShowsRootfolder.id == item.id))
-        for item in rootfolder_to_update:
-            database.execute(
-                update(TableShowsRootfolder)
-                .values(path=item['path'])
-                .where(TableShowsRootfolder.id == item['id']))
-        for item in rootfolder_to_insert:
-            database.execute(
-                insert(TableShowsRootfolder)
-                .values(id=item['id'], path=item['path']))
+    for folder in folders:
+        if any(item.path.startswith(folder['path']) for item in database.execute(
+                select(TableShows.path))
+                .all()):
+            sonarr_rootfolder.append({'id': folder['id'], 'path': folder['path']})
+    db_rootfolder = database.execute(
+        select(TableShowsRootfolder.id, TableShowsRootfolder.path))\
+        .all()
+    rootfolder_to_remove = [x for x in db_rootfolder if not
+                            next((item for item in sonarr_rootfolder if item['id'] == x.id), False)]
+    rootfolder_to_update = [x for x in sonarr_rootfolder if
+                            next((item for item in db_rootfolder if item.id == x['id']), False)]
+    rootfolder_to_insert = [x for x in sonarr_rootfolder if not
+                            next((item for item in db_rootfolder if item.id == x['id']), False)]
+
+    for item in rootfolder_to_remove:
+        database.execute(
+            delete(TableShowsRootfolder)
+            .where(TableShowsRootfolder.id == item.id))
+    for item in rootfolder_to_update:
+        database.execute(
+            update(TableShowsRootfolder)
+            .values(path=item['path'])
+            .where(TableShowsRootfolder.id == item['id']))
+    for item in rootfolder_to_insert:
+        database.execute(
+            insert(TableShowsRootfolder)
+            .values(id=item['id'], path=item['path']))
 
 
-def check_sonarr_rootfolder():
-    get_sonarr_rootfolder()
+def check_sonarr_rootfolder(*, connection: SonarrConnection | None = None,
+                            session: requests.Session | None = None) -> None:
+    get_sonarr_rootfolder(connection=connection, session=session)
     rootfolder = database.execute(
         select(TableShowsRootfolder.id, TableShowsRootfolder.path))\
         .all()

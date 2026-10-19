@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import logging
+import requests
 from hashlib import sha256
 import semver
 from dataclasses import dataclass
@@ -33,7 +34,7 @@ class RadarrConnection:
 
 class GetRadarrInfo:
     @staticmethod
-    def version(configuration: DynaBox | None = None) -> str:
+    def version(configuration: DynaBox | None = None, *, session: requests.Session | None = None) -> str:
         if not settings.general.use_radarr:
             return ''
         radarr: DynaBox = settings.radarr if configuration is None else configuration
@@ -43,7 +44,7 @@ class GetRadarrInfo:
         cached_version = region.get(cache_key, expiration_time=60)
         if isinstance(cached_version, str) and cached_version and cached_version != 'unknown':
             return cached_version
-        version = discover_arr_version(base_url, radarr.apikey, int(radarr.http_timeout))
+        version = discover_arr_version(base_url, radarr.apikey, int(radarr.http_timeout), session=session)
         result = version if version is not None else 'unknown'
         region.set(cache_key, result)
         logging.debug('BAZARR got this Radarr version from its API: %s', result)
@@ -53,27 +54,28 @@ class GetRadarrInfo:
         version = parse_arr_version(self.version())
         return None if version is None else version.semver()
 
-    def capabilities(self, configuration: DynaBox | None = None) -> RadarrCapabilities | None:
-        version = parse_arr_version(self.version() if configuration is None else self.version(configuration))
+    def capabilities(self, configuration: DynaBox | None = None,
+                     *, session: requests.Session | None = None) -> RadarrCapabilities | None:
+        version = parse_arr_version(self.version(configuration, session=session))
         return None if version is None else RadarrCapabilities(version)
 
-    def is_legacy(self) -> bool:
+    def is_legacy(self, *, session: requests.Session | None = None) -> bool:
         """
         Call self.version() and parse the result to determine if it's a legacy version of Radarr
         @return: bool
         """
-        radarr_version = self.version()
+        radarr_version = self.version(session=session)
         if radarr_version.startswith('0.'):
             return True
         else:
             return False
 
-    def is_deprecated(self) -> bool:
+    def is_deprecated(self, *, session: requests.Session | None = None) -> bool:
         """
                 Call self.version() and parse the result to determine if it's a deprecated version of Radarr
                 @return: bool
                 """
-        radarr_version = self.version()
+        radarr_version = self.version(session=session)
         if radarr_version.startswith(('0.', '3.')):
             return True
         else:
@@ -83,9 +85,10 @@ class GetRadarrInfo:
 get_radarr_info = GetRadarrInfo()
 
 
-def get_radarr_connection(configuration: DynaBox | None = None) -> RadarrConnection | None:
+def get_radarr_connection(configuration: DynaBox | None = None,
+                          *, session: requests.Session | None = None) -> RadarrConnection | None:
     radarr: DynaBox = settings.radarr if configuration is None else configuration
-    capabilities = get_radarr_info.capabilities(radarr)
+    capabilities = get_radarr_info.capabilities(radarr, session=session)
     if capabilities is None:
         return None
     api_url = url_radarr(radarr) + ('/api/' if capabilities.legacy else '/api/v3/')
@@ -117,5 +120,5 @@ def url_radarr(configuration: DynaBox | None = None) -> str:
     return f"{protocol_radarr}://{radarr.ip}{port}{base_url}"
 
 
-def url_api_radarr() -> str:
-    return url_radarr() + f'/api{"/v3" if not get_radarr_info.is_legacy() else ""}/'
+def url_api_radarr(*, session: requests.Session | None = None) -> str:
+    return url_radarr() + f'/api{"/v3" if not get_radarr_info.is_legacy(session=session) else ""}/'

@@ -1,4 +1,6 @@
 from types import SimpleNamespace
+import json
+import requests
 
 import pytest
 from tests.helpers.arr_fixtures import series_payload, sonarr_connection, movie_payload, radarr_connection
@@ -13,12 +15,16 @@ import subtitles.sync as subtitle_sync
 
 @pytest.fixture(autouse=True)
 def configured_sonarr_connection(monkeypatch):
-    monkeypatch.setattr(sonarr_series, 'get_sonarr_connection', lambda *args: sonarr_connection())
-    monkeypatch.setattr(radarr_movies, 'get_radarr_connection', lambda *args: radarr_connection())
+    monkeypatch.setattr(sonarr_series, 'get_sonarr_connection', lambda *args, **kwargs: sonarr_connection())
+    monkeypatch.setattr(radarr_movies, 'get_radarr_connection', lambda *args, **kwargs: radarr_connection())
 
 
 def _response(payload):
-    return SimpleNamespace(json=lambda: payload, raise_for_status=lambda: None)
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps(payload).encode()
+    response._content_consumed = True
+    return response
 
 
 @pytest.fixture
@@ -30,8 +36,8 @@ def sync_job(monkeypatch, jobs_queue_factory):
 def configured_radarr(monkeypatch):
     monkeypatch.setattr(radarr_utils.settings.radarr, "apikey", "test")
     monkeypatch.setattr(radarr_utils.settings.radarr, "http_timeout", 30)
-    monkeypatch.setattr(radarr_utils, "url_api_radarr", lambda: "http://localhost:7878/api/v3/")
-    monkeypatch.setattr(radarr_utils.get_radarr_info, "is_legacy", lambda: True)
+    monkeypatch.setattr(radarr_utils, "url_api_radarr", lambda **kwargs: "http://localhost:7878/api/v3/")
+    monkeypatch.setattr(radarr_utils.get_radarr_info, "is_legacy", lambda **kwargs: True)
     return radarr_utils
 
 
@@ -39,9 +45,9 @@ def configured_radarr(monkeypatch):
 def configured_sonarr(monkeypatch):
     monkeypatch.setattr(sonarr_utils.settings.sonarr, "apikey", "test")
     monkeypatch.setattr(sonarr_utils.settings.sonarr, "http_timeout", 30)
-    monkeypatch.setattr(sonarr_utils, "url_api_sonarr", lambda: "http://localhost:8989/api/v3/")
-    monkeypatch.setattr(sonarr_utils.get_sonarr_info, "is_legacy", lambda: True)
-    monkeypatch.setattr(sonarr_utils.get_sonarr_info, "version", lambda: "4.0.0")
+    monkeypatch.setattr(sonarr_utils, "url_api_sonarr", lambda **kwargs: "http://localhost:8989/api/v3/")
+    monkeypatch.setattr(sonarr_utils.get_sonarr_info, "is_legacy", lambda **kwargs: True)
+    monkeypatch.setattr(sonarr_utils.get_sonarr_info, "version", lambda **kwargs: "4.0.0")
     return sonarr_utils
 
 
@@ -54,15 +60,15 @@ def configured_sonarr(monkeypatch):
     ],
 )
 def test_radarr_legacy_profile_parser_filters_malformed_languages(configured_radarr, monkeypatch, payload, expected):
-    monkeypatch.setattr(configured_radarr.requests, "get", lambda *args, **kwargs: _response(payload))
+    monkeypatch.setattr(configured_radarr.requests.Session, "get", lambda *args, **kwargs: _response(payload))
 
     assert configured_radarr.get_profile_list() == expected
 
 
 def test_radarr_v4_profile_parser_filters_malformed_nested_language_names(configured_radarr, monkeypatch):
-    monkeypatch.setattr(configured_radarr.get_radarr_info, "is_legacy", lambda: False)
+    monkeypatch.setattr(configured_radarr.get_radarr_info, "is_legacy", lambda **kwargs: False)
     monkeypatch.setattr(
-        configured_radarr.requests,
+        configured_radarr.requests.Session,
         "get",
         lambda *args, **kwargs: _response(
             [{"id": 1, "language": {"name": None}}, {"id": 2, "language": {"name": "Spanish"}}]
@@ -73,7 +79,7 @@ def test_radarr_v4_profile_parser_filters_malformed_nested_language_names(config
 
 
 def test_radarr_profile_parser_skips_missing_profile_id(configured_radarr, monkeypatch):
-    monkeypatch.setattr(configured_radarr.requests, "get", lambda *args, **kwargs: _response([{"language": "English"}]))
+    monkeypatch.setattr(configured_radarr.requests.Session, "get", lambda *args, **kwargs: _response([{"language": "English"}]))
 
     assert configured_radarr.get_profile_list() == []
 
@@ -88,16 +94,16 @@ def test_radarr_profile_parser_skips_missing_profile_id(configured_radarr, monke
     ],
 )
 def test_sonarr_legacy_profile_parser_filters_malformed_languages(configured_sonarr, monkeypatch, payload, expected):
-    monkeypatch.setattr(configured_sonarr.requests, "get", lambda *args, **kwargs: _response(payload))
+    monkeypatch.setattr(configured_sonarr.requests.Session, "get", lambda *args, **kwargs: _response(payload))
 
     assert configured_sonarr.get_profile_list() == expected
 
 
 def test_sonarr_v3_profile_parser_filters_malformed_names(configured_sonarr, monkeypatch):
-    monkeypatch.setattr(configured_sonarr.get_sonarr_info, "is_legacy", lambda: False)
-    monkeypatch.setattr(configured_sonarr.get_sonarr_info, "version", lambda: "3.0.0")
+    monkeypatch.setattr(configured_sonarr.get_sonarr_info, "is_legacy", lambda **kwargs: False)
+    monkeypatch.setattr(configured_sonarr.get_sonarr_info, "version", lambda **kwargs: "3.0.0")
     monkeypatch.setattr(
-        configured_sonarr.requests,
+        configured_sonarr.requests.Session,
         "get",
         lambda *args, **kwargs: _response([{"id": 1, "name": None}, {"id": 2, "name": "Profile1"}]),
     )
@@ -106,10 +112,10 @@ def test_sonarr_v3_profile_parser_filters_malformed_names(configured_sonarr, mon
 
 
 def test_sonarr_v3_profile_parser_returns_empty_for_all_malformed(configured_sonarr, monkeypatch):
-    monkeypatch.setattr(configured_sonarr.get_sonarr_info, "is_legacy", lambda: False)
-    monkeypatch.setattr(configured_sonarr.get_sonarr_info, "version", lambda: "3.0.0")
+    monkeypatch.setattr(configured_sonarr.get_sonarr_info, "is_legacy", lambda **kwargs: False)
+    monkeypatch.setattr(configured_sonarr.get_sonarr_info, "version", lambda **kwargs: "3.0.0")
     monkeypatch.setattr(
-        configured_sonarr.requests,
+        configured_sonarr.requests.Session,
         "get",
         lambda *args, **kwargs: _response([{"id": 1, "name": 123}, {"id": 2, "name": []}, {"id": 3}]),
     )
@@ -118,7 +124,7 @@ def test_sonarr_v3_profile_parser_returns_empty_for_all_malformed(configured_son
 
 
 def test_sonarr_profile_parser_skips_missing_profile_id(configured_sonarr, monkeypatch):
-    monkeypatch.setattr(configured_sonarr.requests, "get", lambda *args, **kwargs: _response([{"language": "English"}]))
+    monkeypatch.setattr(configured_sonarr.requests.Session, "get", lambda *args, **kwargs: _response([{"language": "English"}]))
 
     assert configured_sonarr.get_profile_list() == []
 
@@ -133,7 +139,7 @@ def test_missing_profile_does_not_load_catalog(monkeypatch):
 def test_radarr_movie_sync_finalizes_job_for_non_list_payload(monkeypatch, sync_job):
     names = []
 
-    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda: None)
+    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(radarr_movies.settings.general, "movie_default_enabled", False)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
     monkeypatch.setattr(
@@ -166,7 +172,7 @@ def test_radarr_movie_sync_skips_file_payloads_without_movie_id(monkeypatch, syn
     progress = []
     names = []
 
-    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda: None)
+    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(radarr_movies.settings.general, "movie_default_enabled", False)
     monkeypatch.setattr(radarr_movies.settings.general, "enable_strm_support", False)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
@@ -204,7 +210,7 @@ def test_radarr_movie_sync_handles_malformed_movie_file_fields(monkeypatch, sync
     names = []
     traces = []
 
-    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda: None)
+    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(radarr_movies.settings.general, "movie_default_enabled", False)
     monkeypatch.setattr(radarr_movies.settings.general, "enable_strm_support", True)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
@@ -247,7 +253,7 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
     names = []
     traces = []
 
-    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda: None)
+    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(radarr_movies.settings.general, "movie_default_enabled", False)
     monkeypatch.setattr(radarr_movies.settings.general, "enable_strm_support", False)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
@@ -306,7 +312,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
     traces = []
     parsed_movies = []
 
-    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda: None)
+    monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(radarr_movies.settings.general, "movie_default_enabled", False)
     monkeypatch.setattr(radarr_movies.settings.general, "enable_strm_support", False)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
@@ -360,7 +366,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
 def test_sonarr_series_sync_returns_for_non_list_payload(monkeypatch, sync_job):
     names = []
 
-    monkeypatch.setattr(sonarr_series, "check_sonarr_rootfolder", lambda: None)
+    monkeypatch.setattr(sonarr_series, "check_sonarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(
         sonarr_series,
         "get_series_from_sonarr_api",
@@ -394,7 +400,7 @@ def test_sonarr_series_sync_processes_valid_entries_in_mixed_payload(monkeypatch
     processed = []
     synced_series = []
 
-    monkeypatch.setattr(sonarr_series, "check_sonarr_rootfolder", lambda: None)
+    monkeypatch.setattr(sonarr_series, "check_sonarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(
         sonarr_series,
         "get_series_from_sonarr_api",

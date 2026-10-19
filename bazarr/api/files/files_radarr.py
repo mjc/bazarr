@@ -1,7 +1,7 @@
 # coding=utf-8
 
 from flask_restx import Resource, Namespace, reqparse, fields
-from api.formatting import format_directories
+from api.formatting import format_directory_response
 from api.response_types import FileBrowserEntry
 
 from radarr.filesystem import browse_radarr_filesystem
@@ -32,8 +32,6 @@ class BrowseRadarrFS(Resource):
         path: str = args['path']
         try:
             result = browse_radarr_filesystem(path)
-            if result is None:
-                raise ValueError
         except Exception:
             return []
-        return format_directories(result['directories'])
+        return format_directory_response(result)

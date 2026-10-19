@@ -188,7 +188,8 @@ def test_arr_filesystem_query_encodes_path(arr):
 
     with mock.patch.object(module, "settings", settings), \
             mock.patch.object(module, f"url_api_{arr}", return_value=f"http://{arr}/api/v3/"), \
-            mock.patch.object(module.requests, "get") as get:
+            mock.patch.object(module.requests.Session, "get") as get:
+        get.return_value.__enter__.return_value = get.return_value
         get.return_value.json.return_value = {"directories": []}
         getattr(module, f"browse_{arr}_filesystem")(path)
 
@@ -196,3 +197,26 @@ def test_arr_filesystem_query_encodes_path(arr):
     assert query["path"] == [path]
     assert query["includeFiles"] == ["false"]
     assert query["apikey"] == ["real-key"]
+
+
+@pytest.mark.parametrize('arr', ['sonarr', 'radarr'])
+@pytest.mark.parametrize('payload', [None, [], 'invalid', {}, {'directories': None},
+                                    {'directories': {}}, {'directories': 'invalid'}])
+def test_files_browser_ignores_invalid_directory_response(api_client, api_key, arr, payload):
+    with mock.patch(f'api.files.files_{arr}.browse_{arr}_filesystem', return_value=payload):
+        response = api_client.get(f'/api/files/{arr}', headers={'X-API-KEY': api_key})
+    assert response.status_code == 200
+    assert response.json == []
+
+
+@pytest.mark.parametrize('arr', ['sonarr', 'radarr'])
+def test_files_browser_keeps_valid_siblings_and_scalar_coercions(api_client, api_key, arr):
+    listing = {'directories': [None, 1, {}, {'name': 'missing path'}, {'path': '/missing name'},
+                               {'name': 'tv', 'path': '/tv'}, {'name': 12, 'path': None},
+                               {'name': None, 'path': 34}]}
+    with mock.patch(f'api.files.files_{arr}.browse_{arr}_filesystem', return_value=listing):
+        response = api_client.get(f'/api/files/{arr}', headers={'X-API-KEY': api_key})
+    assert response.status_code == 200
+    assert response.json == [{'name': 'tv', 'children': True, 'path': '/tv'},
+                             {'name': '12', 'children': True, 'path': None},
+                             {'name': None, 'children': True, 'path': '34'}]
