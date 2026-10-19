@@ -1,10 +1,8 @@
 # coding=utf-8
 
-import ast
-
 from flask_restx import Resource, Namespace, fields, marshal
 
-from app.database import TableMovies, database, select
+from app.database import TableMovies, get_media_tags
 
 from ..utils import authenticate
 
@@ -22,10 +20,5 @@ class MoviesTags(Resource):
     @api_ns_movies_tags.response(401, 'Not Authenticated')
     def get(self):
         """List all distinct tags assigned to any movie"""
-        rows = database.execute(
-            select(TableMovies.tags).where(TableMovies.tags.is_not(None))).all()
-        tags = set()
-        for row in rows:
-            if row.tags:
-                tags.update(ast.literal_eval(row.tags))
-        return marshal([{'tag': tag} for tag in sorted(tags)], self.get_response_model, envelope='data')
+        return marshal([{'tag': tag} for tag in get_media_tags(TableMovies.tags)],
+                       self.get_response_model, envelope='data')

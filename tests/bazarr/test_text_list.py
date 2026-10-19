@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from utilities.text_list import parse_text_list, parse_text_list_or_default
+from utilities.text_list import parse_string_list, parse_text_list, parse_text_list_or_default
 
 
 def test_parse_text_list_accepts_none_only_as_a_complete_token():
@@ -25,3 +25,20 @@ def test_parse_text_list_round_trips_python_repr_escapes():
 
     assert parse_text_list(repr(values)) == values
     assert parse_text_list(r"['\u2603', '\U0001f40d', '\x50']") == ["☃", "🐍", "P"]
+
+
+@pytest.mark.parametrize('values', [[], ['series', 'year'], ["'quoted'", '☃', r'back\slash', 'line\nbreak']])
+def test_parse_string_list_round_trips_strings_without_ast(values: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def reject_ast(value: str) -> None:
+        pytest.fail('Text lists must not be parsed as Python code')
+
+    monkeypatch.setattr('ast.literal_eval', reject_ast)
+    monkeypatch.setattr('ast.parse', reject_ast)
+
+    assert parse_string_list(repr(values)) == values
+
+
+@pytest.mark.parametrize('value', ['[None]', '[True]', '[1]', "['tag', None]", '[str(1)]', 'invalid'])
+def test_parse_string_list_rejects_non_string_entries(value: str) -> None:
+    with pytest.raises(ValueError):
+        parse_string_list(value)

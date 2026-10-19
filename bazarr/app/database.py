@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import List
 
 from sqlalchemy import create_engine, inspect, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, text, \
-    BigInteger, Boolean, Index
+    BigInteger, Boolean, Index, SQLColumnExpression
 # importing here to be indirectly imported in other modules later
 from sqlalchemy import update, delete, select, func, UniqueConstraint  # noqa W0611
 from sqlalchemy.orm import scoped_session, sessionmaker, mapped_column, close_all_sessions, declarative_base, Mapped
@@ -25,7 +25,7 @@ from flask_sqlalchemy import SQLAlchemy
 
 from .config import settings
 from .get_args import args
-from utilities.text_list import parse_text_list_or_default
+from utilities.text_list import parse_string_list, parse_text_list_or_default
 from utilities.path_mappings import path_mappings
 
 logger = logging.getLogger(__name__)
@@ -805,6 +805,15 @@ def is_indexed_subtitle_path(*subtitles_paths) -> bool:
             if database.execute(select(func.count()).select_from(table).where(table.path == subtitles_path)).scalar():
                 return True
     return False
+
+
+def get_media_tags(column: SQLColumnExpression[str | None]) -> list[str]:
+    values = database.execute(select(column).where(column.is_not(None)).distinct()).scalars()
+    tags: set[str] = set()
+    for value in values:
+        if value:
+            tags.update(parse_string_list(value))
+    return sorted(tags)
 
 
 def get_subtitles(sonarr_episode_id: int | None = None, radarr_id: int | None = None) -> List[dict]:

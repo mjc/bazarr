@@ -220,6 +220,15 @@ def parse_text_list(value: str | list[_T] | tuple[_T, ...]) -> list[str | None] 
     return _parse_repr_list(value)
 
 
+def parse_string_list(value: str) -> list[str]:
+    values: list[str] = []
+    for entry in parse_text_list(value):
+        if entry is None:
+            raise ValueError('Expected strings in text list')
+        values.append(entry)
+    return values
+
+
 def parse_text_list_or_default(value, default=None):
     """
     Parse a text-list string into a list, falling back to a default

@@ -1,12 +1,16 @@
 import ast
 from dataclasses import dataclass
+from importlib import import_module
 
 import pytest
 from flask import Flask
+from flask.testing import FlaskClient
 from sqlalchemy.orm import Session
 
 from api import utils
-from app.database import TableEpisodes, TableShows
+from app import database as app_database
+from app.database import TableEpisodes, TableHistory, TableHistoryMovie, TableMovies, TableShows
+from utilities.text_list import parse_string_list
 
 
 @dataclass
@@ -40,6 +44,74 @@ def test_response_lists_do_not_use_literal_eval(monkeypatch: pytest.MonkeyPatch)
 
     assert result['tags'] == ['English', "a'b", 'line\nfeed', '\\path']
     assert result['alternativeTitles'] == ['Título', 'a "title"']
+
+
+@pytest.mark.parametrize('kind', ['series', 'movies'])
+def test_tag_endpoints_do_not_use_literal_eval(
+    kind: str, api_client: FlaskClient, api_key: str, memory_session: Session, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = [repr(['z', 'a', "a'b"]), repr(['a']), None, repr(['z', 'a', "a'b"])]
+    for index, tags in enumerate(values, start=1):
+        memory_session.add_all([
+            TableShows(sonarrSeriesId=index, path=f'/shows/{index}', title='Show', tags=tags),
+            TableMovies(radarrId=index, path=f'/movies/{index}', title='Movie', tmdbId=str(index), tags=tags),
+        ])
+    memory_session.flush()
+    parsed_values: list[str] = []
+
+    def record_parse(value: str) -> list[str]:
+        parsed_values.append(value)
+        return parse_string_list(value)
+
+    monkeypatch.setattr(app_database, 'database', memory_session)
+    monkeypatch.setattr(app_database, 'parse_string_list', record_parse)
+    monkeypatch.setattr(ast, 'literal_eval', reject_literal_eval)
+
+    response = api_client.get(f'/api/{kind}/tags', headers={'X-API-KEY': api_key})
+
+    assert response.status_code == 200
+    assert response.get_json() == {'data': [{'tag': 'a'}, {'tag': "a'b"}, {'tag': 'z'}]}
+    assert len(parsed_values) == 2
+
+
+@pytest.mark.parametrize('kind', ['episodes', 'movies'])
+def test_history_does_not_load_unused_subtitles(
+    kind: str, api_client: FlaskClient, api_key: str, memory_session: Session, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory_session.add_all([
+        TableShows(sonarrSeriesId=1, path='/shows/1', title='Show', tags='[]'),
+        TableMovies(radarrId=1, path='/movies/1/movie.mkv', title='Movie', tmdbId='1', tags='[]'),
+    ])
+    memory_session.flush()
+    memory_session.add(TableEpisodes(sonarrEpisodeId=1, sonarrSeriesId=1, path='/shows/1/episode.mkv',
+                                     title='Episode', season=1, episode=1))
+    memory_session.flush()
+    for index in range(1, 4):
+        memory_session.add_all([
+            TableHistory(id=index, action=1, description='Downloaded', sonarrSeriesId=1, sonarrEpisodeId=1,
+                         language='en', matched="['series']", not_matched=None),
+            TableHistoryMovie(id=index, action=1, description='Downloaded', radarrId=1,
+                              language='en', matched="['title']", not_matched=None),
+        ])
+    memory_session.flush()
+    monkeypatch.setattr(import_module(f'api.{kind}.history'), 'database', memory_session)
+    monkeypatch.setattr('subtitles.upgrade.database', memory_session)
+
+    def reject_subtitle_lookup(sonarr_episode_id: int | None = None, radarr_id: int | None = None) -> None:
+        pytest.fail('History responses do not include subtitle lists')
+
+    monkeypatch.setattr(utils, 'get_subtitles', reject_subtitle_lookup)
+    monkeypatch.setattr(ast, 'literal_eval', reject_literal_eval)
+
+    response = api_client.get(f'/api/{kind}/history', headers={'X-API-KEY': api_key})
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body['total'] == 3
+    assert len(body['data']) == 3
+    for item in body['data']:
+        assert item['matches'] == (['series'] if kind == 'episodes' else ['title'])
+        assert item['dont_matches'] == []
 
 
 def test_series_audio_does_not_use_literal_eval(

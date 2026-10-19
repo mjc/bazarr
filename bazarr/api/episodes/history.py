@@ -1,7 +1,6 @@
 # coding=utf-8
 
 import operator
-import ast
 from functools import reduce
 
 from api.response_types import MediaResponse, MediaRow
@@ -9,6 +8,7 @@ from api.swaggerui import subtitles_language_model
 from app.database import (TableEpisodes, TableShows, TableHistory, TableBlacklist, database, select,
                           TableEpisodesSubtitles, func)
 from subtitles.upgrade import get_upgradable_episode_subtitles,  _language_still_desired
+from utilities.text_list import parse_string_list
 
 import pretty
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
@@ -149,7 +149,7 @@ class EpisodesHistory(Resource):
             # is this language still desired or should we simply skip this subtitles from upgrade logic?
             still_desired = _language_still_desired(x.language, x.profileId)
 
-            item = postprocess(record)
+            item = postprocess(record, subtitles=[])
 
             # Mark upgradable and get original_id
             item['original_id'] = upgradable_episodes_not_perfect.get(x.id)
@@ -174,16 +174,8 @@ class EpisodesHistory(Resource):
                 item["parsed_timestamp"] = x.timestamp.strftime('%x %X')
                 item['timestamp'] = pretty.date(x.timestamp)
 
-            # Parse matches and dont_matches
-            if x.matched:
-                item['matches'] = ast.literal_eval(x.matched)
-            else:
-                item['matches'] = []
-
-            if x.not_matched:
-                item['dont_matches'] = ast.literal_eval(x.not_matched)
-            else:
-                item['dont_matches'] = []
+            item['matches'] = parse_string_list(x.matched or '[]')
+            item['dont_matches'] = parse_string_list(x.not_matched or '[]')
 
             episode_history.append(item)
 
