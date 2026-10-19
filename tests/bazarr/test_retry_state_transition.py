@@ -111,7 +111,7 @@ def test_indexer_updates_normalized_missing_languages_before_sync_checks(
     ])
     indexer = importlib.import_module('subtitles.indexer.movies' if kind == 'movies' else 'subtitles.indexer.series')
     bind_wanted_database(indexer, kind)
-    monkeypatch.setattr(indexer, 'get_profile', lambda **kwargs: {'items': [{
+    monkeypatch.setattr(indexer, 'get_profile', lambda **kwargs: {'cutoff': None, 'items': [{
         'language': 'en', 'hi': 'False', 'forced': 'False', 'audio_exclude': 'False', 'audio_only_include': 'False',
     }]})
     monkeypatch.setattr(indexer, 'event_stream', lambda **kwargs: None)
