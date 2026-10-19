@@ -120,7 +120,12 @@ def get_health_issues() -> list[HealthIssue]:
             # ignore profiles that don't have a cutoff set
             continue
         languages_profile_ids = []
-        profile_items, _ = parse_profile_items(languages_profile.profileType, languages_profile.items)
+        parsed = parse_profile_items(languages_profile.profileType, languages_profile.items)
+        if parsed is None:
+            health_issues.append({'object': languages_profile.name,
+                                  'issue': 'This languages profile has malformed items. Edit this profile.'})
+            continue
+        profile_items, _ = parsed
         for items in profile_items:
             if items['id'] in languages_profile_ids:
                 health_issues.append({'object': languages_profile.name,

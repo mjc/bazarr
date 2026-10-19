@@ -74,29 +74,16 @@ PROFILE = {
 }
 
 
-def test_language_still_desired_false_without_profile():
-    with mock.patch.object(upgrade, "get_profiles_list") as get_profile:
-        assert upgrade._language_still_desired("en", None) is False
-
-    get_profile.assert_not_called()
-
-
 def test_language_still_desired_matches_profile_item():
-    with mock.patch.object(upgrade, "get_profiles_list", return_value=PROFILE):
-        assert upgrade._language_still_desired("fr", 1) is True
-        assert upgrade._language_still_desired("de", 1) is False
-
-
-def test_language_still_desired_false_when_profile_missing():
-    with mock.patch.object(upgrade, "get_profiles_list", return_value=None):
-        assert upgrade._language_still_desired("fr", 99) is False
+    assert upgrade._language_still_desired("fr", PROFILE) is True
+    assert upgrade._language_still_desired("de", PROFILE) is False
 
 
 def test_is_hi_required_true_only_for_hi_items():
-    with mock.patch.object(upgrade, "get_profiles_list", return_value=PROFILE):
-        assert upgrade._is_hi_required("en", 1) is True
-        assert upgrade._is_hi_required("en:hi", 1) is True
-        assert upgrade._is_hi_required("fr", 1) is False
+    assert upgrade._is_hi_required("en", PROFILE) is True
+    assert upgrade._is_hi_required("en:hi", PROFILE) is True
+    assert upgrade._is_hi_required("fr", PROFILE) is False
+    assert upgrade._is_hi_required(None, PROFILE) is False
 
 
 # Minimum score in the upgrade jobs
@@ -125,9 +112,9 @@ def job_environment():
 
     patches = {
         "jobs_queue": mock.patch.object(upgrade, "jobs_queue", jobs_queue),
+        "profiles": mock.patch.object(upgrade, "list_profiles", return_value=[dict(PROFILE, profileId=1)]),
         "providers": mock.patch.object(upgrade, "get_providers", return_value=["opensubtitles"]),
         "audio": mock.patch.object(upgrade, "get_audio_profile_languages", return_value=[]),
-        "hi": mock.patch.object(upgrade, "_is_hi_required", return_value=False),
         "generate": mock.patch.object(upgrade, "generate_subtitles", return_value=[]),
         "store": mock.patch.object(upgrade, "store_subtitles"),
         "store_movie": mock.patch.object(upgrade, "store_subtitles_movie"),
@@ -226,4 +213,46 @@ def test_episode_job_skips_subtitles_missing_from_disk(upgrade_settings, job_env
 
     _run_job([row], upgrade.upgrade_episodes_subtitles, {10: None})
 
+    job_environment.generate.assert_not_called()
+
+
+@pytest.mark.parametrize("runner,row_factory", [
+    (upgrade.upgrade_episodes_subtitles, _episode_row),
+    (upgrade.upgrade_movies_subtitles, _movie_row),
+])
+def test_upgrade_reuses_profiles_and_preserves_language_selection(
+        runner, row_factory, upgrade_settings, job_environment):
+    rows = [row_factory(id=1, language="en:hi"), row_factory(id=2, language="en:hi"),
+            row_factory(id=3, language="de"), row_factory(id=4, language="en:hi", profileId=99)]
+    with mock.patch.object(upgrade, "database") as database, \
+            mock.patch.object(upgrade, "list_profiles", create=True,
+                              return_value=[dict(PROFILE, profileId=1)]) as profiles, \
+            mock.patch.object(upgrade, "get_upgradable_episode_subtitles", return_value=dict.fromkeys(range(1, 5))), \
+            mock.patch.object(upgrade, "get_upgradable_movies_subtitles", return_value=dict.fromkeys(range(1, 5))):
+        database.execute.return_value.all.return_value = rows
+        runner(job_id="job-1")
+
+    profiles.assert_called_once_with()
+    assert job_environment.generate.call_count == 2
+    assert all(call.args[1] == [("en", "True", "False")]
+               for call in job_environment.generate.call_args_list)
+
+
+@pytest.mark.parametrize("runner,row_factory", [
+    (upgrade.upgrade_episodes_subtitles, _episode_row),
+    (upgrade.upgrade_movies_subtitles, _movie_row),
+])
+@pytest.mark.parametrize("profile_id", [None, 99])
+def test_upgrade_skips_missing_profiles_before_language_helpers(
+        runner, row_factory, profile_id, upgrade_settings, job_environment):
+    with mock.patch.object(upgrade, "database") as database, \
+            mock.patch.object(upgrade, "_language_still_desired", wraps=upgrade._language_still_desired) as desired, \
+            mock.patch.object(upgrade, "_is_hi_required", wraps=upgrade._is_hi_required) as hi, \
+            mock.patch.object(upgrade, "get_upgradable_episode_subtitles", return_value={1: None}), \
+            mock.patch.object(upgrade, "get_upgradable_movies_subtitles", return_value={1: None}):
+        database.execute.return_value.all.return_value = [row_factory(id=1, profileId=profile_id)]
+        runner(job_id="job-1")
+
+    desired.assert_not_called()
+    hi.assert_not_called()
     job_environment.generate.assert_not_called()

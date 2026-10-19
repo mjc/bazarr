@@ -21,7 +21,7 @@ from radarr.notify import notify_radarr
 from sonarr.history import history_log
 from sonarr.notify import notify_sonarr
 from languages.custom_lang import CustomLanguage
-from app.database import (TableEpisodes, TableMovies, TableShows, get_profiles_list, get_audio_profile_languages,
+from app.database import (TableEpisodes, TableMovies, TableShows, get_profile, get_audio_profile_languages,
                           database, select)
 from app.jobs_queue import jobs_queue
 from app.event_handler import event_stream
@@ -35,14 +35,6 @@ from .sync import sync_subtitles
 from .post_processing import postprocessing
 from plex.operations import plex_set_movie_added_date_now, plex_set_episode_added_date_now, plex_refresh_item
 from jellyfin.operations import jellyfin_refresh_item
-
-
-def _get_profile_original_format(profile_id):
-    profile = get_profiles_list(profile_id)
-    if not isinstance(profile, dict):
-        return False
-
-    return bool(profile.get("originalFormat", 0))
 
 
 def _get_audio_language_payload(audio_languages):
@@ -104,7 +96,7 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
             .first()
 
         if episode_metadata:
-            use_original_format = _get_profile_original_format(episode_metadata.profileId)
+            profile_id = episode_metadata.profileId
         else:
             return
     else:
@@ -115,10 +107,12 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
             .first()
 
         if movie_metadata:
-            use_original_format = _get_profile_original_format(movie_metadata.profileId)
+            profile_id = movie_metadata.profileId
         else:
             return
 
+    profile = get_profile(profile_id)
+    use_original_format = bool(profile and profile.get("originalFormat", 0))
     audio_language = _get_audio_language_payload(get_audio_profile_languages(audio_language))
 
     sub = Subtitle(

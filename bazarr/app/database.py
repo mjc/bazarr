@@ -23,6 +23,7 @@ from alembic.migration import MigrationContext
 
 from flask_sqlalchemy import SQLAlchemy
 
+from .language_profiles import Profile, parse_profile_items
 from .config import settings
 from .get_args import args
 from utilities.text_list import parse_text_list_or_default
@@ -517,24 +518,8 @@ def get_exclusion_clause(exclusion_type):
     return where_clause
 
 
-def parse_profile_items(profile_type, raw_items):
-    """
-    Return (items, groups) for a languages profile row.
-
-    Basic profiles store a flat list of items and groups is None. Enhanced profiles store
-    {"groups": [...]}. For those, items is the flat list of every item across all groups, so
-    consumers that only need the wanted languages keep working, and groups keeps the structure.
-    """
-    data = json.loads(raw_items)
-    if profile_type == PROFILE_TYPE_ENHANCED and isinstance(data, dict):
-        groups = data.get('groups') or []
-        items = [item for group in groups for item in (group.get('items') or [])]
-        return items, groups
-    return data, None
-
-
 @region.cache_on_arguments()
-def update_profile_id_list():
+def list_profiles() -> list[Profile]:
     profiles = []
     for x in database.execute(
             select(TableLanguagesProfiles.profileId,
@@ -546,8 +531,11 @@ def update_profile_id_list():
                    TableLanguagesProfiles.originalFormat,
                    TableLanguagesProfiles.tag,
                    TableLanguagesProfiles.profileType)).all():
-        items, groups = parse_profile_items(x.profileType, x.items)
-        profile = {
+        parsed = parse_profile_items(x.profileType, x.items)
+        if parsed is None:
+            continue
+        items, groups = parsed
+        profile: Profile = {
             'profileId': x.profileId,
             'name': x.name,
             'cutoff': x.cutoff,
@@ -564,52 +552,10 @@ def update_profile_id_list():
     return profiles
 
 
-def get_profiles_list(profile_id=None):
-    profile_id_list = update_profile_id_list()
-
-    if profile_id and profile_id != 'null':
-        for profile in profile_id_list:
-            if profile['profileId'] == profile_id:
-                return profile
-    else:
-        return profile_id_list
-
-
-def get_desired_languages(profile_id):
-    for profile in update_profile_id_list():
-        if profile['profileId'] == profile_id:
-            return [x['language'] for x in profile['items']]
-
-
-def get_profile_id_name(profile_id):
-    for profile in update_profile_id_list():
-        if profile['profileId'] == profile_id:
-            return profile['name']
-
-
-def get_profile_cutoff(profile_id):
-    try:
-        profile_id = int(profile_id)
-    except (TypeError, ValueError):
+def get_profile(profile_id: int | None) -> Profile | None:
+    if profile_id is None:
         return None
-
-    for profile in update_profile_id_list():
-        if profile.get('profileId') != profile_id:
-            continue
-        cutoff = profile.get('cutoff')
-        items = profile.get('items')
-        if not cutoff or not isinstance(items, list):
-            return None
-        items = [item for item in items if isinstance(item, dict)]
-        if cutoff == 65535:
-            return items or None
-        if profile.get('groups') is not None:
-            # Enhanced profiles: the cutoff is a group id, so the cutoff items are all items of that group.
-            group = next((group for group in profile['groups'] if group.get('id') == cutoff), None)
-            group_items = [item for item in ((group or {}).get('items') or []) if isinstance(item, dict)]
-            return group_items or None
-        return next(([item] for item in items if item.get('id') == cutoff), None)
-    return None
+    return next((profile for profile in list_profiles() if profile['profileId'] == profile_id), None)
 
 
 def get_audio_profile_languages(audio_languages_list_str):
@@ -635,42 +581,6 @@ def get_audio_profile_languages(audio_languages_list_str):
                 )
 
     return audio_languages
-
-
-def get_profile_id(series_id=None, episode_id=None, movie_id=None):
-    if series_id:
-        data = database.execute(
-            select(TableShows.profileId)
-            .where(TableShows.sonarrSeriesId == series_id))\
-            .first()
-        if data:
-            return data.profileId
-    elif episode_id:
-        data = database.execute(
-            select(TableShows.profileId)
-            .select_from(TableShows)
-            .join(TableEpisodes)
-            .where(TableEpisodes.sonarrEpisodeId == episode_id)) \
-            .first()
-        if data:
-            return data.profileId
-
-    elif movie_id:
-        data = database.execute(
-            select(TableMovies.profileId)
-            .where(TableMovies.radarrId == movie_id))\
-            .first()
-        if data:
-            return data.profileId
-
-    return None
-
-
-def convert_list_to_clause(arr: list):
-    if isinstance(arr, list):
-        return f"({','.join(str(x) for x in arr)})"
-    else:
-        return ""
 
 
 def upgrade_languages_profile_values():

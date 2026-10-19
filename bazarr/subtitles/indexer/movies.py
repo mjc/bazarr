@@ -8,7 +8,7 @@ from subliminal_patch import core, search_external_subtitles
 from sqlalchemy import not_, tuple_
 
 from languages.custom_lang import CustomLanguage
-from app.database import get_profiles_list, get_profile_cutoff, TableMovies, get_audio_profile_languages, database, \
+from app.database import get_profile, TableMovies, get_audio_profile_languages, database, \
     update, select, TableMoviesSubtitles, get_subtitles, delete, insert
 from languages.get_languages import alpha2_from_alpha3, get_language_set
 from app.config import settings
@@ -271,24 +271,23 @@ def list_missing_subtitles_movies(
             matches_audio = lambda language: language['language'] in audio_language_codes
 
             # get desired subtitles
-            desired_subtitles_temp = get_profiles_list(profile_id=movie_subtitles.profileId)
-            profile_items = desired_subtitles_temp.get('items', []) if isinstance(desired_subtitles_temp, dict) else []
-            if not isinstance(profile_items, (list, tuple)):
-                profile_items = []
+            desired_subtitles_temp = get_profile(profile_id=movie_subtitles.profileId)
+            profile_items = desired_subtitles_temp['items'] if desired_subtitles_temp is not None else []
 
             # get existing subtitles
             actual_subtitles_temp = get_subtitles(radarr_id=movie_subtitles.radarrId) or []
             if not use_embedded_subs:
                 actual_subtitles_temp = [x for x in actual_subtitles_temp if isinstance(x, dict) and x.get('path')]
 
-            profile_groups = desired_subtitles_temp.get('groups') if isinstance(desired_subtitles_temp, dict) else None
+            profile_groups = desired_subtitles_temp.get('groups') if desired_subtitles_temp is not None else None
             if profile_groups is not None:
                 missing_subtitles_list = calculate_enhanced_missing_subtitles(
                     profile_groups, desired_subtitles_temp.get('cutoff'), actual_subtitles_temp, matches_audio,
                     lang_equals)
             else:
                 missing_subtitles_list = calculate_missing_subtitles(
-                    profile_items, get_profile_cutoff(profile_id=movie_subtitles.profileId), actual_subtitles_temp,
+                    profile_items, desired_subtitles_temp.get('cutoff') if desired_subtitles_temp is not None else None,
+                    actual_subtitles_temp,
                     matches_audio, lang_equals)
             missing_subtitles_text = str(missing_subtitles_list)
 

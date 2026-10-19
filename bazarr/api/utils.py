@@ -13,7 +13,7 @@ from subliminal_patch import core
 
 from app.config import settings, base_url
 from languages.get_languages import language_from_alpha2, alpha3_from_alpha2
-from app.database import (get_audio_profile_languages, get_desired_languages, get_subtitles, database, TableEpisodes,
+from app.database import (get_audio_profile_languages, get_profile, get_subtitles, database, TableEpisodes,
                           TableShows, select)
 from subtitles.pool import get_language_equals
 from utilities.helper import bool_map
@@ -189,7 +189,8 @@ def postprocess(item, subtitles=None):
 
     if settings.general.embedded_subs_show_desired:
         if item.get('profileId'):
-            desired_lang_list = get_desired_languages(item['profileId'])
+            profile = get_profile(item['profileId'])
+            desired_lang_list = [language['language'] for language in profile['items']]
 
             # Get language equals configuration
             lang_equals = core._LanguageEquals(get_language_equals())

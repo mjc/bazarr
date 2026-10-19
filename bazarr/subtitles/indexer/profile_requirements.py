@@ -1,6 +1,7 @@
 # coding=utf-8
 
 from subliminal_patch import core
+from app.language_profiles import ProfileItem
 
 from constants import HI_EXCLUDED
 from languages.custom_lang import CustomLanguage
@@ -163,13 +164,16 @@ def _format_missing(missing_subtitles_list):
     return missing_subtitles_output_list
 
 
-def calculate_missing_subtitles(profile_items, cutoff_items, subtitles, matches_audio, lang_equals):
+def calculate_missing_subtitles(profile_items: list[ProfileItem], cutoff: int | None, subtitles, matches_audio,
+                                lang_equals) -> list[str]:
     """
     Return the missing subtitles of one media item for a basic profile.
 
-    profile_items is the profile's raw item list, cutoff_items the items returned by get_profile_cutoff(),
-    and subtitles the stored subtitles of the media item. Nothing is missing once the cutoff is met.
+    The cutoff is an item id (65535 for any item). Nothing is missing once it is met.
     """
+    cutoff_items = profile_items if cutoff == ANY_CUTOFF else [
+        item for item in profile_items if cutoff and item['id'] == cutoff
+    ]
     desired_subtitles = get_desired_subtitles(profile_items, matches_audio)
     actual_subtitles = get_actual_subtitles(subtitles)
     expanded_actual_subtitles = expand_actual_subtitles(actual_subtitles, lang_equals)

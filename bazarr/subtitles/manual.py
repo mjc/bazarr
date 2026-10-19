@@ -7,6 +7,8 @@ import logging
 import subliminal
 
 from subzero.language import Language
+from subzero.cache_backends.file import SZFileBackend
+from subliminal_patch.video import Video
 from subliminal_patch.core import save_subtitles
 from subliminal_patch.core_persistent import list_all_subtitles, download_subtitles
 from subliminal_patch.score import compute_score, DEFAULT_SCORES
@@ -16,8 +18,8 @@ from app.config import settings, get_array_from
 from constants import HI_EXCLUDED
 from utilities.helper import get_target_folder, force_unicode
 from utilities.path_mappings import path_mappings
-from app.database import (database, get_profiles_list, select, TableEpisodes, TableShows, get_audio_profile_languages,
-                          get_profile_id, TableMovies)
+from app.database import (database, get_profile, select, TableEpisodes, TableShows, get_audio_profile_languages,
+                          TableMovies)
 from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications, send_notifications_movie
 from sonarr.history import history_log
@@ -66,7 +68,7 @@ def manual_search(path, profile_id, providers, sceneName, title, media_type):
     else:
         logging.info("BAZARR All providers are throttled")
         return 'All providers are throttled'
-    if video:
+    if isinstance(video, Video):
         try:
             if providers:
                 subtitles = list_all_subtitles([video], language_set, pool)
@@ -157,7 +159,9 @@ def manual_search(path, profile_id, providers, sceneName, title, media_type):
             logging.debug(f'BAZARR {len(final_subtitles)} Subtitles have been found for this file: {path}')
             logging.debug(f'BAZARR Ended searching Subtitles for this file: {path}')
 
-    subliminal.region.backend.sync()
+    backend = subliminal.region.backend
+    if isinstance(backend, SZFileBackend):
+        backend.sync()
 
     return final_subtitles
 
@@ -179,29 +183,23 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
 
     # check if trying to download HI for an excluded language
     if hi == 'True' and subtitle.hearing_impaired:
-        profile = get_profiles_list(profile_id=profile_id)
+        profile = get_profile(profile_id)
         lang_alpha2 = alpha2_from_alpha3(subtitle.language.alpha3)
         for item in profile['items']:
-            if item['language'] == lang_alpha2 and item['forced'] == ('True' if subtitle.language.forced else 'False'):
-                if item['hi'] == HI_EXCLUDED:
+            if item['language'] == lang_alpha2 and item.get('forced', 'False') == ('True' if subtitle.language.forced else 'False'):
+                if item.get('hi') == HI_EXCLUDED:
                     logging.error(f"BAZARR Cannot download hearing-impaired subtitle for {lang_alpha2}: this language is set to exclude HI subtitles")
                     return 'Cannot download a hearing-impaired subtitle: this language is set to exclude HI subtitles.'
                 break
 
-    if hi == 'True':
-        subtitle.language.hi = True
-    else:
-        subtitle.language.hi = False
-    if forced == 'True':
-        subtitle.language.forced = True
-    else:
-        subtitle.language.forced = False
+    subtitle.language.hi = hi == 'True'
+    subtitle.language.forced = forced == 'True'
     if use_original_format in (1, "1", "True", True):
         subtitle.use_original_format = True
 
     subtitle.mods = get_array_from(settings.general.subzero_mods)
     video = get_video(force_unicode(path), title, sceneName, providers={provider}, media_type=media_type)
-    if video:
+    if isinstance(video, Video):
         try:
             if provider:
                 download_subtitles([subtitle], _get_pool(media_type, profile_id))
@@ -249,12 +247,14 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
                         f"from another provider.")
                     return 'Something went wrong, check the logs for error'
 
-    subliminal.region.backend.sync()
+    backend = subliminal.region.backend
+    if isinstance(backend, SZFileBackend):
+        backend.sync()
 
     logging.debug(f'BAZARR Ended manually downloading Subtitles for file: {path}')
 
 
-def episode_manually_download_specific_subtitle(sonarr_series_id, sonarr_episode_id, hi, forced, use_original_format,
+def episode_manually_download_specific_subtitle(sonarr_series_id: int, sonarr_episode_id: int, hi, forced, use_original_format,
                                                 selected_provider, subtitle, job_id=None):
     if not job_id:
         return jobs_queue.add_job_from_function("Manually downloading Subtitles",is_progress=False)
@@ -267,7 +267,8 @@ def episode_manually_download_specific_subtitle(sonarr_series_id, sonarr_episode
             TableEpisodes.season,
             TableEpisodes.episode,
             TableEpisodes.title.label('episodeTitle'),
-            TableShows.title)
+            TableShows.title,
+            TableShows.profileId)
         .select_from(TableEpisodes)
         .join(TableShows)
         .where(TableEpisodes.sonarrEpisodeId == sonarr_episode_id)) \
@@ -290,7 +291,7 @@ def episode_manually_download_specific_subtitle(sonarr_series_id, sonarr_episode
     try:
         result = manual_download_subtitle(episodePath, audio_language, hi, forced, subtitle, selected_provider,
                                           sceneName, title, 'series', use_original_format,
-                                          profile_id=get_profile_id(episode_id=sonarr_episode_id), job_id=job_id)
+                                          profile_id=episodeInfo.profileId, job_id=job_id)
     except OSError:
         return 'Unable to save subtitles file', 500
     else:
@@ -308,7 +309,7 @@ def episode_manually_download_specific_subtitle(sonarr_series_id, sonarr_episode
                                                                f"{episodeInfo.episodeTitle}")
 
 
-def movie_manually_download_specific_subtitle(radarr_id, hi, forced, use_original_format, selected_provider, subtitle,
+def movie_manually_download_specific_subtitle(radarr_id: int, hi, forced, use_original_format, selected_provider, subtitle,
                                               job_id=None):
     if not job_id:
         return jobs_queue.add_job_from_function("Manually downloading Subtitles", is_progress=False)
@@ -318,7 +319,8 @@ def movie_manually_download_specific_subtitle(radarr_id, hi, forced, use_origina
                TableMovies.year,
                TableMovies.path,
                TableMovies.sceneName,
-               TableMovies.audio_language)
+               TableMovies.audio_language,
+               TableMovies.profileId)
         .where(TableMovies.radarrId == radarr_id)) \
         .first()
 
@@ -336,7 +338,7 @@ def movie_manually_download_specific_subtitle(radarr_id, hi, forced, use_origina
     try:
         result = manual_download_subtitle(moviePath, audio_language, hi, forced, subtitle, selected_provider,
                                           sceneName, title, 'movie', use_original_format,
-                                          profile_id=get_profile_id(movie_id=radarr_id), job_id=job_id)
+                                          profile_id=movieInfo.profileId, job_id=job_id)
     except OSError:
         return 'Unable to save subtitles file', 500
     else:
@@ -362,13 +364,11 @@ def _get_language_obj(profile_id):
     except (TypeError, ValueError):
         return language_set, False, hi_excluded_keys
 
-    profile = get_profiles_list(profile_id=normalized_profile_id)
+    profile = get_profile(profile_id=normalized_profile_id)
     if not isinstance(profile, dict):
         return language_set, False, hi_excluded_keys
 
-    language_items = profile.get('items')
-    if not isinstance(language_items, list):
-        language_items = []
+    language_items = profile['items']
     original_format = profile.get('originalFormat', False)
 
     for language in language_items:
