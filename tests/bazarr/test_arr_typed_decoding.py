@@ -15,13 +15,18 @@ from tests.helpers.arr_fixtures import episode_payload, movie_payload, series_pa
 from utilities.json_types import JsonValue
 
 
-def make_response(body: bytes, encoding: str | None = 'utf-8', *, compressed: bool = False) -> requests.Response:
-    response = requests.Response()
+class StreamResponse(requests.Response):
+    def __init__(self, raw: HTTPResponse) -> None:
+        super().__init__()
+        self.raw: HTTPResponse = raw
+
+
+def make_response(body: bytes, encoding: str | None = 'utf-8', *, compressed: bool = False) -> StreamResponse:
+    headers = {'Content-Encoding': 'gzip'} if compressed else {}
+    response = StreamResponse(HTTPResponse(body=BytesIO(gzip.compress(body) if compressed else body),
+                                           headers=headers, preload_content=False, decode_content=False))
     response.status_code = 200
     response.encoding = encoding
-    headers = {'Content-Encoding': 'gzip'} if compressed else {}
-    response.raw = HTTPResponse(body=BytesIO(gzip.compress(body) if compressed else body),
-                                headers=headers, preload_content=False, decode_content=False)
     return response
 
 
@@ -113,7 +118,7 @@ def test_invalid_json_keeps_requests_error_details(body: bytes) -> None:
             baseline.json()
     with make_response(body) as response:
         with pytest.raises(requests.JSONDecodeError) as actual:
-            EPISODE_DECODER.decode_complete_response(response)
+            _ = EPISODE_DECODER.decode_complete_response(response)
     assert (actual.value.msg, actual.value.doc, actual.value.pos) == (
         original.value.msg, original.value.doc, original.value.pos)
 

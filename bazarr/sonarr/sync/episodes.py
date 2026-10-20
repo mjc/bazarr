@@ -4,6 +4,7 @@ import os
 import logging
 import operator
 import semver
+from typing import TypedDict
 
 from sonarr.episode_snapshot import Episode, EpisodeFile, EpisodeValues, complete_episode_snapshot
 
@@ -27,6 +28,14 @@ from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due
 
 from .parser import episodeParser, get_episode_file_size
 from .utils import get_episodes_from_sonarr_api, get_episodesFiles_from_sonarr_api
+
+
+class StoredEpisode(TypedDict):
+    sonarrEpisodeId: int
+    episode_file_id: int | None
+    path: str
+    monitored: str | None
+
 
 FEATURE_PREFIX = "SYNC_EPISODES "
 
@@ -81,18 +90,17 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
 
     # Get current episodes id in DB
     if series_id:
-        current_episodes_in_db_row_as_dict = {row[0].sonarrEpisodeId: row[0].to_dict() for row in
-                                              database.execute(
-                                                  select(TableEpisodes)
-                                                  .where(TableEpisodes.sonarrSeriesId == series_id))
-                                              .all()}
+        current_episodes_in_db_row_as_dict: dict[int, StoredEpisode] = {
+            row[0].sonarrEpisodeId: row[0].to_dict()
+            for row in database.execute(select(TableEpisodes).where(TableEpisodes.sonarrSeriesId == series_id)).all()
+        }
         current_episodes_id_db_list = list(current_episodes_in_db_row_as_dict)
     else:
         return
 
-    current_episodes_sonarr = []
-    episodes_to_update = []
-    episodes_to_add = []
+    current_episodes_sonarr: list[int] = []
+    episodes_to_update: list[EpisodeValues] = []
+    episodes_to_add: list[EpisodeValues] = []
     parse_embedded_audio_track = settings.general.parse_embedded_audio_track
     audio_languages: dict[int, str | None] = {}
 

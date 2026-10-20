@@ -1,6 +1,7 @@
 from tests.helpers.arr_fixtures import episode_payload, episode_record, movie_payload, series_payload, series_record, stub_arr_api
 # -*- coding: utf-8 -*-
 import datetime
+from unittest.mock import Mock
 
 from sqlalchemy.sql import Executable
 from sonarr.episode_snapshot import Episode
@@ -57,9 +58,9 @@ def test_update_one_series_fetches_and_inserts_for_standalone_call(monkeypatch):
         ),
     )
     monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: [])
+    monkeypatch.setattr(series_sync, "get_tags", Mock(return_value=[]))
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
-    stub_arr_api(monkeypatch, series_sync, "get_series_from_sonarr_api", lambda **kwargs: series_payload())
+    stub_arr_api(monkeypatch, series_sync, "get_series_from_sonarr_api", Mock(return_value=series_payload()))
     monkeypatch.setattr(
         series_sync,
         "seriesParser",
@@ -104,7 +105,7 @@ def test_update_series_runs_one_explicit_episode_sync(monkeypatch):
     monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda: None)
     stub_arr_api(monkeypatch, series_sync, "get_series_from_sonarr_api", lambda **kwargs: [series_payload()])
     monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: [])
+    monkeypatch.setattr(series_sync, "get_tags", Mock(return_value=[]))
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
@@ -171,7 +172,7 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
         lambda **kwargs: None,
     )
     monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: [])
+    monkeypatch.setattr(series_sync, "get_tags", Mock(return_value=[]))
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
@@ -226,7 +227,7 @@ def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatc
         ),
     )
     monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: [])
+    monkeypatch.setattr(series_sync, "get_tags", Mock(return_value=[]))
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
@@ -325,7 +326,7 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     )
     monkeypatch.setattr(movies_sync, "check_radarr_rootfolder", lambda: None)
     monkeypatch.setattr(movies_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(movies_sync, "get_tags", lambda: [])
+    monkeypatch.setattr(movies_sync, "get_tags", Mock(return_value=[]))
     monkeypatch.setattr(movies_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(movies_sync, "movieParser", _movie_parser)
     monkeypatch.setattr(movies_sync, "update_movie", lambda previous_file, movie: updated_movies.append(movie) or True)
@@ -403,10 +404,10 @@ def test_incomplete_episode_snapshot_skips_writes_and_keeps_existing_id(
         sonarr=SimpleNamespace(apikey='key', sync_only_monitored_series=False),
         general=SimpleNamespace(parse_embedded_audio_track=False),
     ))
-    monkeypatch.setattr(episode_sync, 'get_episodes_from_sonarr_api', lambda **kwargs: None)
-    monkeypatch.setattr(episode_sync, 'episodeParser', lambda *args, **kwargs: pytest.fail('Snapshot rejected'))
+    monkeypatch.setattr(episode_sync, 'get_episodes_from_sonarr_api', Mock(return_value=None))
+    monkeypatch.setattr(episode_sync, 'episodeParser', Mock(side_effect=pytest.fail.Exception('Snapshot rejected')))
     monkeypatch.setattr(episode_sync, 'delete_media_and_wanted_search_state',
-                        lambda *args: pytest.fail('A rejected parse must not delete an existing episode'))
+                        Mock(side_effect=pytest.fail.Exception('A rejected parse must not delete an existing episode')))
 
     episode_sync.sync_episodes(7)
 

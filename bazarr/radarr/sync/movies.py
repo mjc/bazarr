@@ -184,8 +184,8 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
             sync_monitored = settings.radarr.sync_only_monitored_movies
             skipped_count = 0
             files_missing = 0
-            movies_added = []
-            movies_updated = []
+            movies_added: list[str] = []
+            movies_updated: list[str] = []
             for i, movie in enumerate(movies, start=1):
                 if job.cancel_event.is_set():
                     raise JobCanceled

@@ -1,3 +1,5 @@
+import os
+from unittest.mock import Mock
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -28,7 +30,7 @@ def test_sync_stats_undersized_files_once(kind: str, strm: bool, memory_session:
         stats.append(path)
         return 0 if strm else MINIMUM_VIDEO_SIZE + 1
 
-    monkeypatch.setattr(arr_files.os.path, 'getsize', getsize)
+    monkeypatch.setattr(os.path, 'getsize', getsize)
     monkeypatch.setattr(parser.settings.general, 'enable_strm_support', strm)
     monkeypatch.setattr(movies, 'store_subtitles_movie', lambda identifier: None)
     monkeypatch.setattr(episodes, 'store_subtitles', lambda identifier: None)
@@ -49,7 +51,7 @@ def test_movie_size_cache_keeps_strm_setting_live(memory_session: Session,
     assert record.movieFile is not None
     record.movieFile.path = '/movie.strm'
     record.movieFile.size = FileSize(0)
-    monkeypatch.setattr(arr_files.os.path, 'getsize', lambda path: 0)
+    monkeypatch.setattr(os.path, 'getsize', Mock(return_value=0))
     sizes: dict[str, int] = {}
     monkeypatch.setattr(movies.settings.general, 'enable_strm_support', False)
     assert not movies._has_usable_movie_file(record, file_sizes=sizes)
@@ -63,10 +65,10 @@ def test_file_policy_handles_missing_file(monkeypatch: pytest.MonkeyPatch) -> No
     record = episode_record(episode_payload())
     assert record.episodeFile is not None
     record.episodeFile.size = 0
-    monkeypatch.setattr(parser.settings.general, 'enable_strm_support', False)
+    monkeypatch.setattr('app.config.settings.general.enable_strm_support', False)
 
     def missing(path: str) -> int:
         raise FileNotFoundError(path)
 
-    monkeypatch.setattr(arr_files.os.path, 'getsize', missing)
+    monkeypatch.setattr(os.path, 'getsize', missing)
     assert not arr_files.is_usable_file(record.episodeFile.path, record.episodeFile.size, path_replace=lambda path: path, file_sizes={})

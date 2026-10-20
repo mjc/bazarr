@@ -1,13 +1,16 @@
 import json
+from unittest.mock import Mock
 from collections.abc import Sequence
 
 import pytest
+import requests
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import TableMovies
 from radarr.movie_snapshot import IncompleteMovie, Movie
 from radarr.sync import utils as radarr
+from sonarr.info import get_sonarr_info
 from sonarr.episode_snapshot import Episode, EpisodeFile, complete_episode_snapshot
 from sonarr.series_snapshot import Series
 from sonarr.sync import utils as sonarr
@@ -47,8 +50,8 @@ def test_fetch_rejects_wrong_shape_or_identity(kind: str, single: bool, wrong: s
     monkeypatch.setattr(radarr, 'url_api_radarr', lambda: 'http://example.invalid/api/v3/')
     monkeypatch.setattr(sonarr, 'url_api_sonarr', lambda: 'http://example.invalid/api/v3/')
     response = make_response(json.dumps(wire).encode())
-    monkeypatch.setattr(radarr.requests, 'get', lambda *args, **kwargs: response)
-    monkeypatch.setattr(sonarr.get_sonarr_info, 'semver', lambda: pytest.fail('Reject before file completion'))
+    monkeypatch.setattr(requests, 'get', Mock(return_value=response))
+    monkeypatch.setattr(get_sonarr_info, 'semver', lambda: pytest.fail('Reject before file completion'))
 
     result = fetch_media(kind, single)
 
@@ -68,7 +71,7 @@ def test_empty_catalogue_is_successful(kind: str, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(radarr, 'url_api_radarr', lambda: 'http://example.invalid/api/v3/')
     monkeypatch.setattr(sonarr, 'url_api_sonarr', lambda: 'http://example.invalid/api/v3/')
     response = make_response(b'[]')
-    monkeypatch.setattr(radarr.requests, 'get', lambda *args, **kwargs: response)
+    monkeypatch.setattr(requests, 'get', Mock(return_value=response))
     assert fetch_media(kind, False) == []
     assert response.raw.closed
 
@@ -89,7 +92,7 @@ def test_snapshot_clears_stale_file_when_episode_has_no_file(separate: bool) -> 
 def test_movie_size_is_normalized_before_sync(size: JsonValue, expected: int, memory_session: Session,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
     from radarr.sync import movies
-    configure_movies(monkeypatch, memory_session, 1)
+    _ = configure_movies(monkeypatch, memory_session, 1)
     payload = movie_payload(title='Changed size')
     file = payload['movieFile']
     assert isinstance(file, dict)
@@ -97,7 +100,7 @@ def test_movie_size_is_normalized_before_sync(size: JsonValue, expected: int, me
     decoded = radarr.MOVIE_DECODER.from_value(payload)
     assert isinstance(decoded, Movie) and decoded.movieFile is not None
     assert isinstance(decoded.movieFile.size, int) and decoded.movieFile.size == expected
-    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: [decoded])
-    monkeypatch.setattr(movies, 'store_subtitles_movie', lambda identifier: None)
+    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', Mock(return_value=[decoded]))
+    monkeypatch.setattr(movies, 'store_subtitles_movie', Mock(return_value=None))
     movies.update_movies(job_id=1)
     assert memory_session.execute(select(TableMovies.file_size)).scalar_one() == expected

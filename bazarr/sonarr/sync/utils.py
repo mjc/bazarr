@@ -154,8 +154,8 @@ def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = Non
         del r
         if episodes is not None and any(episode.seriesId != series_id if series_id is not None
                                         else episode.id != episode_id for episode in episodes):
-            logging.warning('BAZARR Skipping episode sync for series %s: response contains another series '
-                            'or episode.', series_id)
+            logging.warning(
+                'BAZARR Skipping episode sync for series %s: response contains another series or episode.', series_id)
             return None
         if not episodes:
             return episodes
