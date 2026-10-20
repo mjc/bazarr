@@ -7,6 +7,19 @@ from app.config import settings
 from sonarr.info import SonarrConnection, get_sonarr_info, url_api_sonarr
 from utilities.arr import arr_session, request_json
 from utilities.json_types import JsonValue
+from utilities.arr_decoding import ArrRecordDecoder, InvalidArrRecord
+from collections.abc import Callable
+from typing import TypeVar, overload
+
+from sonarr.series_snapshot import Series
+from sonarr.episode_snapshot import Episode
+from sonarr.episode_snapshot import EpisodeFile
+
+SERIES_DECODER = ArrRecordDecoder(Series)
+EPISODE_DECODER = ArrRecordDecoder(Episode)
+EPISODEFILE_DECODER = ArrRecordDecoder(EpisodeFile)
+
+Result = TypeVar('Result')
 
 
 def get_profile_list(*, connection: SonarrConnection | None = None,
@@ -38,13 +51,28 @@ def get_tags(*, connection: SonarrConnection | None = None,
     return _request_sonarr('tag?', apikey, connection, session=session)
 
 
+@overload
 def _request_sonarr(path: str, apikey: str, connection: SonarrConnection | None = None,
-                     *, propagate_http_error: bool = False, session: requests.Session | None = None) -> JsonValue:
+                     *, propagate_http_error: bool = False, session: requests.Session | None = None) -> JsonValue: ...
+
+
+@overload
+def _request_sonarr(path: str, apikey: str, connection: SonarrConnection | None = None,
+                     *, propagate_http_error: bool = False, session: requests.Session | None = None,
+                     decoder: Callable[[requests.Response], Result]) -> Result | None: ...
+
+
+def _request_sonarr(path: str, apikey: str, connection: SonarrConnection | None = None,
+                     *, propagate_http_error: bool = False, session: requests.Session | None = None,
+                     decoder: Callable[[requests.Response], Result] | None = None) -> JsonValue | Result:
     with arr_session(session) as http:
         api_url = url_api_sonarr(session=http) if connection is None else connection.api_url
         timeout = int(settings.sonarr.http_timeout) if connection is None else connection.timeout
         try:
-            return request_json(f'{api_url}{path}&apikey={apikey}', timeout, session=http)
+            url = f'{api_url}{path}&apikey={apikey}'
+            if decoder is None:
+                return request_json(url, timeout, session=http)
+            return request_json(url, timeout, session=http, decoder=decoder)
         except requests.exceptions.HTTPError:
             if propagate_http_error:
                 raise
@@ -56,10 +84,10 @@ def _request_sonarr(path: str, apikey: str, connection: SonarrConnection | None 
 
 def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None,
                                 *, connection: SonarrConnection | None = None,
-                                   session: requests.Session | None = None) -> JsonValue:
+                                   session: requests.Session | None = None) -> Series | list[Series | InvalidArrRecord] | InvalidArrRecord | None:
     path = f"series/{sonarr_series_id if sonarr_series_id else ''}?"
-    result = _request_sonarr(path, apikey_sonarr, connection, propagate_http_error=True, session=session)
-    if sonarr_series_id and isinstance(result, dict):
+    result = _request_sonarr(path, apikey_sonarr, connection, propagate_http_error=True, session=session, decoder=SERIES_DECODER.decode_response)
+    if sonarr_series_id and isinstance(result, (Series, InvalidArrRecord)):
         return [result]
     return result
 
@@ -67,27 +95,27 @@ def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None 
 def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None,
                                 episode_id: int | None = None,
                                 *, connection: SonarrConnection | None = None,
-                                   session: requests.Session | None = None) -> JsonValue:
+                                   session: requests.Session | None = None) -> Episode | list[Episode] | None:
     if series_id:
         path = f'episode?seriesId={series_id}&includeEpisodeFile=true'
     elif episode_id:
         path = f'episode/{episode_id}?'
     else:
         return None
-    return _request_sonarr(path, apikey_sonarr, connection, session=session)
+    return _request_sonarr(path, apikey_sonarr, connection, session=session, decoder=EPISODE_DECODER.decode_complete_response)
 
 
 def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None,
                                      episode_file_id: int | None = None,
                                      *, connection: SonarrConnection | None = None,
-                                        session: requests.Session | None = None) -> JsonValue:
+                                        session: requests.Session | None = None) -> EpisodeFile | list[EpisodeFile] | None:
     if series_id:
         path = f'episodeFile?seriesId={series_id}'
     elif episode_file_id:
         path = f'episodeFile/{episode_file_id}?'
     else:
         return None
-    return _request_sonarr(path, apikey_sonarr, connection, session=session)
+    return _request_sonarr(path, apikey_sonarr, connection, session=session, decoder=EPISODEFILE_DECODER.decode_complete_response)
 
 
 def get_history_from_sonarr_api(apikey_sonarr: str, episode_id: int,

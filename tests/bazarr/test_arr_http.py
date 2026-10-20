@@ -420,3 +420,28 @@ def test_arr_readers_preserve_json_failure_and_close_response(
                 getattr(module, f'get_{service}_rootfolder')(connection=connection, session=session)
         close.assert_called_once()
         assert not http_transport.closed_sessions
+
+
+@pytest.mark.parametrize('kind', ['series', 'movie'])
+def test_typed_http_partial_catalogue_updates_valid_rows_without_deleting_unseen_rows(
+    configured_arr, http_transport, kind: str,
+) -> None:
+    database, _ = configured_arr
+    if kind == 'series':
+        database.add(TableShows(sonarrSeriesId=7, title='Keep', path='/show'))
+        database.flush()
+        http_transport.payloads.update({
+            '/api/v3/series/': [series_payload(8, 'New'), {'title': 'Unidentified'}],
+            '/api/v3/episode': [], '/api/v3/episodeFile': [],
+        })
+        series.update_series(job_id=1)
+        assert database.get(TableShows, 8).title == 'New'
+        assert database.get(TableShows, 7).title == 'Keep'
+    else:
+        database.add(TableMovies(radarrId=9, tmdbId='9', title='Keep', path='/movie'))
+        database.flush()
+        http_transport.payloads['/api/v3/movie'] = [movie_payload(1, 'New'), {'title': 'Unidentified'}]
+        movies.update_movies(job_id=1)
+        assert database.get(TableMovies, 1).title == 'New'
+        assert database.get(TableMovies, 9).title == 'Keep'
+    assert all(response() is None for response in http_transport.responses)

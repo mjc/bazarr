@@ -5,7 +5,7 @@ import gc
 import requests
 from dynaconf.utils.boxing import DynaBox
 from sonarr.info import SonarrConnection, get_sonarr_connection
-from sonarr.series_snapshot import SeriesSyncPlan, SeriesValues, is_series
+from sonarr.series_snapshot import Series, SeriesSyncPlan, SeriesValues
 from utilities.arr import arr_session
 from utilities.arr_types import is_arr_tags
 
@@ -84,15 +84,15 @@ def _prepare_series_sync(connection: SonarrConnection, sonarr: DynaBox,
     complete = True
     skipped = 0
     for raw in payload:
-        if not is_series(raw) or raw['id'] <= 0 or raw['id'] in retained:
+        if not isinstance(raw, Series) or raw.id <= 0 or raw.id in retained:
             complete = False
             skipped += 1
             continue
-        series_id = raw['id']
+        series_id = raw.id
         retained.add(series_id)
         previous_monitored = monitored.get(series_id)
         was_monitored = None if previous_monitored is None else bool_map.get(previous_monitored)
-        if sonarr.sync_only_monitored_series and was_monitored is False and raw['monitored'] is False:
+        if sonarr.sync_only_monitored_series and was_monitored is False and raw.monitored is False:
             skipped += 1
             continue
         try:
@@ -200,7 +200,7 @@ def update_one_series(series_id: int | None, action: str, is_signalr: bool = Fal
             if not isinstance(series_data, list) or len(series_data) != 1:
                 return
             raw_series = series_data[0]
-            if not is_series(raw_series) or raw_series['id'] != series_id:
+            if not isinstance(raw_series, Series) or raw_series.id != series_id:
                 return
             try:
                 prepared_series = seriesParser(raw_series, action='update' if existing_series else 'insert',

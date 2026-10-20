@@ -1,6 +1,8 @@
 # coding=utf-8
 
 import os
+import msgspec
+
 import logging
 import operator
 import requests
@@ -9,7 +11,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import RowMapping
 from dynaconf.utils.boxing import DynaBox
 from utilities.arr import arr_session
-from utilities.json_types import JsonValue
 from datetime import datetime
 from functools import reduce
 
@@ -23,7 +24,7 @@ from subtitles.indexer.series import store_subtitles, series_full_scan_subtitles
 from subtitles.mass_download import episode_download_subtitles
 from app.event_handler import event_stream
 from sonarr.info import SonarrConnection, get_sonarr_connection
-from sonarr.episode_snapshot import EpisodeSnapshot, EpisodeSyncPlan, EpisodeValues, complete_episode_snapshot
+from sonarr.episode_snapshot import Episode, EpisodeFile, EpisodeSnapshot, EpisodeSyncPlan, EpisodeValues, complete_episode_snapshot
 from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications
 from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due_missing_languages_map
@@ -42,34 +43,35 @@ def trace(message: str) -> None:
 def _load_episode_snapshot(connection: SonarrConnection, *, series_id: int | None = None,
                            episode_id: int | None = None,
                            session: requests.Session | None = None) -> EpisodeSnapshot | None:
-    payload: JsonValue = get_episodes_from_sonarr_api(apikey_sonarr=connection.apikey, series_id=series_id,
+    payload = get_episodes_from_sonarr_api(apikey_sonarr=connection.apikey, series_id=series_id,
                                           episode_id=episode_id, connection=connection, session=session)
     if episode_id is not None:
-        if not isinstance(payload, dict):
+        if not isinstance(payload, Episode):
             return None
-        if payload.get('id') != episode_id:
+        if payload.id != episode_id:
             return None
         payload = [payload]
     if not isinstance(payload, list):
         return None
-    files: JsonValue = None
+    files: list[EpisodeFile] | None = None
     separate = connection.capabilities.separate_episode_files
     if separate:
         if series_id is not None:
-            files = get_episodesFiles_from_sonarr_api(apikey_sonarr=connection.apikey, series_id=series_id,
+            file_payload = get_episodesFiles_from_sonarr_api(apikey_sonarr=connection.apikey, series_id=series_id,
                                                        connection=connection, session=session)
-        elif payload and isinstance(payload[0], dict) and payload[0].get('hasFile') is True:
-            file_id = payload[0].get('episodeFileId')
-            if type(file_id) is not int:
+            files = file_payload if isinstance(file_payload, list) else None
+        elif payload and payload[0].hasFile:
+            file_id = payload[0].episodeFileId
+            if file_id is msgspec.UNSET:
                 return None
             file = get_episodesFiles_from_sonarr_api(apikey_sonarr=connection.apikey,
                                                       episode_file_id=file_id, connection=connection, session=session)
-            files = [file] if isinstance(file, dict) else None
+            files = [file] if isinstance(file, EpisodeFile) else None
         else:
             files = []
     snapshot = complete_episode_snapshot(payload, files, separate_files=separate)
     if snapshot is not None and series_id is not None:
-        if any(episode['seriesId'] != series_id for episode in snapshot.episodes):
+        if any(episode.seriesId != series_id for episode in snapshot.episodes):
             return None
     return snapshot
 
@@ -95,23 +97,23 @@ def _prepare_episode_sync(connection: SonarrConnection, series_id: int, general:
     monitored_by_file = {row['episode_file_id']: row['monitored'] for row in current.values()} if sync_monitored else {}
     audio_languages: dict[int, str | None] = {}
     for episode in snapshot.episodes:
-        file = episode.get('episodeFile')
-        if not episode['hasFile'] or file is None:
+        file = episode.episodeFile
+        if not episode.hasFile or file is None:
             continue
         if sync_monitored:
-            stored_monitored = monitored_by_file.get(file['id'])
+            stored_monitored = monitored_by_file.get(file.id)
             monitored = None if stored_monitored is None else bool_map.get(stored_monitored)
-            if monitored is not None and monitored == episode['monitored'] and not monitored:
-                retained_ids.add(episode['id'])
+            if monitored is not None and monitored == episode.monitored and not monitored:
+                retained_ids.add(episode.id)
                 skipped_count += 1
                 continue
         parsed = episodeParser(episode, general=general, audio_languages=audio_languages)
         if parsed is None:
             continue
-        retained_ids.add(episode['id'])
-        if episode['id'] not in current:
+        retained_ids.add(episode.id)
+        if episode.id not in current:
             additions.append(parsed)
-        elif has_changed_fields(current[episode['id']], parsed):
+        elif has_changed_fields(current[episode.id], parsed):
             updates.append(parsed)
     return EpisodeSyncPlan(list(current.keys() - retained_ids), additions, updates, len(snapshot.episodes), skipped_count)
 

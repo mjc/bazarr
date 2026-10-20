@@ -4,6 +4,7 @@ import pytest
 from dynaconf.utils.boxing import DynaBox
 
 from app.settings_cache import settings_cache
+from tests.helpers.arr_fixtures import movie_record, series_record
 
 
 @pytest.mark.parametrize('kind', ['series', 'movie'])
@@ -33,9 +34,10 @@ def test_sync_parser_reuses_supplied_settings_and_reads_current_settings_when_ca
         parse = module.movieParser
         monkeypatch.setattr(module.get_radarr_info, 'is_legacy', lambda: False)
         payload = {'title': 'Movie', 'id': 1, 'tmdbId': 2, 'sortTitle': 'Movie', 'year': 2024,
-                   'monitored': True, 'tags': [10],
+                   'monitored': True, 'hasFile': True, 'tags': [10],
                    'movieFile': {'path': '/movie', 'id': 3, 'size': 100000000,
                                  'quality': {'quality': {'name': 'WEB-1080p'}}, 'languages': []}}
+    payload = series_record(payload) if kind == 'series' else movie_record(payload)
     monkeypatch.setattr(module, 'settings', settings)
     arguments = (payload, 'insert', [{'id': 10, 'label': 'keep'}], [(7, 'English', 'keep')], 99, [])
 

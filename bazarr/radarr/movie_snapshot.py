@@ -2,65 +2,71 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TypeGuard, TypedDict
+from typing import TypedDict
 from typing_extensions import NotRequired
 
-from utilities.arr_types import Language, FileQuality
+import msgspec
+
+from utilities.arr_types import Language, FileQuality, DisplayText
 from utilities.json_types import JsonValue
 
 
-class MovieMediaInfo(TypedDict):
-    videoFormat: NotRequired[str | None]
-    videoCodec: NotRequired[str | None]
-    videoCodecID: NotRequired[str | None]
-    videoCodecLibrary: NotRequired[str | None]
-    audioFormat: NotRequired[str | None]
-    audioCodec: NotRequired[str | None]
-    audioCodecID: NotRequired[str | None]
-    audioProfile: NotRequired[str | None]
-    audioAdditionalFeatures: NotRequired[str | None]
-    audioLanguages: NotRequired[str | None]
+class MovieMediaInfo(msgspec.Struct):
+    videoFormat: str | None = None
+    videoCodec: str | None = None
+    videoCodecID: str | None = None
+    videoCodecLibrary: str | None = None
+    audioFormat: str | None = None
+    audioCodec: str | None = None
+    audioCodecID: str | None = None
+    audioProfile: str | None = None
+    audioAdditionalFeatures: str | None = None
+    audioLanguages: str | None = None
 
 
-class MovieFile(TypedDict):
+class MovieFile(msgspec.Struct, kw_only=True):
     id: int
     path: str
     size: int | str | float
     quality: FileQuality
-    sceneName: NotRequired[str | None]
-    languages: NotRequired[list[Language] | None]
-    mediaInfo: NotRequired[MovieMediaInfo | None]
+    sceneName: str | None = None
+    languages: list[Language] | None = None
+    mediaInfo: MovieMediaInfo | None = None
+
+    def __post_init__(self) -> None:
+        if movie_file_size(self.size) is None:
+            raise ValueError('Invalid movie file size')
 
 
-class MovieImage(TypedDict):
+class MovieImage(msgspec.Struct):
     url: str
 
 
-class MovieTitle(TypedDict):
+class MovieTitle(msgspec.Struct):
     title: str | None
 
 
-class MovieLanguage(TypedDict):
-    name: NotRequired[str | None]
+class MovieLanguage(msgspec.Struct):
+    name: str | None = None
 
 
-class Movie(TypedDict):
+class Movie(msgspec.Struct, kw_only=True):
     id: int
     title: str
-    tmdbId: int | str
-    year: int | str
+    tmdbId: int | str | bool
+    year: int | str | bool
     sortTitle: str
     monitored: bool
     hasFile: bool
-    movieFile: MovieFile
     tags: list[int]
-    images: NotRequired[list[MovieImage] | None]
-    overview: NotRequired[JsonValue]
-    alternativeTitles: NotRequired[list[MovieTitle] | None]
-    alternateTitles: NotRequired[list[MovieTitle] | None]
-    imdbId: NotRequired[str | None]
-    originalLanguage: NotRequired[MovieLanguage | None]
-    qualityProfileId: NotRequired[int]
+    movieFile: MovieFile | None = None
+    images: list[MovieImage] | None = None
+    overview: DisplayText = DisplayText('')
+    alternativeTitles: list[MovieTitle] | None = None
+    alternateTitles: list[MovieTitle] | None = None
+    imdbId: str | None = None
+    originalLanguage: MovieLanguage | None = None
+    qualityProfileId: int | msgspec.UnsetType = msgspec.UNSET
 
 
 class MovieValues(TypedDict):
@@ -115,74 +121,3 @@ def movie_file_size(value: JsonValue) -> int | None:
         return int(value)
     except (ValueError, OverflowError):
         return None
-
-
-def is_movie(value: JsonValue) -> TypeGuard[Movie]:
-    if not isinstance(value, dict) or type(value.get('id')) is not int:
-        return False
-    if not isinstance(value.get('title'), str) or not isinstance(value.get('sortTitle'), str):
-        return False
-    if not isinstance(value.get('tmdbId'), (str, int)) or not isinstance(value.get('year'), (str, int)):
-        return False
-    if not isinstance(value.get('monitored'), bool) or not isinstance(value.get('hasFile'), bool):
-        return False
-    file = value.get('movieFile')
-    if not isinstance(file, dict) or type(file.get('id')) is not int or not isinstance(file.get('path'), str):
-        return False
-    if movie_file_size(file.get('size')) is None:
-        return False
-    quality = file.get('quality')
-    definition = quality.get('quality') if isinstance(quality, dict) else None
-    if not isinstance(definition, dict) or not isinstance(definition.get('name'), str):
-        return False
-    if 'resolution' in definition and type(definition['resolution']) is not int:
-        return False
-    for key in ('sceneName',):
-        if key in file and file[key] is not None and not isinstance(file[key], str):
-            return False
-    languages = file.get('languages')
-    if languages is not None:
-        if not isinstance(languages, list):
-            return False
-        for language in languages:
-            if not isinstance(language, dict) or 'name' not in language:
-                return False
-            if language['name'] is not None and not isinstance(language['name'], str):
-                return False
-    media = file.get('mediaInfo')
-    if media is not None:
-        if not isinstance(media, dict):
-            return False
-        for key in ('videoFormat', 'videoCodec', 'videoCodecID', 'videoCodecLibrary', 'audioFormat',
-                    'audioCodec', 'audioCodecID', 'audioProfile', 'audioAdditionalFeatures', 'audioLanguages'):
-            if key in media and media[key] is not None and not isinstance(media[key], str):
-                return False
-    tags = value.get('tags')
-    if not isinstance(tags, list) or any(type(tag) is not int for tag in tags):
-        return False
-    images = value.get('images')
-    if images is not None:
-        if not isinstance(images, list) or any(not isinstance(image, dict) or not isinstance(image.get('url'), str)
-                                             for image in images):
-            return False
-    for key in ('alternateTitles', 'alternativeTitles'):
-        titles = value.get(key)
-        if titles is not None:
-            if not isinstance(titles, list):
-                return False
-            for title in titles:
-                if not isinstance(title, dict) or 'title' not in title:
-                    return False
-                if title['title'] is not None and not isinstance(title['title'], str):
-                    return False
-    if 'imdbId' in value and value['imdbId'] is not None and not isinstance(value['imdbId'], str):
-        return False
-    language = value.get('originalLanguage')
-    if language is not None:
-        if not isinstance(language, dict):
-            return False
-        if 'name' in language and language['name'] is not None and not isinstance(language['name'], str):
-            return False
-    if 'qualityProfileId' in value and type(value['qualityProfileId']) is not int:
-        return False
-    return True

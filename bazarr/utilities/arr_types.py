@@ -1,21 +1,21 @@
 # coding=utf-8
 
 from typing import TypeGuard, TypedDict
-from typing_extensions import NotRequired
+import msgspec
 
 from utilities.json_types import JsonValue
 
 
-class Language(TypedDict):
+class Language(msgspec.Struct):
     name: str | None
 
 
-class Quality(TypedDict):
+class Quality(msgspec.Struct):
     name: str
-    resolution: NotRequired[int]
+    resolution: int | msgspec.UnsetType = msgspec.UNSET
 
 
-class FileQuality(TypedDict):
+class FileQuality(msgspec.Struct):
     quality: Quality
 
 
@@ -29,3 +29,13 @@ def is_arr_tags(value: JsonValue) -> TypeGuard[list[ArrTag]]:
         isinstance(tag, dict) and type(tag.get('id')) is int and isinstance(tag.get('label'), str)
         for tag in value
     )
+
+
+class DisplayText(str):
+    """Preserve the existing string conversion of arbitrary JSON overview values."""
+
+    __slots__ = ()
+
+
+def decode_display_text(text_type: type[DisplayText], value: JsonValue) -> DisplayText:
+    return text_type(value)

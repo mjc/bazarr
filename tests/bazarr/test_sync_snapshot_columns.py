@@ -1,5 +1,4 @@
 from types import SimpleNamespace
-from tests.helpers.arr_fixtures import radarr_connection, sonarr_connection, episode_payload
 from sonarr.episode_snapshot import EpisodeSnapshot
 from unittest.mock import Mock
 
@@ -12,6 +11,7 @@ from app.database import TableEpisodes, TableMovies, TableShows
 from radarr.sync import movies
 from sonarr.sync import episodes
 from sonarr.sync import series
+from tests.helpers.arr_fixtures import episode_payload, radarr_connection, sonarr_connection, stub_arr_api
 
 
 @pytest.mark.parametrize('media_type', ['episode', 'movie', 'series'])
@@ -44,7 +44,7 @@ def test_sync_snapshot_omits_cached_video_metadata_and_preserves_other_columns(
         monkeypatch.setattr(movies, 'settings', SimpleNamespace(
             general=SimpleNamespace(movie_default_enabled=False), radarr=SimpleNamespace(apikey='key')))
         monkeypatch.setattr(movies, 'check_radarr_rootfolder', lambda **kwargs: None)
-        monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: [])
+        stub_arr_api(monkeypatch, movies, 'get_movies_from_radarr_api', lambda **kwargs: [])
         for name in ('get_profile_list', 'get_tags', 'get_language_profiles'):
             monkeypatch.setattr(movies, name, lambda **kwargs: [])
         monkeypatch.setattr(movies, 'jobs_queue', SimpleNamespace(

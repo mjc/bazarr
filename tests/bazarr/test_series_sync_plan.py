@@ -8,7 +8,7 @@ import requests
 
 from app.database import TableShows
 from sonarr.sync import series as sync
-from tests.helpers.arr_fixtures import series_payload, sonarr_connection
+from tests.helpers.arr_fixtures import series_payload, sonarr_connection, stub_arr_api
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def series_sync(memory_session, monkeypatch):
                                      [{'id': 7, 'title': 'Incomplete'}]])
 def test_invalid_catalogue_preserves_series(series_sync, monkeypatch, payload):
     session, deleted, events = series_sync
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', lambda **kwargs: payload)
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api', lambda **kwargs: payload)
     sync.update_series(job_id=1)
     deleted.assert_not_called()
     events.assert_not_called()
@@ -50,7 +50,7 @@ def test_invalid_catalogue_preserves_series(series_sync, monkeypatch, payload):
 
 def test_successful_empty_catalogue_authorizes_series_deletion(series_sync, monkeypatch):
     _, deleted, _ = series_sync
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', lambda **kwargs: [])
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api', lambda **kwargs: [])
     sync.update_series(job_id=1)
     deleted.assert_called_once_with(7)
 
@@ -59,7 +59,7 @@ def test_unknown_capabilities_prevent_catalogue_fetch(series_sync, monkeypatch):
     _, deleted, _ = series_sync
     monkeypatch.setattr(sync, 'get_sonarr_connection', lambda *args, **kwargs: None)
     fetch = Mock()
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', fetch)
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api', fetch)
     sync.update_series(job_id=1)
     fetch.assert_not_called()
     deleted.assert_not_called()
@@ -68,7 +68,7 @@ def test_unknown_capabilities_prevent_catalogue_fetch(series_sync, monkeypatch):
 @pytest.mark.parametrize('failure', [requests.HTTPError('No response'), requests.Timeout(), requests.ConnectionError()])
 def test_failed_catalogue_request_preserves_series(series_sync, monkeypatch, failure):
     _, deleted, events = series_sync
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', Mock(side_effect=failure))
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api', Mock(side_effect=failure))
     sync.update_series(job_id=1)
     deleted.assert_not_called()
     events.assert_not_called()
@@ -92,7 +92,7 @@ def test_raw_catalogue_is_released_before_nested_episode_sync(series_sync, monke
         assert all(reference() is None for reference in raw_references)
         assert kwargs['connection'] is sync.get_sonarr_connection.return_value
 
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', fetch)
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api', fetch)
     monkeypatch.setattr(sync, 'sync_episodes', sync_episodes)
     sync.update_series(job_id=1)
     session.expire_all()
@@ -103,7 +103,7 @@ def test_raw_catalogue_is_released_before_nested_episode_sync(series_sync, monke
 
 def test_incomplete_known_series_cannot_remove_unseen_series(series_sync, monkeypatch):
     session, deleted, _ = series_sync
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api',
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api',
                         lambda **kwargs: [dict(series_payload(8, 'Good'), path='/another'), {'id': 9, 'title': 'Incomplete'}])
     sync.update_series(job_id=1)
     deleted.assert_not_called()
@@ -114,7 +114,7 @@ def test_incomplete_known_series_cannot_remove_unseen_series(series_sync, monkey
 @pytest.mark.parametrize('dependency', ['get_profile_list', 'get_tags'])
 def test_failed_metadata_fetch_preserves_stored_series(series_sync, monkeypatch, dependency):
     session, deleted, events = series_sync
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', lambda **kwargs: [series_payload(7, 'Updated')])
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api', lambda **kwargs: [series_payload(7, 'Updated')])
     monkeypatch.setattr(sync, dependency, lambda **kwargs: None)
     sync.update_series(job_id=1)
     deleted.assert_not_called()
@@ -125,7 +125,7 @@ def test_failed_metadata_fetch_preserves_stored_series(series_sync, monkeypatch,
 
 def test_empty_series_catalogue_does_not_request_unneeded_metadata(series_sync, monkeypatch):
     _, deleted, _ = series_sync
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', lambda **kwargs: [])
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api', lambda **kwargs: [])
     profiles = Mock(side_effect=AssertionError('Empty catalogue needs no profile enrichment'))
     monkeypatch.setattr(sync, 'get_profile_list', profiles)
     sync.update_series(job_id=1)
@@ -142,7 +142,7 @@ def test_default_profile_only_applies_to_inserted_series(series_sync, monkeypatc
     session.commit()
     monkeypatch.setattr(sync.settings.general, 'serie_default_enabled', True)
     monkeypatch.setattr(sync.settings.general, 'serie_default_profile', 9)
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', lambda **kwargs: [
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api', lambda **kwargs: [
         series_payload(7, 'Existing'), dict(series_payload(8, 'New'), path='/new')])
     sync.update_series(job_id=1)
     session.expire_all()
@@ -165,7 +165,7 @@ def test_processed_canonical_series_is_released_before_episode_sync(series_sync,
     def sync_episodes(**kwargs):
         assert all(reference() is None for reference in references)
 
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api', lambda **kwargs: [series_payload(7, 'Updated')])
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api', lambda **kwargs: [series_payload(7, 'Updated')])
     monkeypatch.setattr(sync, 'seriesParser', tracked_parse)
     monkeypatch.setattr(sync, 'sync_episodes', sync_episodes)
     sync.update_series(job_id=1)
@@ -173,7 +173,7 @@ def test_processed_canonical_series_is_released_before_episode_sync(series_sync,
 
 def test_invalid_date_metadata_cannot_authorize_reconciliation(series_sync, monkeypatch):
     session, deleted, events = series_sync
-    monkeypatch.setattr(sync, 'get_series_from_sonarr_api',
+    stub_arr_api(monkeypatch, sync, 'get_series_from_sonarr_api',
                         lambda **kwargs: [dict(series_payload(7), lastAired='not a date')])
     sync.update_series(job_id=1)
     deleted.assert_not_called()

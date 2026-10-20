@@ -3,7 +3,6 @@ import json
 import requests
 
 import pytest
-from tests.helpers.arr_fixtures import series_payload, sonarr_connection, movie_payload, radarr_connection
 
 import radarr.sync.movies as radarr_movies
 import radarr.sync.utils as radarr_utils
@@ -11,6 +10,9 @@ import app.database as app_database
 import sonarr.sync.series as sonarr_series
 import sonarr.sync.utils as sonarr_utils
 import subtitles.sync as subtitle_sync
+from tests.helpers.arr_fixtures import (
+    movie_payload, radarr_connection, series_payload, sonarr_connection, stub_arr_api,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -142,7 +144,7 @@ def test_radarr_movie_sync_finalizes_job_for_non_list_payload(monkeypatch, sync_
     monkeypatch.setattr(radarr_movies, "check_radarr_rootfolder", lambda **kwargs: None)
     monkeypatch.setattr(radarr_movies.settings.general, "movie_default_enabled", False)
     monkeypatch.setattr(radarr_movies.settings.radarr, "apikey", "test")
-    monkeypatch.setattr(
+    stub_arr_api(monkeypatch,
         radarr_movies,
         "get_movies_from_radarr_api",
         lambda apikey_radarr, **kwargs: {"unexpected": "payload"},
@@ -181,7 +183,7 @@ def test_radarr_movie_sync_skips_file_payloads_without_movie_id(monkeypatch, syn
     monkeypatch.setattr(radarr_movies, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
-    monkeypatch.setattr(
+    stub_arr_api(monkeypatch,
         radarr_movies,
         "get_movies_from_radarr_api",
         lambda apikey_radarr, **kwargs: [{"hasFile": True, "title": "Missing ID", "movieFile": {"size": 999999}}],
@@ -220,7 +222,7 @@ def test_radarr_movie_sync_handles_malformed_movie_file_fields(monkeypatch, sync
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
     monkeypatch.setattr(radarr_movies, "trace", traces.append)
-    monkeypatch.setattr(
+    stub_arr_api(monkeypatch,
         radarr_movies,
         "get_movies_from_radarr_api",
         lambda apikey_radarr, **kwargs: [
@@ -263,7 +265,7 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
     monkeypatch.setattr(radarr_movies, "trace", traces.append)
-    monkeypatch.setattr(
+    stub_arr_api(monkeypatch,
         radarr_movies,
         "get_movies_from_radarr_api",
         lambda apikey_radarr, **kwargs: [
@@ -322,7 +324,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
     monkeypatch.setattr(radarr_movies, "trace", traces.append)
-    monkeypatch.setattr(
+    stub_arr_api(monkeypatch,
         radarr_movies,
         "get_movies_from_radarr_api",
         lambda apikey_radarr, **kwargs: [
@@ -340,7 +342,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
     monkeypatch.setattr(
         radarr_movies,
         "movieParser",
-        lambda movie, **kwargs: parsed_movies.append(movie["title"]) or {"radarrId": movie["id"], "title": movie["title"], "path": movie["movieFile"]["path"]},
+        lambda movie, **kwargs: parsed_movies.append(movie.title) or {"radarrId": movie.id, "title": movie.title, "path": movie.movieFile.path},
     )
     monkeypatch.setattr(radarr_movies, "add_movie", lambda movie: parsed_movies.append(f"added:{movie['title']}"))
     monkeypatch.setattr(radarr_movies, "update_movie", lambda change, **kwargs: parsed_movies.append(f"updated:{change.values['title']}") or "updated")
@@ -367,7 +369,7 @@ def test_sonarr_series_sync_returns_for_non_list_payload(monkeypatch, sync_job):
     names = []
 
     monkeypatch.setattr(sonarr_series, "check_sonarr_rootfolder", lambda **kwargs: None)
-    monkeypatch.setattr(
+    stub_arr_api(monkeypatch,
         sonarr_series,
         "get_series_from_sonarr_api",
         lambda apikey_sonarr, **kwargs: {"unexpected": "payload"},
@@ -401,7 +403,7 @@ def test_sonarr_series_sync_processes_valid_entries_in_mixed_payload(monkeypatch
     synced_series = []
 
     monkeypatch.setattr(sonarr_series, "check_sonarr_rootfolder", lambda **kwargs: None)
-    monkeypatch.setattr(
+    stub_arr_api(monkeypatch,
         sonarr_series,
         "get_series_from_sonarr_api",
         lambda apikey_sonarr, **kwargs: [

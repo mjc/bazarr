@@ -1,8 +1,9 @@
 # coding=utf-8
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import TypeVar, overload
 
 import requests
 from requests.compat import JSONDecodeError, json
@@ -60,11 +61,24 @@ def decode_arr_response(response: requests.Response) -> JsonValue:
     return payload
 
 
-def request_json(url: str, timeout: int, *, session: requests.Session | None = None) -> JsonValue:
+Result = TypeVar('Result')
+
+
+@overload
+def request_json(url: str, timeout: int, *, session: requests.Session | None = None) -> JsonValue: ...
+
+
+@overload
+def request_json(url: str, timeout: int, *, decoder: Callable[[requests.Response], Result],
+                 session: requests.Session | None = None) -> Result: ...
+
+
+def request_json(url: str, timeout: int, *, session: requests.Session | None = None,
+                 decoder: Callable[[requests.Response], Result] | None = None) -> JsonValue | Result:
     with arr_session(session) as http:
         with http.get(url, timeout=timeout, verify=False, headers=HEADERS, stream=True) as response:
             response.raise_for_status()
-            return decode_arr_response(response)
+            return decode_arr_response(response) if decoder is None else decoder(response)
 
 
 def discover_arr_version(base_url: str, apikey: str, timeout: int,

@@ -1,6 +1,9 @@
 # coding=utf-8
 
 import os
+from datetime import datetime
+
+import msgspec
 
 from dateutil import parser
 from dynaconf.utils.boxing import DynaBox
@@ -32,61 +35,66 @@ def get_matching_profile(tags, language_profiles):
 
 def seriesParser(show: Series, action: str, tags_dict: list[ArrTag], language_profiles, serie_default_profile: int | None, audio_profiles,
                  *, general: DynaBox | None = None, capabilities: SonarrCapabilities | None = None) -> SeriesValues:
-    overview = show['overview'] if 'overview' in show else ''
+    overview = show.overview
     poster = ''
     fanart = ''
-    for image in show['images']:
-        if image['coverType'] == 'poster':
-            poster_big = image['url'].split('?')[0]
+    for image in show.images:
+        if image.coverType == 'poster':
+            poster_big = image.url.split('?')[0]
             poster = f'{os.path.splitext(poster_big)[0]}-250{os.path.splitext(poster_big)[1]}'
 
-        if image['coverType'] == 'fanart':
-            fanart = image['url'].split('?')[0]
+        if image.coverType == 'fanart':
+            fanart = image.url.split('?')[0]
 
-    if show['alternateTitles'] is not None:
-        alternate_titles = [item['title'] for item in show['alternateTitles'] if 'title' in item and item['title'] not
-                            in [None, ''] and item['title'] != show['title']]
+    if show.alternateTitles is not None:
+        alternate_titles = [item.title for item in show.alternateTitles if item.title not
+                            in [None, ''] and item.title != show.title]
     else:
         alternate_titles = []
 
-    tags = [d['label'] for d in tags_dict if d['id'] in show['tags']]
+    tags = [d['label'] for d in tags_dict if d['id'] in show.tags]
 
-    imdbId = show['imdbId'] if 'imdbId' in show else None
+    imdbId = show.imdbId
 
-    ended = 'True' if 'ended' in show and show['ended'] else 'False'
+    ended = 'True' if show.ended else 'False'
 
-    lastAired = parser.parse(show['lastAired']).strftime("%Y-%m-%d") if 'lastAired' in show and show['lastAired'] else None
+    lastAired = None
+    if show.lastAired:
+        aired = parser.parse(show.lastAired)
+        if not isinstance(aired, datetime):
+            raise ValueError('Invalid last-aired date')
+        lastAired = aired.strftime('%Y-%m-%d')
 
-    original = show.get('originalLanguage')
-    original_language = original.get('name') if original is not None else None
+    original = show.originalLanguage
+    original_language = original.name if original is not None else None
 
     audio_language = []
     general_settings = settings_cache.get(settings, 'general') if general is None else general
     if not general_settings.parse_embedded_audio_track:
         if get_sonarr_info.is_legacy() if capabilities is None else capabilities.legacy:
-            audio_language = profile_id_to_language(show.get('qualityProfileId'), audio_profiles)
+            audio_language = profile_id_to_language(show.qualityProfileId, audio_profiles)
         else:
-            if 'languageProfileId' in show:
-                audio_language = profile_id_to_language(show['languageProfileId'], audio_profiles)
+            if show.languageProfileId is not msgspec.UNSET:
+                audio_language = profile_id_to_language(show.languageProfileId, audio_profiles)
             else:
                 audio_language = []
 
     parsed_series: SeriesValues = {
-        'title': show["title"],
-        'path': show["path"],
-        'tvdbId': int(show["tvdbId"]),
-        'sonarrSeriesId': int(show["id"]),
+        'title': show.title,
+        'path': show.path,
+        'tvdbId': int(show.tvdbId),
+        'sonarrSeriesId': int(show.id),
         'overview': overview,
         'poster': poster,
         'fanart': fanart,
         'audio_language': str(audio_language),
-        'sortTitle': show['sortTitle'],
-        'year': str(show['year']),
+        'sortTitle': show.sortTitle,
+        'year': str(show.year),
         'alternativeTitles': str(alternate_titles),
         'tags': str(tags),
-        'seriesType': show['seriesType'],
+        'seriesType': show.seriesType,
         'imdbId': imdbId,
-        'monitored': str(bool(show['monitored'])),
+        'monitored': str(bool(show.monitored)),
         'ended': ended,
         'lastAired': lastAired,
         'originalLanguage': original_language,
@@ -119,33 +127,33 @@ def episodeParser(episode: Episode, parse_embedded_audio_track: bool | None = No
                   *, general: DynaBox | None = None,
                   audio_languages: dict[int, str | None] | None = None) -> EpisodeValues | None:
     general_settings = settings_cache.get(settings, 'general') if general is None else general
-    file = episode.get('episodeFile')
-    if not episode['hasFile'] or file is None:
+    file = episode.episodeFile
+    if not episode.hasFile or file is None:
         return None
-    file_size = file['size']
+    file_size = file.size
     if file_size <= MINIMUM_VIDEO_SIZE:
         try:
-            file_size = os.path.getsize(path_mappings.path_replace(file['path']))
+            file_size = os.path.getsize(path_mappings.path_replace(file.path))
         except OSError:
             file_size = 0
     if not (file_size > MINIMUM_VIDEO_SIZE or
-            (general_settings.enable_strm_support and file['path'].lower().endswith('.strm'))):
+            (general_settings.enable_strm_support and file.path.lower().endswith('.strm'))):
         return None
     if parse_embedded_audio_track is None:
         parse_embedded_audio_track = general_settings.parse_embedded_audio_track
     audio_language: list[str | None] | str | None
     if parse_embedded_audio_track:
-        audio_language = embedded_audio_reader(path_mappings.path_replace(file['path']),
-                                               file_size=file['size'], episode_file_id=file['id'], use_cache=True)
+        audio_language = embedded_audio_reader(path_mappings.path_replace(file.path),
+                                               file_size=file.size, episode_file_id=file.id, use_cache=True)
     else:
-        language = file.get('language')
-        languages = file.get('languages')
+        language = file.language
+        languages = file.languages
         if language:
-            audio_language = [audio_language_from_name(language['name'])]
+            audio_language = [audio_language_from_name(language.name)]
         elif languages:
-            audio_language = [audio_language_from_name(language['name']) for language in languages]
+            audio_language = [audio_language_from_name(language.name) for language in languages]
         else:
-            series_id = episode['seriesId']
+            series_id = episode.seriesId
             if audio_languages is None:
                 audio_language = database.execute(select(TableShows.audio_language)
                                                    .where(TableShows.sonarrSeriesId == series_id)).scalar()
@@ -154,30 +162,30 @@ def episodeParser(episode: Episode, parse_embedded_audio_track: bool | None = No
                     audio_languages[series_id] = database.execute(select(TableShows.audio_language)
                                                                   .where(TableShows.sonarrSeriesId == series_id)).scalar()
                 audio_language = audio_languages[series_id]
-    media_info = file.get('mediaInfo')
-    video_codec = SonarrFormatVideoCodec(media_info.get('videoCodec')) if media_info else None
-    audio_codec = SonarrFormatAudioCodec(media_info.get('audioCodec')) if media_info else None
-    quality = file['quality']['quality']
+    media_info = file.mediaInfo
+    video_codec = SonarrFormatVideoCodec(media_info.videoCodec) if media_info else None
+    audio_codec = SonarrFormatAudioCodec(media_info.audioCodec) if media_info else None
+    quality = file.quality.quality
     try:
-        video_format, video_resolution = quality['name'].split('-')
+        video_format, video_resolution = quality.name.split('-')
     except ValueError:
-        video_format = quality['name']
-        resolution = quality.get('resolution')
-        video_resolution = f'{resolution}p' if resolution is not None else None
-    return {'sonarrSeriesId': episode['seriesId'],
-            'sonarrEpisodeId': episode['id'],
-            'title': episode['title'],
-            'path': file['path'],
-            'season': episode['seasonNumber'],
-            'episode': episode['episodeNumber'],
-            'sceneName': file.get('sceneName'),
-            'monitored': str(episode['monitored']),
+        video_format = quality.name
+        resolution = quality.resolution
+        video_resolution = f'{resolution}p' if resolution is not msgspec.UNSET else None
+    return {'sonarrSeriesId': episode.seriesId,
+            'sonarrEpisodeId': episode.id,
+            'title': episode.title,
+            'path': file.path,
+            'season': episode.seasonNumber,
+            'episode': episode.episodeNumber,
+            'sceneName': file.sceneName,
+            'monitored': str(episode.monitored),
             'format': video_format,
             'resolution': video_resolution,
             'video_codec': video_codec,
             'audio_codec': audio_codec,
-            'episode_file_id': file['id'],
+            'episode_file_id': file.id,
             'audio_language': str(audio_language),
-            'file_size': file['size'],
-            'absoluteEpisode': episode.get('absoluteEpisodeNumber'),
-            'tvdbId': episode.get('tvdbId')}
+            'file_size': file.size,
+            'absoluteEpisode': episode.absoluteEpisodeNumber,
+            'tvdbId': episode.tvdbId}

@@ -1,5 +1,4 @@
 from languages.registry import LanguageRegistry
-from tests.helpers.arr_fixtures import sonarr_connection, radarr_connection, series_payload, movie_payload
 from tests.helpers.profile_records import profile_record
 """Exercise the runtime ORM and autocommit engine, rather than table proxies."""
 from collections.abc import Mapping, Sequence
@@ -24,6 +23,9 @@ import sonarr.sync.series as sonarr
 import subtitles.indexer.movies as movie_indexer
 import subtitles.indexer.series as episode_indexer
 import subtitles.wanted_state as state
+from tests.helpers.arr_fixtures import (
+    movie_payload, radarr_connection, series_payload, sonarr_connection, stub_arr_api,
+)
 
 
 SqlValue: TypeAlias = str | int | float | bytes | None
@@ -336,7 +338,7 @@ def configure_sync(monkeypatch, module, payload):
     service = 'radarr' if movie_sync else 'sonarr'
     monkeypatch.setattr(module, f'check_{service}_rootfolder', lambda **kwargs: None)
     monkeypatch.setattr(module, f'get_{service}_connection', lambda *args, **kwargs: radarr_connection() if movie_sync else sonarr_connection())
-    monkeypatch.setattr(module, 'get_movies_from_radarr_api' if movie_sync else 'get_series_from_sonarr_api',
+    stub_arr_api(monkeypatch, module, 'get_movies_from_radarr_api' if movie_sync else 'get_series_from_sonarr_api',
                         lambda *args, **kwargs: payload)
     for name in ['get_profile_list', 'get_tags', 'get_language_profiles']:
         monkeypatch.setattr(module, name, lambda **kwargs: [])
@@ -389,7 +391,7 @@ def test_incomplete_sync_still_processes_identifiable_entries(runtime_database, 
     configure_sync(monkeypatch, module, [None, good])
     processed = []
     if media_type == 'movie':
-        monkeypatch.setattr(radarr, 'movieParser', lambda movie, **kwargs: {'radarrId': movie['id'], 'title': movie['title']})
+        monkeypatch.setattr(radarr, 'movieParser', lambda movie, **kwargs: {'radarrId': movie.id, 'title': movie.title})
         monkeypatch.setattr(radarr, 'add_movie', lambda movie: processed.append(movie['radarrId']))
         radarr.update_movies(job_id='test')
     else:

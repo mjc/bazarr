@@ -2,41 +2,46 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TypeGuard, TypedDict
+from typing import Annotated, TypedDict
 from typing_extensions import NotRequired
 
-from utilities.json_types import JsonValue
+import msgspec
+
 from utilities.arr_types import Language, FileQuality
 
 
-class MediaInfo(TypedDict):
-    videoCodec: NotRequired[str | None]
-    audioCodec: NotRequired[str | None]
+class MediaInfo(msgspec.Struct):
+    videoCodec: str | None = None
+    audioCodec: str | None = None
 
 
-class EpisodeFile(TypedDict):
-    id: int
+class EpisodeFile(msgspec.Struct, kw_only=True):
+    id: Annotated[int, msgspec.Meta(gt=0)]
     path: str
-    size: int
+    size: Annotated[int, msgspec.Meta(ge=0)]
     quality: FileQuality
-    sceneName: NotRequired[str | None]
-    language: NotRequired[Language | None]
-    languages: NotRequired[list[Language] | None]
-    mediaInfo: NotRequired[MediaInfo | None]
+    sceneName: str | None = None
+    language: Language | None = None
+    languages: list[Language] | None = None
+    mediaInfo: MediaInfo | None = None
+
+    def __post_init__(self) -> None:
+        if not self.path.strip():
+            raise ValueError('Episode file path is empty')
 
 
-class Episode(TypedDict):
-    id: int
-    seriesId: int
+class Episode(msgspec.Struct, kw_only=True):
+    id: Annotated[int, msgspec.Meta(gt=0)]
+    seriesId: Annotated[int, msgspec.Meta(gt=0)]
     title: str
     hasFile: bool
     monitored: bool
     seasonNumber: int
     episodeNumber: int
-    episodeFileId: NotRequired[int]
-    episodeFile: NotRequired[EpisodeFile | None]
-    absoluteEpisodeNumber: NotRequired[int | None]
-    tvdbId: NotRequired[int | None]
+    episodeFileId: int | msgspec.UnsetType = msgspec.UNSET
+    episodeFile: EpisodeFile | None = None
+    absoluteEpisodeNumber: int | None = None
+    tvdbId: int | None = None
 
 
 class EpisodeValues(TypedDict):
@@ -75,101 +80,34 @@ class EpisodeSyncPlan:
     skipped_count: int
 
 
-def _language(value: JsonValue) -> bool:
-    return isinstance(value, dict) and 'name' in value and (value['name'] is None or isinstance(value['name'], str))
-
-
-def is_episode_file(value: JsonValue) -> TypeGuard[EpisodeFile]:
-    if not isinstance(value, dict):
-        return False
-    file_id, path, size = value.get('id'), value.get('path'), value.get('size')
-    if not (type(file_id) is int and file_id > 0
-            and isinstance(path, str) and path.strip()
-            and type(size) is int and size >= 0):
-        return False
-    quality = value.get('quality')
-    if not isinstance(quality, dict):
-        return False
-    definition = quality.get('quality')
-    if not isinstance(definition, dict) or not isinstance(definition.get('name'), str):
-        return False
-    if 'resolution' in definition and type(definition['resolution']) is not int:
-        return False
-    if 'sceneName' in value and value['sceneName'] is not None and not isinstance(value['sceneName'], str):
-        return False
-    if 'language' in value and value['language'] is not None and not _language(value['language']):
-        return False
-    if 'languages' in value and value['languages'] is not None:
-        languages = value['languages']
-        if not isinstance(languages, list) or not all(_language(language) for language in languages):
-            return False
-    if 'mediaInfo' in value and value['mediaInfo'] is not None:
-        media = value['mediaInfo']
-        if not isinstance(media, dict):
-            return False
-        for key in ('videoCodec', 'audioCodec'):
-            if key in media and media[key] is not None and not isinstance(media[key], str):
-                return False
-    return True
-
-
-def is_episode(value: JsonValue) -> TypeGuard[Episode]:
-    if not isinstance(value, dict):
-        return False
-    for key in ('id', 'seriesId', 'seasonNumber', 'episodeNumber'):
-        if type(value.get(key)) is not int:
-            return False
-    episode_id, series_id = value['id'], value['seriesId']
-    if type(episode_id) is not int or type(series_id) is not int or episode_id <= 0 or series_id <= 0:
-        return False
-    if not isinstance(value.get('title'), str):
-        return False
-    if not isinstance(value.get('hasFile'), bool) or not isinstance(value.get('monitored'), bool):
-        return False
-    for key in ('absoluteEpisodeNumber', 'tvdbId'):
-        if key in value and value[key] is not None and type(value[key]) is not int:
-            return False
-    if 'episodeFileId' in value and type(value['episodeFileId']) is not int:
-        return False
-    if 'episodeFile' in value and value['episodeFile'] is not None and not is_episode_file(value['episodeFile']):
-        return False
-    return True
-
-
-def _episode_list(value: JsonValue) -> TypeGuard[list[Episode]]:
-    return isinstance(value, list) and all(is_episode(episode) for episode in value)
-
-
-def complete_episode_snapshot(episodes: JsonValue, episode_files: JsonValue = None,
+def complete_episode_snapshot(episodes: list[Episode], episode_files: list[EpisodeFile] | None = None,
                               *, separate_files: bool = False) -> EpisodeSnapshot | None:
-    if not _episode_list(episodes):
-        return None
     files_by_id: dict[int, EpisodeFile] = {}
     if separate_files:
-        if not isinstance(episode_files, list):
+        if episode_files is None:
             return None
         for file in episode_files:
-            if not is_episode_file(file) or file['id'] in files_by_id:
+            if file.id in files_by_id:
                 return None
-            files_by_id[file['id']] = file
+            files_by_id[file.id] = file
     seen_ids: set[int] = set()
     for episode in episodes:
-        if episode['id'] in seen_ids:
+        if episode.id in seen_ids:
             return None
-        seen_ids.add(episode['id'])
-        if not episode['hasFile']:
+        seen_ids.add(episode.id)
+        if not episode.hasFile:
             continue
         if separate_files:
-            file_id = episode.get('episodeFileId')
-            if file_id is None or file_id not in files_by_id:
+            file_id = episode.episodeFileId
+            if file_id is msgspec.UNSET or file_id not in files_by_id:
                 return None
-        elif episode.get('episodeFile') is None:
+        elif episode.episodeFile is None:
             return None
     if separate_files:
         for episode in episodes:
-            if episode['hasFile']:
-                file_id = episode.get('episodeFileId')
-                if file_id is None:
+            if episode.hasFile:
+                file_id = episode.episodeFileId
+                if file_id is msgspec.UNSET:
                     return None
-                episode['episodeFile'] = files_by_id[file_id]
+                episode.episodeFile = files_by_id[file_id]
     return EpisodeSnapshot(episodes)

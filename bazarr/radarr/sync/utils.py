@@ -7,15 +7,38 @@ from app.config import settings
 from radarr.info import RadarrConnection, get_radarr_info, url_api_radarr
 from utilities.arr import arr_session, request_json
 from utilities.json_types import JsonValue
+from utilities.arr_decoding import ArrRecordDecoder, InvalidArrRecord
+from collections.abc import Callable
+from typing import TypeVar, overload
+
+from radarr.movie_snapshot import Movie
+
+MOVIE_DECODER = ArrRecordDecoder(Movie)
+
+Result = TypeVar('Result')
+
+@overload
+def _request_radarr(path: str, apikey: str, connection: RadarrConnection | None = None,
+                     *, session: requests.Session | None = None) -> JsonValue: ...
+
+
+@overload
+def _request_radarr(path: str, apikey: str, connection: RadarrConnection | None = None,
+                     *, session: requests.Session | None = None,
+                     decoder: Callable[[requests.Response], Result]) -> Result | None: ...
 
 
 def _request_radarr(path: str, apikey: str, connection: RadarrConnection | None = None,
-                     *, session: requests.Session | None = None) -> JsonValue:
+                     *, session: requests.Session | None = None,
+                     decoder: Callable[[requests.Response], Result] | None = None) -> JsonValue | Result:
     with arr_session(session) as http:
         api_url = url_api_radarr(session=http) if connection is None else connection.api_url
         timeout = int(settings.radarr.http_timeout) if connection is None else connection.timeout
         try:
-            return request_json(f'{api_url}{path}&apikey={apikey}', timeout, session=http)
+            url = f'{api_url}{path}&apikey={apikey}'
+            if decoder is None:
+                return request_json(url, timeout, session=http)
+            return request_json(url, timeout, session=http, decoder=decoder)
         except requests.exceptions.RequestException:
             logging.exception('BAZARR Error trying to get %s from Radarr.', path.split('?')[0])
             return None
@@ -51,8 +74,8 @@ def get_tags(*, connection: RadarrConnection | None = None,
 
 def get_movies_from_radarr_api(apikey_radarr: str, radarr_id: int | None = None,
                                *, connection: RadarrConnection | None = None,
-                                  session: requests.Session | None = None) -> JsonValue:
-    return _request_radarr(f'movie{f"/{radarr_id}" if radarr_id else ""}?', apikey_radarr, connection, session=session)
+                                  session: requests.Session | None = None) -> Movie | list[Movie | InvalidArrRecord] | InvalidArrRecord | None:
+    return _request_radarr(f'movie{f"/{radarr_id}" if radarr_id else ""}?', apikey_radarr, connection, session=session, decoder=MOVIE_DECODER.decode_response)
 
 
 def get_history_from_radarr_api(apikey_radarr: str, movie_id: int,

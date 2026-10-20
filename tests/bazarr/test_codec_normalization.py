@@ -6,7 +6,9 @@ from radarr.sync.converter import RadarrFormatAudioCodec, RadarrFormatVideoCodec
 from radarr.sync.parser import movieParser
 from sonarr.sync.converter import SonarrFormatAudioCodec, SonarrFormatVideoCodec
 from sonarr.sync.parser import episodeParser
-from tests.helpers.arr_fixtures import episode_payload, movie_payload, radarr_connection
+from tests.helpers.arr_fixtures import (
+    episode_payload, episode_record, movie_payload, movie_record, radarr_connection,
+)
 
 
 @pytest.mark.parametrize('codec,codec_id,profile,features,expected', [
@@ -121,7 +123,7 @@ def test_movie_parser_retains_codecs_for_legacy_and_current_media_info(
     movie['movieFile']['mediaInfo'] = media
     general = DynaBox({'parse_embedded_audio_track': False, 'movie_tag_enabled': False})
 
-    parsed = movieParser(movie, 'update', [], [], None, [], general=general, capabilities=capabilities)
+    parsed = movieParser(movie_record(movie), 'update', [], [], None, [], general=general, capabilities=capabilities)
 
     assert parsed is not None
     assert parsed['video_codec'] == video
@@ -141,7 +143,7 @@ def test_episode_parser_normalizes_its_validated_codec_fields(
     file['mediaInfo'] = {'videoCodec': video, 'audioCodec': audio}
     general = DynaBox({'parse_embedded_audio_track': False, 'enable_strm_support': False})
 
-    parsed = episodeParser(episode, general=general)
+    parsed = episodeParser(episode_record(episode), general=general)
 
     assert parsed is not None
     assert parsed['video_codec'] == expected_video

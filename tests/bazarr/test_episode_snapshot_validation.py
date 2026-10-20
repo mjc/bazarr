@@ -1,6 +1,7 @@
+import json
 import pytest
 
-from sonarr.episode_snapshot import is_episode, is_episode_file
+from sonarr.sync.utils import EPISODE_DECODER, EPISODEFILE_DECODER
 from utilities.json_types import JsonValue
 
 
@@ -11,7 +12,7 @@ def test_episode_integer_fields_reject_non_integer_values(field: str, invalid: J
     value: dict[str, JsonValue] = {'id': 1, 'seriesId': 2, 'title': 'Episode', 'hasFile': False,
                                   'monitored': True, 'seasonNumber': 0, 'episodeNumber': 0}
     value[field] = invalid
-    assert not is_episode(value)
+    assert EPISODE_DECODER.decode_complete(json.dumps(value)) is None
 
 
 @pytest.mark.parametrize('field', ['id', 'size', 'resolution'])
@@ -24,13 +25,13 @@ def test_episode_file_integer_fields_reject_non_integer_values(field: str, inval
         definition[field] = invalid
     else:
         value[field] = invalid
-    assert not is_episode_file(value)
+    assert EPISODEFILE_DECODER.decode_complete(json.dumps(value)) is None
 
 
 def test_episode_integer_checks_preserve_zero_and_optional_null_values() -> None:
     value: dict[str, JsonValue] = {'id': 1, 'seriesId': 2, 'title': 'Episode', 'hasFile': False,
                                   'monitored': True, 'seasonNumber': 0, 'episodeNumber': 0,
                                   'absoluteEpisodeNumber': None, 'tvdbId': None}
-    assert is_episode(value)
-    assert is_episode_file({'id': 1, 'path': '/show/episode.mkv', 'size': 0,
-                            'quality': {'quality': {'name': 'HDTV', 'resolution': 0}}})
+    assert EPISODE_DECODER.decode_complete(json.dumps(value)) is not None
+    assert EPISODEFILE_DECODER.decode_complete(json.dumps({'id': 1, 'path': '/show/episode.mkv', 'size': 0,
+                            'quality': {'quality': {'name': 'HDTV', 'resolution': 0}}})) is not None

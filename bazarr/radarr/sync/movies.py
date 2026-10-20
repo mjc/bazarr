@@ -10,10 +10,10 @@ from typing import Literal
 from utilities.video_analyzer import embedded_audio_reader
 from dynaconf.utils.boxing import DynaBox
 from radarr.info import RadarrConnection, get_radarr_connection
-from radarr.movie_snapshot import MovieChange, MovieSyncPlan, MovieValues, is_movie, movie_file_size
+from radarr.movie_snapshot import Movie, MovieChange, MovieSyncPlan, MovieValues, movie_file_size
 from utilities.arr_types import is_arr_tags
 from utilities.arr import arr_session
-from utilities.json_types import JsonValue
+from utilities.arr_decoding import InvalidArrRecord
 from functools import reduce
 
 from app.config import settings
@@ -56,16 +56,27 @@ def get_movie_file_size_from_db(movie_path):
     return bazarr_file_size
 
 
-def _has_usable_movie_file(movie: JsonValue, *, general: DynaBox | None = None) -> bool | None:
-    if not isinstance(movie, dict) or not isinstance(movie.get('hasFile'), bool):
-        return None
-    if not movie['hasFile']:
-        return False
-    file = movie.get('movieFile')
-    if not isinstance(file, dict):
-        return None
-    path, file_id = file.get('path'), file.get('id')
-    size = movie_file_size(file.get('size'))
+def _has_usable_movie_file(movie: Movie | InvalidArrRecord, *, general: DynaBox | None = None) -> bool | None:
+    if isinstance(movie, Movie):
+        if not movie.hasFile:
+            return False
+        file = movie.movieFile
+        if file is None:
+            return None
+        path, file_id, size = file.path, file.id, movie_file_size(file.size)
+    else:
+        # An invalid row can still explicitly say its file is absent. Preserve
+        # that signal without treating malformed metadata as a missing movie.
+        value = movie.value
+        if not isinstance(value, dict) or not isinstance(value.get('hasFile'), bool):
+            return None
+        if not value['hasFile']:
+            return False
+        raw_file = value.get('movieFile')
+        if not isinstance(raw_file, dict):
+            return None
+        path, file_id = raw_file.get('path'), raw_file.get('id')
+        size = movie_file_size(raw_file.get('size'))
     if not isinstance(path, str) or not path.strip() or type(file_id) is not int or file_id <= 0 or size is None:
         return None
     if size > MINIMUM_VIDEO_SIZE or get_movie_file_size_from_db(path) > MINIMUM_VIDEO_SIZE:
@@ -172,10 +183,11 @@ def _prepare_movie_sync(connection: RadarrConnection, radarr: DynaBox,
     changes: list[MovieChange] = []
     missing = 0
     for position, raw in enumerate(payload, start=1):
-        if not isinstance(raw, dict):
-            complete = False
-            continue
-        movie_id = raw.get('id')
+        if isinstance(raw, Movie):
+            movie_id = raw.id
+        else:
+            value = raw.value
+            movie_id = value.get('id') if isinstance(value, dict) else None
         if type(movie_id) is not int or movie_id <= 0 or movie_id in seen:
             complete = False
             continue
@@ -183,7 +195,7 @@ def _prepare_movie_sync(connection: RadarrConnection, radarr: DynaBox,
         usable = _has_usable_movie_file(raw, general=general)
         if usable is not False:
             retained.add(movie_id)
-        if usable is not True or not is_movie(raw):
+        if usable is not True or not isinstance(raw, Movie):
             missing += 1
             continue
         previous = current.get(movie_id)
@@ -312,14 +324,18 @@ def update_one_movie(movie_id: int | None, action: str, defer_search: bool = Fal
             return
         movie_data = get_movies_from_radarr_api(apikey_radarr=connection.apikey, radarr_id=movie_id,
                                                connection=connection, session=http)
-        if not isinstance(movie_data, dict) or type(movie_data.get('id')) is not int or movie_data['id'] != movie_id:
+        if not isinstance(movie_data, (Movie, InvalidArrRecord)):
+            return
+        value = movie_data.value if isinstance(movie_data, InvalidArrRecord) else None
+        response_id = movie_data.id if isinstance(movie_data, Movie) else value.get('id') if isinstance(value, dict) else None
+        if type(response_id) is not int or response_id != movie_id:
             return
         usable = _has_usable_movie_file(movie_data, general=general)
         if usable is None:
             return
         movie = None
         if usable:
-            if not is_movie(movie_data):
+            if not isinstance(movie_data, Movie):
                 return
             audio_profiles = get_profile_list(connection=connection, session=http)
             tags = get_tags(connection=connection, session=http)
