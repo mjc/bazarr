@@ -33,7 +33,7 @@ class Languages(Resource):
             seen_codes: set[str] = set()
             registry = get_language_registry()
             for table in (TableHistory, TableHistoryMovie):
-                column = table.__table__.c.language
+                column = table.language
                 statement = select(column).where(column.is_not(None))
                 with database.execute(statement) as rows:
                     for token in rows.yield_per(500).scalars():
