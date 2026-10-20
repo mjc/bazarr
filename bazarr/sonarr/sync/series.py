@@ -14,6 +14,7 @@ from sonarr.rootfolder import check_sonarr_rootfolder
 from app.database import TableShows, TableLanguagesProfiles, database, insert, update, select, text_boolean
 from utilities.arr_sync_lookups import ArrSyncLookups, default_profile_id
 from utilities.arr_types import KEEP_PROFILE
+from utilities.arr_sync_state import SERIES_STATE, values_match
 from utilities.path_mappings import path_mappings
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue, JobCanceled
@@ -151,9 +152,9 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
 
     # Check if there's a row in database for this series ID
     existing_series = database.execute(
-        select(TableShows)
+        SERIES_STATE
         .where(TableShows.sonarrSeriesId == series_id))\
-        .first()
+        .mappings().first()
 
     # Delete series from DB
     if action == 'deleted' and existing_series:
@@ -201,12 +202,7 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
 
     if existing_series:
         # Update existing series in DB
-        existing_series_model = existing_series[0]
-        existing_series_values = {
-            column.name: getattr(existing_series_model, column.name)
-            for column in existing_series_model.__table__.columns
-        }
-        if series.items() <= existing_series_values.items():
+        if values_match(existing_series, series):
             if sync_episodes_after_update and not is_signalr:
                 sync_episodes(series_id=series['sonarrSeriesId'])
             return
