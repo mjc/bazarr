@@ -46,10 +46,10 @@ def get_profile_list() -> list[AudioProfile] | None:
             if profiles_json.status_code != 200:
                 return None
             if get_radarr_info.is_legacy():
-                profiles = LEGACY_PROFILE_DECODER.decode_list_response(profiles_json)
+                profiles = LEGACY_PROFILE_DECODER.decode_response(profiles_json)
                 return ([(profile.id, profile.language.capitalize()) for profile in profiles if profile is not None]
                         if profiles is not None else None)
-            profiles = PROFILE_DECODER.decode_list_response(profiles_json)
+            profiles = PROFILE_DECODER.decode_response(profiles_json)
             return ([(profile.id, profile.language.name.capitalize()) for profile in profiles if profile is not None]
                     if profiles is not None else None)
     return None
@@ -76,7 +76,7 @@ def get_tags() -> list[ArrTag] | None:
         with tagsDict:
             if tagsDict.status_code != 200:
                 return None
-            tags = TAG_DECODER.decode_list_response(tagsDict)
+            tags = TAG_DECODER.decode_response(tagsDict)
             return [tag for tag in tags if tag is not None] if tags is not None else None
 
 

@@ -108,13 +108,13 @@ class ArrRecordDecoder(Generic[Record, Invalid]):
         except ValidationError:
             return self.from_value(self._json_value(data))
 
-    def decode_response(self, response: ArrResponse) -> PartialResult[Record, Invalid]:
+    def decode_response(self, response: ArrResponse, *, single: bool = False) -> list[Record | Invalid] | None:
         if response.encoding is None or response.encoding.lower() not in ('utf-8', 'utf8'):
-            return self.from_value(response.json())
-        return self.decode(response.content)
-
-    def decode_list_response(self, response: ArrResponse) -> list[Record | Invalid] | None:
-        result = self.decode_response(response)
+            result = self.from_value(response.json())
+        else:
+            result = self.decode(response.content)
+        if single:
+            return [result] if result is not None and not isinstance(result, list) else None
         return result if isinstance(result, list) else None
 
     def complete_from_value(self, value: JsonValue) -> CompleteResult[Record]:
@@ -131,7 +131,11 @@ class ArrRecordDecoder(Generic[Record, Invalid]):
         except ValidationError:
             return self.complete_from_value(self._json_value(data))
 
-    def decode_complete_response(self, response: ArrResponse) -> CompleteResult[Record]:
+    def decode_complete_response(self, response: ArrResponse, *, single: bool = False) -> list[Record] | None:
         if response.encoding is None or response.encoding.lower() not in ('utf-8', 'utf8'):
-            return self.complete_from_value(response.json())
-        return self.decode_complete(response.content)
+            result = self.complete_from_value(response.json())
+        else:
+            result = self.decode_complete(response.content)
+        if single:
+            return [result] if result is not None and not isinstance(result, list) else None
+        return result if isinstance(result, list) else None
