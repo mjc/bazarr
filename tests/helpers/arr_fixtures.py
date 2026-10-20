@@ -51,10 +51,17 @@ def stub_arr_api(monkeypatch: pytest.MonkeyPatch, module: ModuleType, name: str,
 
     @wraps(fetch)
     def response(*args: Params.args, **kwargs: Params.kwargs) -> (
-        ArrFixtureRecord | Sequence[ArrFixtureRecord | None] | None
+        list[ArrFixtureRecord | None] | None
     ):
-        result = decode(fetch(*args, **kwargs))
-        return [result] if name == 'get_series_from_sonarr_api' and isinstance(result, Series) else result
+        single = len(args) > 1 or any(kwargs.get(key) is not None for key in (
+            'radarr_id', 'sonarr_series_id', 'episode_id', 'episode_file_id'))
+        value = fetch(*args, **kwargs)
+        if isinstance(value, list) == single:
+            return None
+        result = decode(value)
+        if result is None or isinstance(result, list):
+            return result
+        return [result]
 
     monkeypatch.setattr(module, name, response)
 

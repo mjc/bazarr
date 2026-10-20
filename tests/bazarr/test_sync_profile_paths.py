@@ -1,4 +1,6 @@
 from utilities import arr_files
+import json
+from tests.bazarr.test_arr_typed_decoding import make_response
 from tests.helpers.arr_fixtures import episode_record, movie_payload, series_payload, series_record, stub_arr_api
 from types import SimpleNamespace
 
@@ -13,7 +15,7 @@ import subtitles.sync as subtitle_sync
 
 
 def _response(payload):
-    return SimpleNamespace(json=lambda: payload)
+    return make_response(json.dumps(payload).encode())
 
 
 @pytest.fixture
@@ -43,9 +45,9 @@ def configured_sonarr(monkeypatch):
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
-        ([{"id": 1, "language": None}, {"id": 2, "language": "English"}], [[2, "English"]]),
-        ([{"id": 1, "language": 123}, {"id": 2, "language": "French"}], [[2, "French"]]),
-        ([None, "bad", {"id": 2, "language": "Spanish"}], [[2, "Spanish"]]),
+        ([{"id": 1, "language": None}, {"id": 2, "language": "English"}], [(2, "English")]),
+        ([{"id": 1, "language": 123}, {"id": 2, "language": "French"}], [(2, "French")]),
+        ([None, "bad", {"id": 2, "language": "Spanish"}], [(2, "Spanish")]),
     ],
 )
 def test_radarr_legacy_profile_parser_filters_malformed_languages(configured_radarr, monkeypatch, payload, expected):
@@ -64,7 +66,7 @@ def test_radarr_v4_profile_parser_filters_malformed_nested_language_names(config
         ),
     )
 
-    assert configured_radarr.get_profile_list() == [[2, "Spanish"]]
+    assert configured_radarr.get_profile_list() == [(2, "Spanish")]
 
 
 def test_radarr_profile_parser_skips_missing_profile_id(configured_radarr, monkeypatch):
@@ -76,9 +78,9 @@ def test_radarr_profile_parser_skips_missing_profile_id(configured_radarr, monke
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
-        ([{"id": 1, "language": None}, {"id": 2, "language": "German"}], [[2, "German"]]),
-        ([{"id": 1, "language": 123}, {"id": 2, "language": "Italian"}], [[2, "Italian"]]),
-        ([None, "bad", {"id": 2, "language": "German"}], [[2, "German"]]),
+        ([{"id": 1, "language": None}, {"id": 2, "language": "German"}], [(2, "German")]),
+        ([{"id": 1, "language": 123}, {"id": 2, "language": "Italian"}], [(2, "Italian")]),
+        ([None, "bad", {"id": 2, "language": "German"}], [(2, "German")]),
         ([], []),
     ],
 )
@@ -97,7 +99,7 @@ def test_sonarr_v3_profile_parser_filters_malformed_names(configured_sonarr, mon
         lambda *args, **kwargs: _response([{"id": 1, "name": None}, {"id": 2, "name": "Profile1"}]),
     )
 
-    assert configured_sonarr.get_profile_list() == [[2, "Profile1"]]
+    assert configured_sonarr.get_profile_list() == [(2, "Profile1")]
 
 
 def test_sonarr_v3_profile_parser_returns_empty_for_all_malformed(configured_sonarr, monkeypatch):
@@ -405,7 +407,7 @@ def test_sonarr_series_sync_processes_valid_entries_in_mixed_payload(monkeypatch
         lambda *args, **kwargs: SimpleNamespace(all=lambda: []),
     )
     monkeypatch.setattr(sonarr_series, "get_profile_list", lambda: [])
-    monkeypatch.setattr(sonarr_series, "get_tags", lambda: {})
+    monkeypatch.setattr(sonarr_series, "get_tags", lambda: [])
     monkeypatch.setattr(sonarr_series, "get_language_profiles", lambda: [])
     monkeypatch.setattr(sonarr_series, "update_one_series", lambda series_id, **kwargs: processed.append(series_id))
     monkeypatch.setattr(sonarr_series, "sync_episodes", lambda series_id: synced_series.append(series_id))

@@ -21,6 +21,33 @@ OmittedInt: TypeAlias = Annotated[
     StrictInt | Annotated[None, BeforeValidator(_present_integer)], Field(union_mode='left_to_right')]
 
 
+ProfileId: TypeAlias = int | float | str | bool
+AudioProfile: TypeAlias = tuple[ProfileId, str]
+
+
+@dataclass(slots=True)
+class LegacyAudioProfile:
+    id: ProfileId
+    language: str
+
+
+@dataclass(slots=True)
+class SonarrAudioProfile:
+    id: ProfileId
+    name: str
+
+
+@dataclass(slots=True)
+class ProfileLanguage:
+    name: str
+
+
+@dataclass(slots=True)
+class RadarrAudioProfile:
+    id: ProfileId
+    language: ProfileLanguage
+
+
 @dataclass(slots=True)
 class Language:
     name: str | None

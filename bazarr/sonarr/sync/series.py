@@ -86,6 +86,8 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
 
         audio_profiles = get_profile_list()
         tagsDict = get_tags()
+        if tagsDict is None:
+            return
         language_profiles = get_language_profiles()
         lookups = ArrSyncLookups(tagsDict, language_profiles, audio_profiles)
 
@@ -179,6 +181,8 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
     if lookups is None:
         audio_profiles = get_profile_list()
         tagsDict = get_tags()
+        if tagsDict is None:
+            return
         language_profiles = get_language_profiles()
         lookups = ArrSyncLookups(tagsDict, language_profiles, audio_profiles)
 

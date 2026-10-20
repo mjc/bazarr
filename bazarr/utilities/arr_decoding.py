@@ -113,6 +113,10 @@ class ArrRecordDecoder(Generic[Record, Invalid]):
             return self.from_value(response.json())
         return self.decode(response.content)
 
+    def decode_list_response(self, response: ArrResponse) -> list[Record | Invalid] | None:
+        result = self.decode_response(response)
+        return result if isinstance(result, list) else None
+
     def complete_from_value(self, value: JsonValue) -> CompleteResult[Record]:
         try:
             return self._payload.validate_python(value)

@@ -10,7 +10,7 @@ from sonarr.sync import parser as series
 from tests.helpers.arr_fixtures import movie_payload, series_payload, series_record
 from utilities.arr_sync_lookups import ArrSyncLookups
 from utilities.arr_types import ArrTag
-from utilities.json_types import JsonValue
+from utilities.arr_types import AudioProfile
 
 
 def test_tag_order_and_duplicate_catalogue_entries_are_preserved() -> None:
@@ -41,8 +41,7 @@ def test_profile_priority_uses_profile_order() -> None:
 
 
 def test_audio_profiles_preserve_duplicates_and_id_equality() -> None:
-    profiles: list[list[JsonValue]] = [[1, 'English'], [1.0, 'French'], ['1', 'German'],
-                                     [[1], 'Invalid'], [True, 'Spanish']]
+    profiles: list[AudioProfile] = [(1, 'English'), (1.0, 'French'), ('1', 'German'), (True, 'Spanish')]
     lookups = ArrSyncLookups([], [], profiles)
     assert lookups.audio_languages(1) == ['English', 'French', 'Spanish']
     assert lookups.audio_languages(2) == []
@@ -66,7 +65,7 @@ def test_catalogue_is_consumed_once() -> None:
             seen.append(identifier)
             yield {'id': identifier, 'label': str(identifier)}
 
-    lookups = ArrSyncLookups(catalogue(), [(7, 'Language', '2')], [[1, 'English']])
+    lookups = ArrSyncLookups(catalogue(), [(7, 'Language', '2')], [(1, 'English')])
     for _ in range(20):
         assert lookups.tags([2, 7]) == ['2', '7']
         assert lookups.matching_profile(['2']) == 7
@@ -77,7 +76,7 @@ def test_catalogue_is_consumed_once() -> None:
 @pytest.mark.parametrize('kind', ['movie', 'series'])
 def test_parsers_use_shared_lookups_and_live_tag_settings(kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
     lookups = ArrSyncLookups([{'id': 1, 'label': 'a'}, {'id': 2, 'label': 'b'}],
-                            [(7, 'Preferred', 'a'), (9, 'Other', 'b')], [[1, 'English']])
+                            [(7, 'Preferred', 'a'), (9, 'Other', 'b')], [(1, 'English')])
     monkeypatch.setattr(movies.get_radarr_info, 'is_legacy', lambda: True)
     monkeypatch.setattr(series.get_sonarr_info, 'is_legacy', lambda: True)
     monkeypatch.setattr(movies.settings.general, 'parse_embedded_audio_track', False)

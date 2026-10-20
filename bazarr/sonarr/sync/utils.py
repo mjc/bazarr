@@ -7,6 +7,7 @@ from app.config import settings
 from sonarr.info import get_sonarr_info, url_api_sonarr
 from constants import HEADERS
 from utilities.arr_decoding import ArrRecordDecoder, CompleteResult, InvalidAsNone, RecordPayload
+from utilities.arr_types import ArrTag, AudioProfile, LegacyAudioProfile, SonarrAudioProfile
 from sonarr.series_snapshot import Series
 from sonarr.episode_snapshot import Episode, EpisodeFile
 
@@ -14,18 +15,24 @@ SERIES_DECODER = ArrRecordDecoder[Series, None](RecordPayload[Series], RecordPay
 EPISODE_DECODER = ArrRecordDecoder[Episode, None](RecordPayload[Episode], RecordPayload[InvalidAsNone[Episode]])
 EPISODEFILE_DECODER = ArrRecordDecoder[EpisodeFile, None](RecordPayload[EpisodeFile], RecordPayload[InvalidAsNone[EpisodeFile]])
 
+LEGACY_PROFILE_DECODER = ArrRecordDecoder[LegacyAudioProfile, None](
+    RecordPayload[LegacyAudioProfile], RecordPayload[InvalidAsNone[LegacyAudioProfile]])
+PROFILE_DECODER = ArrRecordDecoder[SonarrAudioProfile, None](
+    RecordPayload[SonarrAudioProfile], RecordPayload[InvalidAsNone[SonarrAudioProfile]])
+TAG_DECODER = ArrRecordDecoder[ArrTag, None](RecordPayload[ArrTag], RecordPayload[InvalidAsNone[ArrTag]])
 
-def get_profile_list():
+
+def get_profile_list() -> list[AudioProfile] | None:
     apikey_sonarr = settings.sonarr.apikey
-    profiles_list = []
 
     # Get profiles data from Sonarr
-    if get_sonarr_info.is_legacy():
+    legacy = get_sonarr_info.is_legacy()
+    if legacy:
         url_sonarr_api_series = f"{url_api_sonarr()}profile?apikey={apikey_sonarr}"
     else:
         if not get_sonarr_info.version().startswith('3.'):
             # return an empty list when using Sonarr >= v4 that does not support series languages profiles anymore
-            return profiles_list
+            return []
         url_sonarr_api_series = f"{url_api_sonarr()}languageprofile?apikey={apikey_sonarr}"
 
     try:
@@ -41,30 +48,20 @@ def get_profile_list():
         logging.exception("BAZARR Error trying to get profiles from Sonarr.")
         return None
     else:
-        # Parsing data returned from Sonarr
-        if get_sonarr_info.is_legacy():
-            for profile in profiles_json.json():
-                if not isinstance(profile, dict):
-                    continue
-                profile_id = profile.get('id')
-                language = profile.get('language')
-                if profile_id is not None and isinstance(language, str):
-                    profiles_list.append([profile_id, language.capitalize()])
-        else:
-            for profile in profiles_json.json():
-                if not isinstance(profile, dict):
-                    continue
-                profile_id = profile.get('id')
-                name = profile.get('name')
-                if profile_id is not None and isinstance(name, str):
-                    profiles_list.append([profile_id, name.capitalize()])
-
-    return profiles_list
+        with profiles_json:
+            if profiles_json.status_code != 200:
+                return None
+            if legacy:
+                profiles = LEGACY_PROFILE_DECODER.decode_list_response(profiles_json)
+                return ([(profile.id, profile.language.capitalize()) for profile in profiles if profile is not None]
+                        if profiles is not None else None)
+            profiles = PROFILE_DECODER.decode_list_response(profiles_json)
+            return ([(profile.id, profile.name.capitalize()) for profile in profiles if profile is not None]
+                    if profiles is not None else None)
 
 
-def get_tags():
+def get_tags() -> list[ArrTag] | None:
     apikey_sonarr = settings.sonarr.apikey
-    tagsDict = []
 
     # Get tags data from Sonarr
     url_sonarr_api_series = f"{url_api_sonarr()}tag?apikey={apikey_sonarr}"
@@ -73,15 +70,19 @@ def get_tags():
         tagsDict = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
     except requests.exceptions.ConnectionError:
         logging.exception("BAZARR Error trying to get tags from Sonarr. Connection Error.")
-        return []
+        return None
     except requests.exceptions.Timeout:
         logging.exception("BAZARR Error trying to get tags from Sonarr. Timeout Error.")
-        return []
+        return None
     except requests.exceptions.RequestException:
         logging.exception("BAZARR Error trying to get tags from Sonarr.")
-        return []
+        return None
     else:
-        return tagsDict.json()
+        with tagsDict:
+            if tagsDict.status_code != 200:
+                return None
+            tags = TAG_DECODER.decode_list_response(tagsDict)
+            return [tag for tag in tags if tag is not None] if tags is not None else None
 
 
 def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None) -> list[Series | None] | None:

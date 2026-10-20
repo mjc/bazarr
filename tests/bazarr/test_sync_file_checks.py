@@ -1,10 +1,11 @@
-from utilities import arr_files
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import TableEpisodes, TableMovies
 from constants import MINIMUM_VIDEO_SIZE
+from utilities import arr_files
+from utilities.arr_types import FileSize
 from radarr.sync import movies
 from sonarr.sync import episodes, parser
 from tests.bazarr.test_sync_lookups import configure_episodes, configure_movies
@@ -18,7 +19,7 @@ def test_sync_stats_undersized_files_once(kind: str, strm: bool, memory_session:
              else [record.episodeFile for record in configure_episodes(monkeypatch, memory_session, 3)])
     for file in files:
         assert file is not None
-        file.size = 0
+        file.size = FileSize(0)
         if strm:
             file.path = file.path.replace('.mkv', '.strm')
     stats: list[str] = []
@@ -47,7 +48,7 @@ def test_movie_size_cache_keeps_strm_setting_live(memory_session: Session,
     record = configure_movies(monkeypatch, memory_session, 1)[0]
     assert record.movieFile is not None
     record.movieFile.path = '/movie.strm'
-    record.movieFile.size = 0
+    record.movieFile.size = FileSize(0)
     monkeypatch.setattr(arr_files.os.path, 'getsize', lambda path: 0)
     sizes: dict[str, int] = {}
     monkeypatch.setattr(movies.settings.general, 'enable_strm_support', False)
