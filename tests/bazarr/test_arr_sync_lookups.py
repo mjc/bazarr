@@ -8,7 +8,7 @@ from radarr.sync import parser as movies
 from radarr.sync.utils import MOVIE_DECODER
 from sonarr.sync import parser as series
 from tests.helpers.arr_fixtures import movie_payload, series_payload, series_record
-from utilities.arr_sync_lookups import ArrSyncLookups
+from utilities.arr_sync_lookups import ArrSyncLookups, default_profile_id
 from utilities.arr_types import ArrTag
 from utilities.arr_types import AudioProfile
 
@@ -105,3 +105,8 @@ def test_parsers_use_shared_lookups_and_live_tag_settings(kind: str, monkeypatch
     assert parse() == {'tags': "['a', 'b']", 'profileId': 7, 'audio': "['English']"}
     monkeypatch.setattr(movies.settings.general, 'remove_profile_tags', ['b'])
     assert parse()['profileId'] is None
+
+
+@pytest.mark.parametrize(('configured', 'expected'), [('', None), (0, 0), (7, 7), ('7', 7), ('0', 0)])
+def test_default_profile_id_is_normalized(configured: int | str, expected: int | None) -> None:
+    assert default_profile_id(configured) == expected

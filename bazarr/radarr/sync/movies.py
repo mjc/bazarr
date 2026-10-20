@@ -20,7 +20,7 @@ from utilities.arr_files import is_usable_file
 from radarr.rootfolder import check_radarr_rootfolder
 from subtitles.indexer.movies import store_subtitles_movie
 from utilities.helper import bool_map
-from utilities.arr_sync_lookups import ArrSyncLookups
+from utilities.arr_sync_lookups import ArrSyncLookups, default_profile_id
 from utilities.path_mappings import path_mappings
 from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due_missing_languages_for_media
 
@@ -111,14 +111,8 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
     logging.debug('BAZARR Starting movie sync from Radarr.')
     apikey_radarr = settings.radarr.apikey
 
-    movie_default_enabled = settings.general.movie_default_enabled
-
-    if movie_default_enabled is True:
-        movie_default_profile = settings.general.movie_default_profile
-        if movie_default_profile == '':
-            movie_default_profile = None
-    else:
-        movie_default_profile = None
+    movie_default_profile = (default_profile_id(settings.general.movie_default_profile)
+                             if settings.general.movie_default_enabled is True else None)
 
     # Prevent trying to insert a movie with a non-existing languages profileId
     if (movie_default_profile and not database.execute(
@@ -271,14 +265,8 @@ def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_
                         f'{path_mappings.path_replace_movie(existing_movie.path)}')
         return
 
-    movie_default_enabled = settings.general.movie_default_enabled
-
-    if movie_default_enabled is True:
-        movie_default_profile = settings.general.movie_default_profile
-        if movie_default_profile == '':
-            movie_default_profile = None
-    else:
-        movie_default_profile = None
+    movie_default_profile = (default_profile_id(settings.general.movie_default_profile)
+                             if settings.general.movie_default_enabled is True else None)
 
     audio_profiles = get_profile_list()
     tagsDict = get_tags()

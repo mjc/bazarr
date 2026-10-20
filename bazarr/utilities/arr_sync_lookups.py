@@ -5,6 +5,10 @@ from collections.abc import Iterable
 from utilities.arr_types import ArrTag, AudioProfile, ProfileId
 
 
+def default_profile_id(configured: int | str) -> int | None:
+    return int(configured) if configured != '' else None
+
+
 class ArrSyncLookups:
     """Index the tag and profile lists fetched for one sync."""
 

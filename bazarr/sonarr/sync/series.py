@@ -12,8 +12,7 @@ from datetime import datetime
 from app.config import settings
 from sonarr.rootfolder import check_sonarr_rootfolder
 from app.database import TableShows, TableLanguagesProfiles, database, insert, update, select, text_boolean
-from utilities.helper import bool_map
-from utilities.arr_sync_lookups import ArrSyncLookups
+from utilities.arr_sync_lookups import ArrSyncLookups, default_profile_id
 from utilities.path_mappings import path_mappings
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue, JobCanceled
@@ -105,21 +104,12 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
             show_id = show.id
             jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_message=show.title)
 
-            if settings.sonarr.sync_only_monitored_series:
-                monitored_status_db = series_monitored.get(show.id) if series_monitored is not None else None
-                if monitored_status_db is None:
-                    # not in db, need to add
-                    pass
-                elif monitored_status_db != show.monitored:
-                    # monitored status changed and we don't know about it until now
-                    trace(f"{i}: (Monitor Status Mismatch) {show.title}")
-                    # pass
-                elif not show.monitored:
-                    # Retain unmonitored series so the deletion sweep keeps them.
-                    trace(f"{i}: (Skipped Unmonitored) {show.title}")
-                    current_shows_sonarr.add(show_id)
-                    skipped_count += 1
-                    continue
+            if (settings.sonarr.sync_only_monitored_series and not show.monitored
+                    and series_monitored is not None and series_monitored.get(show.id) is False):
+                trace(f"{i}: (Skipped Unmonitored) {show.title}")
+                current_shows_sonarr.add(show_id)
+                skipped_count += 1
+                continue
 
             trace(f"{i}: (Processing) {show.title}")
 
@@ -171,12 +161,8 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
         event_stream(type='series', action='delete', payload=int(series_id))
         return
 
-    if settings.general.serie_default_enabled is True:
-        serie_default_profile = settings.general.serie_default_profile
-        if serie_default_profile == '':
-            serie_default_profile = None
-    else:
-        serie_default_profile = None
+    serie_default_profile = (default_profile_id(settings.general.serie_default_profile)
+                             if settings.general.serie_default_enabled is True else None)
 
     if lookups is None:
         audio_profiles = get_profile_list()

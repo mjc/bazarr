@@ -3,7 +3,7 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.database import TableMovies, TableShows
@@ -71,3 +71,31 @@ def test_unavailable_tags_do_not_overwrite_existing_rows(kind: str, memory_sessi
             get_job=lambda **kwargs: SimpleNamespace(cancel_event=Event())))
         series.update_series(job_id=1)
         assert memory_session.execute(select(TableShows.title)).scalar_one() == 'Existing'
+
+
+@pytest.mark.parametrize('stored', ['True', 'False', None, 'unknown'])
+def test_series_monitored_state_is_normalized_before_filtering(stored: str | None, memory_session: Session,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    memory_session.add(TableShows(sonarrSeriesId=123, title='Existing', path='/series/path'))
+    memory_session.flush()
+    memory_session.execute(update(TableShows).values(monitored=stored))
+    memory_session.commit()
+    record = series_record(series_payload())
+    record.monitored = False
+    updated: list[int] = []
+    monkeypatch.setattr(series, 'database', memory_session)
+    monkeypatch.setattr(series, 'check_sonarr_rootfolder', lambda: None)
+    monkeypatch.setattr(series, 'get_series_from_sonarr_api', lambda **kwargs: [record])
+    monkeypatch.setattr(series, 'get_tags', lambda: [])
+    monkeypatch.setattr(series, 'get_profile_list', lambda: [])
+    monkeypatch.setattr(series, 'get_language_profiles', lambda: [])
+    monkeypatch.setattr(series, 'update_one_series', lambda identifier, **kwargs: updated.append(identifier))
+    monkeypatch.setattr(series, 'sync_episodes', lambda **kwargs: None)
+    monkeypatch.setattr(series.settings.sonarr, 'sync_only_monitored_series', True)
+    monkeypatch.setattr(series, 'jobs_queue', SimpleNamespace(
+        get_job=lambda **kwargs: SimpleNamespace(cancel_event=Event()),
+        update_job_progress=lambda **kwargs: None,
+        update_job_name=lambda **kwargs: None))
+    series.update_series(job_id=1)
+    assert updated == ([] if stored == 'False' else [123])
+    assert memory_session.execute(select(TableShows.sonarrSeriesId)).scalars().all() == [123]
