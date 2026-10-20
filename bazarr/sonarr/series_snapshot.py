@@ -2,13 +2,15 @@
 
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Annotated, TypedDict
+from typing import Annotated, TypeAlias, TypedDict
 from typing_extensions import NotRequired
 
-from pydantic import Strict, StrictBool, StrictInt
+from pydantic import Field, Strict, StrictBool, StrictInt
 
 from utilities.external_ids import TmdbId
 from utilities.arr_types import Year, OmittedInt
+
+SeriesId: TypeAlias = Annotated[StrictInt, Field(gt=0)]
 
 
 @dataclass(slots=True)
@@ -29,7 +31,7 @@ class SeriesLanguage:
 
 @dataclass(slots=True, kw_only=True)
 class Series:
-    id: StrictInt
+    id: SeriesId
     title: str
     path: str
     tvdbId: StrictInt
@@ -54,7 +56,7 @@ class SeriesValues(TypedDict):
     title: str
     path: str
     tvdbId: int
-    sonarrSeriesId: int
+    sonarrSeriesId: SeriesId
     overview: str | None
     poster: str
     fanart: str
