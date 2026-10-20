@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import os
+import re
 from datetime import datetime
 
 import msgspec
@@ -21,6 +22,25 @@ from utilities.arr_types import ArrTag
 from sonarr.episode_snapshot import Episode, EpisodeValues
 
 from .converter import SonarrFormatVideoCodec, SonarrFormatAudioCodec
+
+
+_LAST_AIRED_TIMESTAMP = re.compile(
+    r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
+    r'(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?'
+)
+
+
+def _parse_last_aired(value: str) -> datetime:
+    if _LAST_AIRED_TIMESTAMP.fullmatch(value):
+        try:
+            # Python 3.10 requires an explicit UTC offset instead of Z.
+            return datetime.fromisoformat(value.replace('Z', '+00:00'))
+        except ValueError:
+            pass
+    aired = parser.parse(value)
+    if not isinstance(aired, datetime):
+        raise ValueError('Invalid last-aired date')
+    return aired
 
 
 def get_matching_profile(tags, language_profiles):
@@ -60,10 +80,7 @@ def seriesParser(show: Series, action: str, tags_dict: list[ArrTag], language_pr
 
     lastAired = None
     if show.lastAired:
-        aired = parser.parse(show.lastAired)
-        if not isinstance(aired, datetime):
-            raise ValueError('Invalid last-aired date')
-        lastAired = aired.strftime('%Y-%m-%d')
+        lastAired = _parse_last_aired(show.lastAired).strftime('%Y-%m-%d')
 
     original = show.originalLanguage
     original_language = original.name if original is not None else None
