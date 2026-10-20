@@ -1,6 +1,7 @@
 # coding=utf-8
 
 from dataclasses import dataclass
+from enum import Enum, auto
 import re
 from typing import Annotated, TypeAlias
 from typing_extensions import TypedDict
@@ -20,6 +21,13 @@ def _present_integer(value: JsonValue) -> JsonValue:
 OmittedInt: TypeAlias = Annotated[
     StrictInt | Annotated[None, BeforeValidator(_present_integer)], Field(union_mode='left_to_right')]
 
+
+class _KeepProfile(Enum):
+    KEEP = auto()
+
+
+KEEP_PROFILE = _KeepProfile.KEEP
+ProfileAssignment: TypeAlias = int | None | _KeepProfile
 
 ProfileId: TypeAlias = int | float | str | bool
 AudioProfile: TypeAlias = tuple[ProfileId, str]

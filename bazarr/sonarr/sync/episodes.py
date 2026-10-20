@@ -12,11 +12,11 @@ from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 from functools import reduce
 
-from constants import MINIMUM_VIDEO_SIZE
 from app.database import database, TableShows, TableEpisodes, TableMissingSubtitles, update, insert, select, \
     get_exclusion_clause
 from app.config import settings
 from utilities.helper import bool_map
+from utilities.arr_files import is_usable_file
 from utilities.path_mappings import path_mappings
 from subtitles.indexer.series import store_subtitles, series_full_scan_subtitles
 from subtitles.mass_download import episode_download_subtitles
@@ -26,7 +26,8 @@ from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications
 from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due_missing_languages_map
 
-from .parser import episodeParser, get_episode_file_size
+from .audio import episode_audio_language
+from .parser import map_episode
 from .utils import get_episodes_from_sonarr_api, get_episodesFiles_from_sonarr_api
 
 
@@ -77,7 +78,7 @@ def _validated_episodes(episodes: list[Episode], *, series_id: int | None = None
             files = [file]
         else:
             files = []
-    completed = complete_episode_snapshot(episodes, files, separate_files=separate)
+    completed = complete_episode_snapshot(episodes, files or (), separate_files=separate)
     if completed is None:
         logging.warning('BAZARR Skipping episode sync for series %s: incomplete or duplicate episode-file metadata.',
                         source_series_id)
@@ -102,7 +103,8 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
     episodes_to_update: list[EpisodeValues] = []
     episodes_to_add: list[EpisodeValues] = []
     parse_embedded_audio_track = settings.general.parse_embedded_audio_track
-    audio_languages: dict[int, str | None] = {}
+    audio_languages: dict[int, str] = {}
+    file_sizes: dict[str, int] = {}
 
     # Get episodes data for a series from Sonarr
     episodes = get_episodes_from_sonarr_api(apikey_sonarr=apikey_sonarr, series_id=series_id)
@@ -140,18 +142,17 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
                         skipped_count += 1
                         continue
 
-                file_size = get_episode_file_size(episode.episodeFile)
-                if (file_size > MINIMUM_VIDEO_SIZE or
-                        (settings.general.enable_strm_support and episode.episodeFile.path.lower().endswith('.strm'))):
+                if is_usable_file(episode.episodeFile.path, episode.episodeFile.size,
+                                  path_replace=path_mappings.path_replace, file_sizes=file_sizes):
                     # Add episodes in sonarr to current episode list
                     current_episodes_sonarr.append(episode.id)
 
                     # Parse episode data
-                    parsed_episode = episodeParser(
-                        episode, parse_embedded_audio_track=parse_embedded_audio_track,
-                        audio_languages=audio_languages, file_size=file_size)
-                    if parsed_episode is None:
-                        continue
+                    parsed_episode = map_episode(
+                        episode, episode.episodeFile,
+                        audio_language=episode_audio_language(
+                            episode, episode.episodeFile, parse_embedded_audio_track,
+                            series_languages=audio_languages))
                     if episode.id in current_episodes_in_db_row_as_dict:
                         if not set(parsed_episode.items()).issubset(set(current_episodes_in_db_row_as_dict[episode.id].items())):
                             episodes_to_update.append(parsed_episode)
@@ -291,12 +292,19 @@ def sync_one_episode(episode_id, defer_search=False, is_signalr=False):
         # Get episode data from sonarr api
         episode = None
         episode_data = get_episodes_from_sonarr_api(apikey_sonarr=apikey_sonarr, episode_id=episode_id)
-        if not isinstance(episode_data, Episode) or episode_data.id != episode_id:
+        if not isinstance(episode_data, list) or len(episode_data) != 1 or episode_data[0].id != episode_id:
             return
-        completed = _validated_episodes([episode_data])
+        completed = _validated_episodes(episode_data)
         if completed is None:
             return
-        episode = episodeParser(completed[0])
+        record = completed[0]
+        file = record.episodeFile
+        if file is not None:
+            if is_usable_file(file.path, file.size, path_replace=path_mappings.path_replace, file_sizes={}):
+                episode = map_episode(
+                    record, file,
+                    audio_language=episode_audio_language(
+                        record, file, settings.general.parse_embedded_audio_track, series_languages={}))
     except Exception:
         logging.exception('BAZARR cannot get episode returned by SignalR feed from Sonarr API.')
         return
@@ -343,7 +351,7 @@ def sync_one_episode(episode_id, defer_search=False, is_signalr=False):
                               f'{path_mappings.path_replace(episode["path"])} as path and episode_file_id unchanged')
                 defer_search = True
 
-            event_stream(type='episode', action='update', payload=int(episode_id))
+            event_stream(type='episode', action='update', payload=episode['sonarrEpisodeId'])
             logging.debug(
                 f'BAZARR updated this episode into the database:{path_mappings.path_replace(episode["path"])}')
 
@@ -358,7 +366,7 @@ def sync_one_episode(episode_id, defer_search=False, is_signalr=False):
             logging.error(f"BAZARR cannot insert episode {episode['path']} because of {e}")
         else:
             store_subtitles(episode_id)
-            event_stream(type='episode', action='update', payload=int(episode_id))
+            event_stream(type='episode', action='update', payload=episode['sonarrEpisodeId'])
             logging.debug(
                 f'BAZARR inserted this episode into the database:{path_mappings.path_replace(episode["path"])}')
 

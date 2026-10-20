@@ -9,7 +9,7 @@ from constants import MINIMUM_VIDEO_SIZE
 from utilities import arr_files
 from utilities.arr_types import FileSize
 from radarr.sync import movies
-from sonarr.sync import episodes, parser
+from sonarr.sync import episodes
 from tests.bazarr.test_sync_lookups import configure_episodes, configure_movies
 
 
@@ -31,7 +31,7 @@ def test_sync_stats_undersized_files_once(kind: str, strm: bool, memory_session:
         return 0 if strm else MINIMUM_VIDEO_SIZE + 1
 
     monkeypatch.setattr(os.path, 'getsize', getsize)
-    monkeypatch.setattr(parser.settings.general, 'enable_strm_support', strm)
+    monkeypatch.setattr('app.config.settings.general.enable_strm_support', strm)
     monkeypatch.setattr(movies, 'store_subtitles_movie', lambda identifier: None)
     monkeypatch.setattr(episodes, 'store_subtitles', lambda identifier: None)
     if kind == 'movie':

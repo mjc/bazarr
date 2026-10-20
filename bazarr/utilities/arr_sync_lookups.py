@@ -1,8 +1,8 @@
 # coding=utf-8
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable, Mapping, Sequence
 
-from utilities.arr_types import ArrTag, AudioProfile, ProfileId
+from utilities.arr_types import ArrTag, AudioProfile, KEEP_PROFILE, ProfileAssignment, ProfileId
 
 
 def default_profile_id(configured: int | str) -> int | None:
@@ -24,19 +24,22 @@ class ArrSyncLookups:
         for position, (profile_id, name, tag) in enumerate(language_profiles):
             if tag is not None:
                 self._profiles.setdefault(tag, (position, profile_id))
-        self._audio: dict[ProfileId, list[str]] = {}
+        audio: dict[ProfileId, list[str]] = {}
         for identifier, language in audio_profiles:
-            self._audio.setdefault(identifier, []).append(language)
+            audio.setdefault(identifier, []).append(language)
+        self.audio_language_values: Mapping[ProfileId, str] = {
+            identifier: str(languages) for identifier, languages in audio.items()}
 
     def tags(self, identifiers: Iterable[int]) -> list[str]:
         matches = (entry for identifier in set(identifiers) for entry in self._tags.get(identifier, ()))
         return [label for position, label in sorted(matches)]
 
-    def matching_profile(self, tags: Iterable[str]) -> int | None:
+    def profile_id(self, tags: Sequence[str], default: ProfileAssignment, *, enabled: bool,
+                   remove_tags: Collection[str]) -> ProfileAssignment:
+        if not enabled:
+            return default
+        for tag in tags:
+            if tag in remove_tags:
+                return None
         match = min((self._profiles[tag] for tag in tags if tag in self._profiles), default=None)
-        return match[1] if match is not None else None
-
-    def audio_languages(self, identifier: ProfileId | None) -> list[str]:
-        if identifier is None:
-            return []
-        return self._audio.get(identifier, []).copy()
+        return (match[1] if match is not None else None) or default

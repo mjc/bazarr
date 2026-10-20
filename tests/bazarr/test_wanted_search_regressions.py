@@ -101,13 +101,23 @@ def test_bulk_database_queries_and_retry_upserts_respect_legacy_sqlite_limit(
     monkeypatch,
 ):
     engine, session = runtime_database
+    with session.begin():
+        # AUTOCOMMIT needs an explicit SQL BEGIN to batch the fixture writes.
+        session.connection().exec_driver_sql('BEGIN')
+        session.execute(insert(db.TableMissingSubtitles), [
+            {'media_type': 'movie', 'media_id': media_id, 'language': 'en'}
+            for media_id in range(1, 1001)
+        ])
+        session.execute(insert(db.TableMovies), [
+            {'radarrId': media_id, 'title': 'Movie', 'tmdbId': str(media_id), 'path': f'/movie-{media_id}.mkv'}
+            for media_id in range(1, 1001)
+        ])
+
     connection = session.connection()
     raw_connection = connection.connection.driver_connection
+    assert raw_connection.isolation_level is None
+    assert not raw_connection.in_transaction
     previous_limit = raw_connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
-    session.execute(insert(db.TableMissingSubtitles), [
-        {'media_type': 'movie', 'media_id': media_id, 'language': 'en'}
-        for media_id in range(1, 1001)
-    ])
     monkeypatch.setattr(state, 'get_adaptive_search_policy', lambda: None)
     raw_connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
 
@@ -118,10 +128,6 @@ def test_bulk_database_queries_and_retry_upserts_respect_legacy_sqlite_limit(
         assert len(due_batches) == 1
         assert len(due_batches[0]) == 1000
 
-        connection.execute(insert(db.TableMovies), [
-            {'radarrId': media_id, 'title': 'Movie', 'tmdbId': str(media_id), 'path': f'/movie-{media_id}.mkv'}
-            for media_id in range(1, 1001)
-        ])
         state.record_failed_subtitle_attempts_map(
             'movie', {media_id: ['en'] for media_id in range(1, 1001)},
         )
@@ -371,7 +377,8 @@ def test_incomplete_sync_still_processes_identifiable_entries(runtime_database, 
     configure_sync(monkeypatch, module, [None, good])
     processed = []
     if media_type == 'movie':
-        monkeypatch.setattr(radarr, 'movieParser', lambda movie, **kwargs: {'radarrId': movie.id, 'title': movie.title})
+        monkeypatch.setattr(radarr, 'map_movie', lambda movie, **kwargs: {'radarrId': movie.id, 'title': movie.title})
+        monkeypatch.setattr(radarr, 'movie_audio_language', lambda *args, **kwargs: "[]")
         monkeypatch.setattr(radarr, 'add_movie', lambda movie: processed.append(movie['radarrId']))
         radarr.update_movies(job_id=1)
     else:

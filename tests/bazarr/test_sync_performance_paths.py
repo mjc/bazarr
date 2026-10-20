@@ -1,6 +1,7 @@
 from tests.helpers.arr_fixtures import episode_payload, episode_record, movie_payload, series_payload, series_record, stub_arr_api
 # -*- coding: utf-8 -*-
 import datetime
+import os
 from unittest.mock import Mock
 
 from sqlalchemy.sql import Executable
@@ -53,7 +54,9 @@ def test_update_one_series_fetches_and_inserts_for_standalone_call(monkeypatch):
         series_sync,
         "settings",
         SimpleNamespace(
-            general=SimpleNamespace(serie_default_enabled=False),
+            general=SimpleNamespace(
+                serie_default_enabled=False, serie_tag_enabled=False, parse_embedded_audio_track=False,
+                remove_profile_tags=[]),
             sonarr=SimpleNamespace(apikey="sonarr-key"),
         ),
     )
@@ -63,7 +66,7 @@ def test_update_one_series_fetches_and_inserts_for_standalone_call(monkeypatch):
     stub_arr_api(monkeypatch, series_sync, "get_series_from_sonarr_api", Mock(return_value=series_payload()))
     monkeypatch.setattr(
         series_sync,
-        "seriesParser",
+        "map_series",
         lambda *args, **kwargs: {"sonarrSeriesId": 123, "path": "/series/path"},
     )
     monkeypatch.setattr(series_sync, "event_stream", lambda **kwargs: events.append(kwargs))
@@ -222,7 +225,9 @@ def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatc
         series_sync,
         "settings",
         SimpleNamespace(
-            general=SimpleNamespace(serie_default_enabled=False),
+            general=SimpleNamespace(
+                serie_default_enabled=False, serie_tag_enabled=False, parse_embedded_audio_track=False,
+                remove_profile_tags=[]),
             sonarr=SimpleNamespace(apikey="sonarr-key"),
         ),
     )
@@ -231,7 +236,7 @@ def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatc
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
-        "seriesParser",
+        "map_series",
         lambda *args, **kwargs: {"sonarrSeriesId": 123, "path": "/series/path"},
     )
     monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id: episode_sync_calls.append(series_id))
@@ -239,7 +244,7 @@ def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatc
     series_sync.update_one_series(
         123,
         action="updated",
-        series_data=series_record(series_payload()),
+        series_data=[series_record(series_payload())],
         sync_episodes_after_update=True,
     )
 
@@ -249,14 +254,15 @@ def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatc
 
 def test_episode_parser_uses_reported_size_before_filesystem_stat(monkeypatch):
     from constants import MINIMUM_VIDEO_SIZE
+    from sonarr.sync import audio as audio_resolver
     from sonarr.sync import parser
 
     monkeypatch.setattr(
-        parser.os.path,
+        os.path,
         "getsize",
-        lambda path: pytest.fail("episodeParser should not stat files when Sonarr size is already valid"),
+        lambda path: pytest.fail("map_episode should not stat files when Sonarr size is already valid"),
     )
-    monkeypatch.setattr(parser, "audio_language_from_name", lambda name: name)
+    monkeypatch.setattr(audio_resolver, "audio_language_from_name", lambda name: name)
 
     record = episode_record({
             "hasFile": True,
@@ -276,7 +282,8 @@ def test_episode_parser_uses_reported_size_before_filesystem_stat(monkeypatch):
             },
     })
     assert record.episodeFile is not None
-    parsed = parser.episodeParser(record, record.episodeFile, False, audio_languages={})
+    parsed = parser.map_episode(record, record.episodeFile, audio_language=audio_resolver.episode_audio_language(
+        record, record.episodeFile, False, series_languages={}))
 
 
     assert parsed is not None
@@ -320,7 +327,9 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
         movies_sync,
         "settings",
         SimpleNamespace(
-            general=SimpleNamespace(movie_default_enabled=False, debug=False),
+            general=SimpleNamespace(
+                movie_default_enabled=False, movie_tag_enabled=False, parse_embedded_audio_track=False,
+                remove_profile_tags=[], debug=False),
             radarr=SimpleNamespace(apikey="radarr-key", sync_only_monitored_movies=False),
         ),
     )
@@ -328,7 +337,8 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     monkeypatch.setattr(movies_sync, "get_profile_list", lambda: [])
     monkeypatch.setattr(movies_sync, "get_tags", Mock(return_value=[]))
     monkeypatch.setattr(movies_sync, "get_language_profiles", lambda: [])
-    monkeypatch.setattr(movies_sync, "movieParser", _movie_parser)
+    monkeypatch.setattr(movies_sync, "map_movie", _movie_parser)
+    monkeypatch.setattr(movies_sync, 'movie_audio_language', lambda *args, **kwargs: "[]")
     monkeypatch.setattr(movies_sync, "update_movie", lambda previous_file, movie: updated_movies.append(movie) or True)
     monkeypatch.setattr(movies_sync, "event_stream", lambda **kwargs: None)
     monkeypatch.setattr(
@@ -405,7 +415,7 @@ def test_incomplete_episode_snapshot_skips_writes_and_keeps_existing_id(
         general=SimpleNamespace(parse_embedded_audio_track=False),
     ))
     monkeypatch.setattr(episode_sync, 'get_episodes_from_sonarr_api', Mock(return_value=None))
-    monkeypatch.setattr(episode_sync, 'episodeParser', Mock(side_effect=pytest.fail.Exception('Snapshot rejected')))
+    monkeypatch.setattr(episode_sync, 'map_episode', Mock(side_effect=pytest.fail.Exception('Snapshot rejected')))
     monkeypatch.setattr(episode_sync, 'delete_media_and_wanted_search_state',
                         Mock(side_effect=pytest.fail.Exception('A rejected parse must not delete an existing episode')))
 

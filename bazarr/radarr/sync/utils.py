@@ -9,7 +9,7 @@ from pydantic import Field
 from app.config import settings
 from radarr.info import get_radarr_info, url_api_radarr
 from constants import HEADERS
-from utilities.arr_decoding import ArrRecordDecoder, DefaultOnError, InvalidAsNone, PartialResult, RecordPayload
+from utilities.arr_decoding import ArrRecordDecoder, DefaultOnError, InvalidAsNone, RecordPayload
 from utilities.arr_types import ArrTag, AudioProfile, LegacyAudioProfile, RadarrAudioProfile
 from radarr.movie_snapshot import IncompleteMovie, Movie
 
@@ -76,12 +76,12 @@ def get_tags() -> list[ArrTag] | None:
         with tagsDict:
             if tagsDict.status_code != 200:
                 return None
-            tags = TAG_DECODER.decode_response(tagsDict)
-            return [tag for tag in tags if tag is not None] if tags is not None else None
+            return TAG_DECODER.decode_complete_response(tagsDict)
 
 
-def get_movies_from_radarr_api(apikey_radarr: str, radarr_id: int | None = None) -> PartialResult[Movie, IncompleteMovie]:
-    url_radarr_api_movies = f'{url_api_radarr()}movie{f"/{radarr_id}" if radarr_id else ""}?apikey={apikey_radarr}'
+def get_movies_from_radarr_api(apikey_radarr: str, radarr_id: int | None = None) -> list[Movie | IncompleteMovie] | None:
+    api_url = url_api_radarr()
+    url_radarr_api_movies = f'{api_url}movie{f"/{radarr_id}" if radarr_id else ""}?apikey={apikey_radarr}'
 
     try:
         r = requests.get(url_radarr_api_movies, timeout=int(settings.radarr.http_timeout), verify=False, headers=HEADERS)
@@ -107,14 +107,23 @@ def get_movies_from_radarr_api(apikey_radarr: str, radarr_id: int | None = None)
         with r:
             if r.status_code != 200:
                 return None
-            return MOVIE_DECODER.decode_response(r)
+            movies = MOVIE_DECODER.decode_response(r, single=radarr_id is not None)
+            if radarr_id is not None and (
+                    movies is None or len(movies) != 1 or movies[0] is None or movies[0].id != radarr_id):
+                return None
+            if movies is not None:
+                legacy = not api_url.endswith('v3/')
+                for movie in movies:
+                    if isinstance(movie, Movie):
+                        movie.normalize(legacy=legacy)
+            return movies
 
 
 def get_history_from_radarr_api(apikey_radarr, movie_id):
     url_radarr_api_history = f"{url_api_radarr()}history?eventType=1&movieIds={movie_id}&apikey={apikey_radarr}"
 
     try:
-        r = requests.get(url_radarr_api_history, timeout=int(settings.radarr.http_timeout), verify=False,
+        r = requests.get(url_radarr_api_history, timeout=int(settings.sonarr.http_timeout), verify=False,
                          headers=HEADERS)
         r.raise_for_status()
     except requests.exceptions.HTTPError:

@@ -59,6 +59,18 @@ def stub_arr_api(monkeypatch: pytest.MonkeyPatch, module: ModuleType, name: str,
         if isinstance(value, list) == single:
             return None
         result = decode(value)
+        if name == 'get_movies_from_radarr_api' and result is not None:
+            from radarr.info import get_radarr_info
+            legacy = get_radarr_info.is_legacy()
+            for movie in result if isinstance(result, list) else (result,):
+                if isinstance(movie, Movie):
+                    movie.normalize(legacy=legacy)
+        elif name == 'get_series_from_sonarr_api' and result is not None:
+            from sonarr.info import get_sonarr_info
+            legacy = get_sonarr_info.is_legacy()
+            for show in result if isinstance(result, list) else (result,):
+                if legacy and isinstance(show, Series):
+                    show.languageProfileId = show.qualityProfileId
         if result is None or isinstance(result, list):
             return result
         return [result]
