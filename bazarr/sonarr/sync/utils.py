@@ -6,6 +6,7 @@ import logging
 from app.config import settings
 from sonarr.info import get_sonarr_info, url_api_sonarr
 from constants import HEADERS
+from utilities.arr import decode_arr_response, open_arr_response
 from utilities.arr_decoding import ArrRecordDecoder, InvalidArrRecord
 from sonarr.series_snapshot import Series
 from sonarr.episode_snapshot import Episode, EpisodeFile
@@ -88,9 +89,7 @@ def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None 
     url_sonarr_api_series = (f"{url_api_sonarr()}series/{sonarr_series_id if sonarr_series_id else ''}?"
                              f"apikey={apikey_sonarr}")
     try:
-        r = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False,
-                         headers=HEADERS, stream=True)
-        r.raise_for_status()
+        r = open_arr_response(url_sonarr_api_series, int(settings.sonarr.http_timeout))
     except requests.exceptions.HTTPError as e:
         if e.response.status_code:
             raise requests.exceptions.HTTPError
@@ -108,14 +107,10 @@ def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None 
     except Exception as e:
         logging.exception(f"Exception raised while getting series from Sonarr API: {e}")
         return
-    else:
-        with r:
-            if r.status_code != 200:
-                return None
-            result = SERIES_DECODER.decode_response(r)
-            if isinstance(result, (Series, InvalidArrRecord)):
-                return [result]
-            return result
+    result = decode_arr_response(r, SERIES_DECODER.decode_response)
+    if isinstance(result, (Series, InvalidArrRecord)):
+        return [result]
+    return result
 
 
 def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None, episode_id: int | None = None) -> Episode | list[Episode] | None:
@@ -128,9 +123,7 @@ def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = Non
         return
 
     try:
-        r = requests.get(url_sonarr_api_episode, timeout=int(settings.sonarr.http_timeout), verify=False,
-                         headers=HEADERS, stream=True)
-        r.raise_for_status()
+        r = open_arr_response(url_sonarr_api_episode, int(settings.sonarr.http_timeout))
     except requests.exceptions.HTTPError:
         logging.exception("BAZARR Error trying to get episodes from Sonarr. Http error.")
         return
@@ -146,12 +139,7 @@ def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = Non
     except Exception as e:
         logging.exception(f"Exception raised while getting episodes from Sonarr API: {e}")
         return
-    else:
-        with r:
-            if r.status_code != 200:
-                return None
-            result = EPISODE_DECODER.decode_complete_response(r)
-            return result
+    return decode_arr_response(r, EPISODE_DECODER.decode_complete_response)
 
 
 def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None, episode_file_id: int | None = None) -> EpisodeFile | list[EpisodeFile] | None:
@@ -163,9 +151,7 @@ def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None 
         return
 
     try:
-        r = requests.get(url_sonarr_api_episodeFiles, timeout=int(settings.sonarr.http_timeout), verify=False,
-                         headers=HEADERS, stream=True)
-        r.raise_for_status()
+        r = open_arr_response(url_sonarr_api_episodeFiles, int(settings.sonarr.http_timeout))
     except requests.exceptions.HTTPError:
         logging.exception("BAZARR Error trying to get episodeFiles from Sonarr. Http error.")
         return
@@ -181,12 +167,7 @@ def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None 
     except Exception as e:
         logging.exception(f"Exception raised while getting episodes from Sonarr API: {e}")
         return
-    else:
-        with r:
-            if r.status_code != 200:
-                return None
-            result = EPISODEFILE_DECODER.decode_complete_response(r)
-            return result
+    return decode_arr_response(r, EPISODEFILE_DECODER.decode_complete_response)
 
 
 def get_history_from_sonarr_api(apikey_sonarr, episode_id):

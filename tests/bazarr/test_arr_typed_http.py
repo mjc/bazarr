@@ -1,6 +1,7 @@
 import json
 
 import pytest
+import requests
 
 from radarr.movie_snapshot import Movie
 from radarr.sync import utils as radarr
@@ -10,6 +11,7 @@ from sonarr.sync import episodes as episode_sync
 from sonarr.sync import utils as sonarr
 from tests.bazarr.test_arr_typed_decoding import make_response
 from tests.helpers.arr_fixtures import episode_payload, episode_record, movie_payload, series_payload
+from utilities import arr as arr_http
 from utilities.arr_decoding import InvalidArrRecord
 
 
@@ -33,7 +35,12 @@ def test_media_helpers_return_typed_records(kind: str, many: bool, monkeypatch: 
     monkeypatch.setattr(module, 'url_api_' + ('sonarr' if module is sonarr else 'radarr'),
                         lambda: 'http://example.invalid/api/v3/')
     response = make_response(json.dumps([payload] if many else payload).encode(), compressed=True)
-    monkeypatch.setattr(module.requests, 'get', lambda *args, **kwargs: response)
+    def get_response(url: str, *, timeout: int, verify: bool, headers: dict[str, str],
+                     stream: bool) -> requests.Response:
+        assert stream is True
+        return response
+
+    monkeypatch.setattr(module.requests, 'get', get_response)
     result = fetch()
     if many or kind == 'series':
         assert isinstance(result, list)
@@ -41,6 +48,21 @@ def test_media_helpers_return_typed_records(kind: str, many: bool, monkeypatch: 
         result = result[0]
     assert isinstance(result, record_type)
     assert response.raw.closed
+
+
+def test_arr_response_helper_closes_missing_and_failed_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    missing = make_response(b'')
+    missing.status_code = 404
+    monkeypatch.setattr(arr_http.requests, 'get', lambda *args, **kwargs: missing)
+    assert arr_http.open_arr_response('http://example.invalid', 10, not_found_is_empty=True) is None
+    assert missing.raw.closed
+
+    failed = make_response(b'{"error": true}')
+    failed.status_code = 500
+    monkeypatch.setattr(arr_http.requests, 'get', lambda *args, **kwargs: failed)
+    with pytest.raises(requests.exceptions.HTTPError):
+        arr_http.open_arr_response('http://example.invalid', 10)
+    assert failed.raw.closed
 
 
 @pytest.mark.parametrize('kind', ['series', 'movies'])

@@ -6,6 +6,7 @@ import logging
 from app.config import settings
 from radarr.info import get_radarr_info, url_api_radarr
 from constants import HEADERS
+from utilities.arr import decode_arr_response, open_arr_response
 from utilities.arr_decoding import ArrRecordDecoder, InvalidArrRecord
 from radarr.movie_snapshot import Movie
 
@@ -82,11 +83,9 @@ def get_movies_from_radarr_api(apikey_radarr: str, radarr_id: int | None = None)
     url_radarr_api_movies = f'{url_api_radarr()}movie{f"/{radarr_id}" if radarr_id else ""}?apikey={apikey_radarr}'
 
     try:
-        r = requests.get(url_radarr_api_movies, timeout=int(settings.radarr.http_timeout), verify=False,
-                         headers=HEADERS, stream=True)
-        if r.status_code == 404:
+        r = open_arr_response(url_radarr_api_movies, int(settings.radarr.http_timeout), not_found_is_empty=True)
+        if r is None:
             return
-        r.raise_for_status()
     except requests.exceptions.HTTPError:
         logging.exception("BAZARR Error trying to get movies from Radarr. Http error.")
         return
@@ -102,12 +101,7 @@ def get_movies_from_radarr_api(apikey_radarr: str, radarr_id: int | None = None)
     except Exception as e:
         logging.exception(f"Exception raised while getting movies from Radarr API: {e}")
         return
-    else:
-        with r:
-            if r.status_code != 200:
-                return None
-            result = MOVIE_DECODER.decode_response(r)
-            return result
+    return decode_arr_response(r, MOVIE_DECODER.decode_response)
 
 
 def get_history_from_radarr_api(apikey_radarr, movie_id):
