@@ -61,6 +61,7 @@ def http_transport(monkeypatch):
                 raise payload
             response = Response()
             response.status_code = 200
+            response.encoding = 'utf-8'
             response._content = json.dumps(payload).encode()
             response._content_consumed = True
             responses.append(ref(response))
@@ -87,7 +88,7 @@ def test_borrowed_session_reuses_transport_and_discards_cookies(http_transport):
     assert len(http_transport.closed_sessions) == 1
     assert len(http_transport.closed_responses) == 3
     assert all(not cookies for _, _, _, cookies in http_transport.calls)
-    assert all(kwargs == {'timeout': 17, 'verify': False, 'headers': HEADERS}
+    assert all(kwargs == {'timeout': 17, 'verify': False, 'headers': HEADERS, 'stream': True}
                for _, _, kwargs, _ in http_transport.calls)
 
 
@@ -393,3 +394,29 @@ def test_notify_borrows_transport_and_preserves_command_shape(configured_arr, ht
     _, _, kwargs, _ = http_transport.calls[-1]
     assert kwargs['json'] == ({'name': 'RescanSeries', 'seriesId': 7} if app == 'sonarr'
                               else {'name': 'RescanMovie', 'movieId': 7})
+
+
+@pytest.mark.parametrize('service', ['sonarr', 'radarr'])
+@pytest.mark.parametrize('kind', ['filesystem', 'rootfolder'])
+def test_arr_readers_preserve_json_failure_and_close_response(
+    configured_arr, http_transport, monkeypatch: pytest.MonkeyPatch, service: str, kind: str,
+) -> None:
+    module = ARR_ENDPOINTS[service][0 if kind == 'filesystem' else 2]
+    monkeypatch.setattr(module, f'url_api_{service}', lambda **kwargs: 'http://arr/api/v3/')
+    response = requests.Response()
+    response.status_code = 200
+    response.encoding = 'utf-8'
+    response._content = b'not json'
+    response._content_consumed = True
+    close = Mock()
+    monkeypatch.setattr(response, 'close', close)
+    with arr.arr_session() as session:
+        monkeypatch.setattr(session, 'get', lambda *args, **kwargs: response)
+        with pytest.raises(requests.JSONDecodeError):
+            if kind == 'filesystem':
+                getattr(module, f'browse_{service}_filesystem')('/media', session=session)
+            else:
+                connection = sonarr_connection() if service == 'sonarr' else radarr_connection()
+                getattr(module, f'get_{service}_rootfolder')(connection=connection, session=session)
+        close.assert_called_once()
+        assert not http_transport.closed_sessions

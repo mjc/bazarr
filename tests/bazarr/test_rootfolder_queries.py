@@ -52,6 +52,7 @@ def roots(request, root_session, monkeypatch):
     connection = sonarr_connection() if name == 'sonarr' else radarr_connection()
     monkeypatch.setattr(module, 'database', root_session)
     response = Mock(spec=requests.Response)
+    response.encoding = None
     response.__enter__ = Mock(return_value=response)
     response.__exit__ = Mock(return_value=False)
     http = requests.Session()

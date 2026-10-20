@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from app.config import settings
 from radarr.info import url_api_radarr
 from constants import HEADERS
-from utilities.arr import arr_session
+from utilities.arr import arr_session, decode_arr_response
 from utilities.json_types import JsonValue
 
 
@@ -26,8 +26,11 @@ def browse_radarr_filesystem(path: str = '#', *, session: requests.Session | Non
         url_radarr_api_filesystem = f"{url_api_radarr(session=http)}filesystem?{query}"
         try:
             with http.get(url_radarr_api_filesystem, timeout=int(settings.radarr.http_timeout), verify=False,
-                             headers=HEADERS) as r:
+                             headers=HEADERS, stream=True) as r:
                 r.raise_for_status()
+                payload = decode_arr_response(r)
+        except requests.exceptions.JSONDecodeError:
+            raise
         except requests.exceptions.HTTPError:
             logging.exception("BAZARR Error trying to get series from Radarr. Http error.")
             return
@@ -41,5 +44,4 @@ def browse_radarr_filesystem(path: str = '#', *, session: requests.Session | Non
             logging.exception("BAZARR Error trying to get series from Radarr.")
             return
 
-        payload: JsonValue = r.json()
         return payload

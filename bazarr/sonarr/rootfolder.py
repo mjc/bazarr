@@ -10,7 +10,7 @@ from app.config import settings
 from app.database import TableShowsRootfolder, TableShows, database, insert, update, delete, select
 from utilities.path_mappings import path_mappings
 from sonarr.info import SonarrConnection, url_api_sonarr
-from utilities.arr import arr_session
+from utilities.arr import arr_session, decode_arr_response
 from utilities.json_types import JsonValue
 from constants import HEADERS
 
@@ -27,8 +27,11 @@ def get_sonarr_rootfolder(*, connection: SonarrConnection | None = None,
         url_sonarr_api_rootfolder = f"{api_url}rootfolder?apikey={apikey_sonarr}"
 
         try:
-            with http.get(url_sonarr_api_rootfolder, timeout=timeout, verify=False, headers=HEADERS) as response:
-                pass
+            with http.get(url_sonarr_api_rootfolder, timeout=timeout, verify=False,
+                          headers=HEADERS, stream=True) as response:
+                folders = decode_arr_response(response)
+        except requests.exceptions.JSONDecodeError:
+            raise
         except requests.exceptions.ConnectionError:
             logging.exception("BAZARR Error trying to get rootfolder from Sonarr. Connection Error.")
             return []
@@ -39,7 +42,6 @@ def get_sonarr_rootfolder(*, connection: SonarrConnection | None = None,
             logging.exception("BAZARR Error trying to get rootfolder from Sonarr.")
             return []
         else:
-            folders: JsonValue = response.json()
             del response
 
     if not isinstance(folders, list):

@@ -10,7 +10,7 @@ from app.config import settings
 from utilities.path_mappings import path_mappings
 from app.database import TableMoviesRootfolder, TableMovies, database, delete, update, insert, select
 from radarr.info import RadarrConnection, url_api_radarr
-from utilities.arr import arr_session
+from utilities.arr import arr_session, decode_arr_response
 from utilities.json_types import JsonValue
 from constants import HEADERS
 
@@ -27,8 +27,11 @@ def get_radarr_rootfolder(*, connection: RadarrConnection | None = None,
         url_radarr_api_rootfolder = f"{api_url}rootfolder?apikey={apikey_radarr}"
 
         try:
-            with http.get(url_radarr_api_rootfolder, timeout=timeout, verify=False, headers=HEADERS) as response:
-                pass
+            with http.get(url_radarr_api_rootfolder, timeout=timeout, verify=False,
+                          headers=HEADERS, stream=True) as response:
+                folders = decode_arr_response(response)
+        except requests.exceptions.JSONDecodeError:
+            raise
         except requests.exceptions.ConnectionError:
             logging.exception("BAZARR Error trying to get rootfolder from Radarr. Connection Error.")
             return []
@@ -39,7 +42,6 @@ def get_radarr_rootfolder(*, connection: RadarrConnection | None = None,
             logging.exception("BAZARR Error trying to get rootfolder from Radarr.")
             return []
         else:
-            folders: JsonValue = response.json()
             del response
 
     if not isinstance(folders, list):

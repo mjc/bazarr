@@ -1,10 +1,11 @@
 # coding=utf-8
 
-from dataclasses import dataclass
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 import requests
+from requests.compat import JSONDecodeError, json
 import semver
 
 from constants import HEADERS
@@ -45,12 +46,25 @@ def arr_session(session: requests.Session | None = None) -> Iterator[requests.Se
             owned.cookies.clear()
 
 
+def decode_arr_response(response: requests.Response) -> JsonValue:
+    if response.encoding is None or response.encoding.lower() not in ('utf-8', 'utf8'):
+        payload: JsonValue = response.json()
+        return payload
+    # Keep the byte body out of the response cache so it is released before
+    # parsing. Requests handles decompression and transport errors.
+    text = b''.join(response.iter_content(chunk_size=10 * 1024)).decode('utf-8', errors='replace')
+    try:
+        payload = json.loads(text)
+    except JSONDecodeError as error:
+        raise requests.exceptions.JSONDecodeError(error.msg, error.doc, error.pos) from error
+    return payload
+
+
 def request_json(url: str, timeout: int, *, session: requests.Session | None = None) -> JsonValue:
     with arr_session(session) as http:
-        with http.get(url, timeout=timeout, verify=False, headers=HEADERS) as response:
+        with http.get(url, timeout=timeout, verify=False, headers=HEADERS, stream=True) as response:
             response.raise_for_status()
-            payload: JsonValue = response.json()
-            return payload
+            return decode_arr_response(response)
 
 
 def discover_arr_version(base_url: str, apikey: str, timeout: int,
