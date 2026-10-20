@@ -1,3 +1,4 @@
+from utilities import arr_files
 from tests.helpers.arr_fixtures import episode_record, movie_payload, series_payload, series_record, stub_arr_api
 from types import SimpleNamespace
 
@@ -171,7 +172,7 @@ def test_radarr_movie_sync_skips_file_payloads_without_movie_id(monkeypatch, syn
     monkeypatch.setattr(radarr_movies, "get_profile_list", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
-    monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
+    monkeypatch.setattr(arr_files.os.path, 'getsize', lambda path: 0)
     stub_arr_api(
         monkeypatch, radarr_movies,
         "get_movies_from_radarr_api",
@@ -208,7 +209,7 @@ def test_radarr_movie_sync_handles_malformed_movie_file_fields(monkeypatch, sync
     monkeypatch.setattr(radarr_movies, "get_profile_list", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
-    monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
+    monkeypatch.setattr(arr_files.os.path, 'getsize', lambda path: 0)
     monkeypatch.setattr(radarr_movies, "trace", traces.append)
     stub_arr_api(
         monkeypatch, radarr_movies,
@@ -250,7 +251,7 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
     monkeypatch.setattr(radarr_movies, "get_profile_list", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
-    monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
+    monkeypatch.setattr(arr_files.os.path, 'getsize', lambda path: 0)
     monkeypatch.setattr(radarr_movies, "trace", traces.append)
     stub_arr_api(
         monkeypatch, radarr_movies,
@@ -308,7 +309,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
     monkeypatch.setattr(radarr_movies, "get_profile_list", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
-    monkeypatch.setattr(radarr_movies, "get_movie_file_size_from_db", lambda path: 0)
+    monkeypatch.setattr(arr_files.os.path, 'getsize', lambda path: 0)
     monkeypatch.setattr(radarr_movies, "trace", traces.append)
     stub_arr_api(
         monkeypatch, radarr_movies,

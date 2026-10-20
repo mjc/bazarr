@@ -32,7 +32,7 @@ def test_single_movie_sync_preserves_usable_incomplete_response(incomplete: str,
     monkeypatch.setattr(movies, 'get_profile_list', lambda: [])
     monkeypatch.setattr(movies, 'get_tags', lambda: [])
     monkeypatch.setattr(movies, 'get_language_profiles', lambda: [])
-    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: record)
+    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: [record])
     monkeypatch.setattr(movies, 'delete_media_and_wanted_search_state',
                         lambda *args: pytest.fail('Incomplete metadata must not delete a usable movie'))
     monkeypatch.setattr(movies, 'event_stream', lambda **kwargs: pytest.fail('The movie must be left unchanged'))

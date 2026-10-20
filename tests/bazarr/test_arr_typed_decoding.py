@@ -39,7 +39,7 @@ def test_json_decodes_directly_into_records(kind: str, many: bool, compressed: b
     payload['unused'] = unused
     body = json.dumps([payload] if many else payload).encode()
     with make_response(body, compressed=compressed) as response:
-        result = decoder.decode_response(response)
+        result = decoder.decode_response(response, single=not many)
     record = result[0] if isinstance(result, list) else result
     assert isinstance(record, record_type)
     assert record.id == payload['id']
@@ -123,7 +123,9 @@ def test_typed_records_preserve_encoding_behavior(encoding: str | None) -> None:
     payload = series_payload(title='Français')
     body = json.dumps(payload, ensure_ascii=False).encode(encoding or 'utf-32')
     with make_response(body, encoding) as response:
-        record = SERIES_DECODER.decode_response(response)
+        records = SERIES_DECODER.decode_response(response, single=True)
+    assert records is not None
+    record, = records
     assert isinstance(record, Series)
     assert record.title == 'Français'
 
@@ -131,7 +133,9 @@ def test_typed_records_preserve_encoding_behavior(encoding: str | None) -> None:
 def test_invalid_utf8_is_replaced_as_in_requests() -> None:
     body = json.dumps(series_payload()).encode().replace(b'Series', b'\xffSeries')
     with make_response(body) as response:
-        record = SERIES_DECODER.decode_response(response)
+        records = SERIES_DECODER.decode_response(response, single=True)
+    assert records is not None
+    record, = records
     assert isinstance(record, Series)
     assert record.title == '\ufffdSeries'
 

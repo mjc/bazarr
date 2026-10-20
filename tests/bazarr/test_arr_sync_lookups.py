@@ -91,7 +91,8 @@ def test_parsers_use_shared_lookups_and_live_tag_settings(kind: str, monkeypatch
         movie.qualityProfileId = 1
 
         def parse() -> dict[str, str | int | None]:
-            result = movies.movieParser(movie, 'insert', lookups, None)
+            assert movie.movieFile is not None
+            result = movies.movieParser(movie, movie.movieFile, 'insert', lookups, None)
             return {'tags': result['tags'], 'profileId': result.get('profileId'), 'audio': result['audio_language']}
     else:
         show = series_record(series_payload())

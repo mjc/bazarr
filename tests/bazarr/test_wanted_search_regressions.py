@@ -1,3 +1,4 @@
+from utilities import arr_files
 from tests.helpers.arr_fixtures import episode_record, movie_payload, series_payload, series_record, stub_arr_api
 """Exercise the runtime ORM and autocommit engine, rather than table proxies."""
 from collections.abc import Mapping, Sequence
@@ -390,7 +391,7 @@ def test_explicit_unusable_movie_removes_history_and_wanted_state(runtime_databa
     session.execute(insert(db.TableHistoryMovie).values(radarrId=7, action=1, description='Saved history'))
     state.refresh_wanted_search_state('movie', 7, "['en']", "[['en', 10]]")
     configure_sync(monkeypatch, radarr, [payload])
-    monkeypatch.setattr(radarr, 'get_movie_file_size_from_db', lambda path: 0)
+    monkeypatch.setattr(arr_files.os.path, 'getsize', lambda path: 0)
     monkeypatch.setattr(radarr.settings.general, 'enable_strm_support', False)
     radarr.update_movies(job_id=1)
     assert session.execute(select(db.TableMovies.radarrId)).scalars().all() == []

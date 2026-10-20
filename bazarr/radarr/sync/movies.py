@@ -16,7 +16,7 @@ from app.database import TableMovies, TableLanguagesProfiles, TableMissingSubtit
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue, JobCanceled
 from app.notifier import send_notifications_movie
-from constants import MINIMUM_VIDEO_SIZE
+from utilities.arr_files import is_usable_file
 from radarr.rootfolder import check_radarr_rootfolder
 from subtitles.indexer.movies import store_subtitles_movie
 from utilities.helper import bool_map
@@ -41,31 +41,14 @@ def get_language_profiles() -> Sequence[tuple[int, str, str | None]]:
         select(TableLanguagesProfiles.profileId, TableLanguagesProfiles.name, TableLanguagesProfiles.tag)).tuples().all()
 
 
-def get_movie_file_size_from_db(movie_path: str) -> int:
-    try:
-        bazarr_file_size = os.path.getsize(path_mappings.path_replace_movie(movie_path))
-    except OSError:
-        bazarr_file_size = 0
-    return bazarr_file_size
-
-
 def _has_usable_movie_file(movie: Movie | IncompleteMovie,
-                          *, file_sizes: dict[str, int] | None = None) -> bool | None:
+                          *, file_sizes: dict[str, int]) -> bool | None:
     if movie.hasFile is False:
         return False
     file = movie.movieFile
     if movie.hasFile is None or file is None:
         return None
-    if int(file.size) > MINIMUM_VIDEO_SIZE:
-        return True
-    if file_sizes is None:
-        file_sizes = {}
-    if file.path not in file_sizes:
-        file_sizes[file.path] = get_movie_file_size_from_db(file.path)
-    if file_sizes[file.path] > MINIMUM_VIDEO_SIZE:
-        return True
-    general_settings = settings.general
-    return bool(general_settings.enable_strm_support and file.path.lower().endswith('.strm'))
+    return is_usable_file(file.path, file.size, path_replace=path_mappings.path_replace_movie, file_sizes=file_sizes)
 
 
 
@@ -149,7 +132,7 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
     else:
         # Get movies data from radarr
         movies = get_movies_from_radarr_api(apikey_radarr=apikey_radarr)
-        if not isinstance(movies, list):
+        if movies is None:
             logging.debug('BAZARR Radarr movie sync returned an invalid payload. Skipping sync.')
             jobs_queue.update_job_name(job_id=job_id, new_job_name="Synced movies with Radarr")
             return
@@ -172,12 +155,12 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
             current_movies_id_db = set(current_movies_in_db)
 
             identifiers = [movie.id for movie in movies]
-            complete_movie_list = (all(identifier is not None and identifier > 0 for identifier in identifiers)
+            complete_movie_list = (all(identifier is not None for identifier in identifiers)
                                    and len(set(identifiers)) == len(identifiers))
             file_sizes: dict[str, int] = {}
             current_movies_radarr = [
                 identifier for movie, identifier in zip(movies, identifiers)
-                if identifier is not None and identifier > 0
+                if identifier is not None
                 and _has_usable_movie_file(movie, file_sizes=file_sizes) is not False
             ]
 
@@ -213,47 +196,37 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
 
                 if not isinstance(movie, Movie):
                     identifier = movie.id
-                    if identifier is not None and identifier > 0:
+                    if identifier is not None:
                         files_missing += 1
                     continue
                 movie_id = movie.id
-                if movie_id <= 0:
-                    continue
                 jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_message=movie.title)
-                # Only movies that Radarr says have files downloaded will be kept up to date in the DB
-                if movie.hasFile is True:
-                    movie_file = movie.movieFile
-                    if movie_file is not None:
-                        previous = current_movies_in_db.get(movie_id)
-                        if (sync_monitored and not movie.monitored and previous is not None
-                                and not bool_map[previous['monitored']]):
-                            trace(f"{i}: (Skipped Unmonitored) {movie.title}")
-                            skipped_count += 1
-                            continue
-
-                        if _has_usable_movie_file(movie, file_sizes=file_sizes):
-                            # Add/update movies from Radarr that have a movie file to current movies list
-                            trace(f"{i}: (Processing) {movie.title}")
-                            parsed_movie = movieParser(movie, action='update' if previous is not None else 'insert',
-                                                       lookups=lookups,
-                                                       movie_default_profile=movie_default_profile)
-                            if previous is not None:
-                                if not parsed_movie.items() <= previous.items():
-                                    if update_movie((previous['movie_file_id'], previous['path']), parsed_movie):
-                                        previous.update(parsed_movie)
-                                        movies_updated.append(parsed_movie['title'])
-                            else:
-                                add_movie(parsed_movie)
-                                movies_added.append(parsed_movie['title'])
-                        else:
-                            trace(f"{i}: (Skipped File Missing) {movie.title}")
-                            files_missing += 1
-                    else:
-                        trace(f"{i}: (Skipped File Missing) {movie.title}")
-                        files_missing += 1
-                else:
+                movie_file = movie.movieFile
+                if not movie.hasFile or movie_file is None:
                     trace(f"{i}: (Skipped File Missing) {movie.title}")
                     files_missing += 1
+                    continue
+                previous = current_movies_in_db.get(movie_id)
+                if (sync_monitored and not movie.monitored and previous is not None
+                        and not bool_map[previous['monitored']]):
+                    trace(f"{i}: (Skipped Unmonitored) {movie.title}")
+                    skipped_count += 1
+                    continue
+                if not is_usable_file(movie_file.path, movie_file.size,
+                                      path_replace=path_mappings.path_replace_movie, file_sizes=file_sizes):
+                    trace(f"{i}: (Skipped File Missing) {movie.title}")
+                    files_missing += 1
+                    continue
+                trace(f"{i}: (Processing) {movie.title}")
+                parsed_movie = movieParser(movie, file=movie_file, action='update' if previous is not None else 'insert',
+                                           lookups=lookups, movie_default_profile=movie_default_profile)
+                if previous is None:
+                    add_movie(parsed_movie)
+                    movies_added.append(parsed_movie['title'])
+                elif not parsed_movie.items() <= previous.items():
+                    if update_movie((previous['movie_file_id'], previous['path']), parsed_movie):
+                        previous.update(parsed_movie)
+                        movies_updated.append(parsed_movie['title'])
 
             trace(f"Skipped {files_missing} file missing movies out of {movies_count}")
             if sync_monitored:
@@ -313,14 +286,15 @@ def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_
     try:
         # Get movie data from radarr api
         movie = None
-        movie_data = get_movies_from_radarr_api(apikey_radarr=settings.radarr.apikey, radarr_id=movie_id)
-        if not isinstance(movie_data, (Movie, IncompleteMovie)) or movie_data.id != int(movie_id):
+        records = get_movies_from_radarr_api(apikey_radarr=settings.radarr.apikey, radarr_id=movie_id)
+        if not records:
             return
-        usable = _has_usable_movie_file(movie_data)
+        movie_data, = records
+        usable = _has_usable_movie_file(movie_data, file_sizes={})
         if usable is None or (usable and isinstance(movie_data, IncompleteMovie)):
             return
-        if usable and isinstance(movie_data, Movie) and action == 'updated':
-            movie = movieParser(movie_data, action='update' if existing_movie else 'insert',
+        if usable and isinstance(movie_data, Movie) and movie_data.movieFile is not None and action == 'updated':
+            movie = movieParser(movie_data, file=movie_data.movieFile, action='update' if existing_movie else 'insert',
                                 lookups=lookups, movie_default_profile=movie_default_profile)
     except Exception:
         logging.exception('BAZARR cannot get movie returned by SignalR feed from Radarr API.')

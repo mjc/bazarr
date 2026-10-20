@@ -5,17 +5,15 @@ import os
 from app.config import settings
 from languages.get_languages import audio_language_from_name
 from radarr.info import get_radarr_info
-from radarr.movie_snapshot import Movie, MovieValues
+from radarr.movie_snapshot import Movie, MovieFile, MovieValues
 from utilities.arr_sync_lookups import ArrSyncLookups
 from utilities.media_codecs import radarr_audio_codec, radarr_video_codec
 from utilities.video_analyzer import embedded_audio_reader
 from utilities.path_mappings import path_mappings
 
 
-def movieParser(movie: Movie, action: str, lookups: ArrSyncLookups,
+def movieParser(movie: Movie, file: MovieFile, action: str, lookups: ArrSyncLookups,
                 movie_default_profile: int | None) -> MovieValues:
-    file = movie.movieFile
-    assert file is not None
     legacy = get_radarr_info.is_legacy()
     images = movie.images or []
     poster = ''
@@ -45,7 +43,7 @@ def movieParser(movie: Movie, action: str, lookups: ArrSyncLookups,
     parse_audio = general_settings.parse_embedded_audio_track
     if parse_audio:
         audio_language = embedded_audio_reader(path_mappings.path_replace_movie(file.path),
-                                               file_size=int(file.size), movie_file_id=file.id, use_cache=True)
+                                               file_size=file.size, movie_file_id=file.id, use_cache=True)
     elif legacy:
         audio_languages = media.audioLanguages if media else None
         audio_language = [language.strip() for language in audio_languages.split('/')] if audio_languages is not None else []
@@ -75,7 +73,7 @@ def movieParser(movie: Movie, action: str, lookups: ArrSyncLookups,
                           'imdbId': movie.imdbId,
                           'movie_file_id': file.id,
                           'tags': str(tags),
-                          'file_size': int(file.size),
+                          'file_size': file.size,
                           'originalLanguage': original.name if original is not None else None}
     if action == 'insert':
         parsed['profileId'] = movie_default_profile
