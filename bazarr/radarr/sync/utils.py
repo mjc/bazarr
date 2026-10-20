@@ -82,7 +82,8 @@ def get_movies_from_radarr_api(apikey_radarr: str, radarr_id: int | None = None)
     url_radarr_api_movies = f'{url_api_radarr()}movie{f"/{radarr_id}" if radarr_id else ""}?apikey={apikey_radarr}'
 
     try:
-        r = requests.get(url_radarr_api_movies, timeout=int(settings.radarr.http_timeout), verify=False, headers=HEADERS)
+        r = requests.get(url_radarr_api_movies, timeout=int(settings.radarr.http_timeout), verify=False,
+                         headers=HEADERS, stream=True)
         if r.status_code == 404:
             return
         r.raise_for_status()

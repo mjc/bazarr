@@ -77,7 +77,7 @@ class ArrRecordDecoder(Generic[Record]):
         if response.encoding is None or response.encoding.lower() not in ('utf-8', 'utf8'):
             value: JsonValue = response.json()
             return self.from_value(value)
-        return self.decode(response.content)
+        return self.decode(b''.join(response.iter_content(chunk_size=10 * 1024)))
 
     def complete_from_value(self, value: JsonValue) -> Record | list[Record] | None:
         try:
@@ -96,4 +96,4 @@ class ArrRecordDecoder(Generic[Record]):
         if response.encoding is None or response.encoding.lower() not in ('utf-8', 'utf8'):
             value: JsonValue = response.json()
             return self.complete_from_value(value)
-        return self.decode_complete(response.content)
+        return self.decode_complete(b''.join(response.iter_content(chunk_size=10 * 1024)))

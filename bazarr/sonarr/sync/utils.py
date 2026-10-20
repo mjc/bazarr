@@ -88,7 +88,8 @@ def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None 
     url_sonarr_api_series = (f"{url_api_sonarr()}series/{sonarr_series_id if sonarr_series_id else ''}?"
                              f"apikey={apikey_sonarr}")
     try:
-        r = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
+        r = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False,
+                         headers=HEADERS, stream=True)
         r.raise_for_status()
     except requests.exceptions.HTTPError as e:
         if e.response.status_code:
@@ -127,7 +128,8 @@ def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = Non
         return
 
     try:
-        r = requests.get(url_sonarr_api_episode, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
+        r = requests.get(url_sonarr_api_episode, timeout=int(settings.sonarr.http_timeout), verify=False,
+                         headers=HEADERS, stream=True)
         r.raise_for_status()
     except requests.exceptions.HTTPError:
         logging.exception("BAZARR Error trying to get episodes from Sonarr. Http error.")
@@ -162,7 +164,7 @@ def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None 
 
     try:
         r = requests.get(url_sonarr_api_episodeFiles, timeout=int(settings.sonarr.http_timeout), verify=False,
-                         headers=HEADERS)
+                         headers=HEADERS, stream=True)
         r.raise_for_status()
     except requests.exceptions.HTTPError:
         logging.exception("BAZARR Error trying to get episodeFiles from Sonarr. Http error.")
