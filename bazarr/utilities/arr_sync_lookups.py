@@ -6,7 +6,10 @@ from utilities.arr_types import ArrTag, AudioProfile, ProfileId
 
 
 def default_profile_id(configured: int | str) -> int | None:
-    return int(configured) if configured != '' else None
+    try:
+        return int(configured)
+    except ValueError:
+        return None
 
 
 class ArrSyncLookups:

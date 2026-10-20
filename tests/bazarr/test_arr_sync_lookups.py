@@ -107,6 +107,7 @@ def test_parsers_use_shared_lookups_and_live_tag_settings(kind: str, monkeypatch
     assert parse()['profileId'] is None
 
 
-@pytest.mark.parametrize(('configured', 'expected'), [('', None), (0, 0), (7, 7), ('7', 7), ('0', 0)])
+@pytest.mark.parametrize(('configured', 'expected'), [('', None), (0, 0), (7, 7), ('7', 7), ('0', 0),
+                                                        ('None', None), ('invalid', None), ('  ', None), ('7.0', None)])
 def test_default_profile_id_is_normalized(configured: int | str, expected: int | None) -> None:
     assert default_profile_id(configured) == expected
