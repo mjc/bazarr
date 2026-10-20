@@ -204,7 +204,7 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                     continue
                 previous = current_movies_in_db.get(movie_id)
                 if (sync_monitored and not movie.monitored and previous is not None
-                        and not bool_map[previous['monitored']]):
+                        and bool_map.get(previous['monitored'] or '') is False):
                     trace(f"{i}: (Skipped Unmonitored) {movie.title}")
                     skipped_count += 1
                     continue

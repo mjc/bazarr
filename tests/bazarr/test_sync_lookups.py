@@ -163,6 +163,16 @@ def test_unmonitored_movies_use_loaded_state(stored_monitored: bool, count: int,
     assert memory_session.execute(select(TableMovies.monitored)).scalars().all() == ['False'] * count
 
 
+@pytest.mark.parametrize('stored', [None, 'unknown'])
+def test_unknown_stored_monitoring_does_not_skip_movie(stored: str | None, memory_session: Session,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    records = configure_movies(monkeypatch, memory_session, 1, monitored_only=True)
+    records[0].monitored = False
+    memory_session.execute(update(TableMovies).values(monitored=stored))
+    movies.update_movies(job_id=1)
+    assert memory_session.execute(select(TableMovies.title)).scalar_one() == 'Changed 1'
+
+
 def test_monitored_guard_refreshes_on_next_sync(memory_session: Session,
                                                monkeypatch: pytest.MonkeyPatch, sql_reads: list[str]) -> None:
     records = configure_movies(monkeypatch, memory_session, 2, monitored_only=True)
