@@ -7,6 +7,8 @@ import os
 import flask_migrate
 import signal
 from collections import defaultdict
+from collections.abc import Callable, Iterable
+from typing import TypeVar
 
 from dogpile.cache import make_region
 from flask import Flask
@@ -14,7 +16,7 @@ from datetime import datetime
 from typing import List
 
 from sqlalchemy import create_engine, inspect, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, text, \
-    BigInteger, Boolean, Index
+    BigInteger, Boolean, Index, SQLColumnExpression, Select
 # importing here to be indirectly imported in other modules later
 from sqlalchemy import update, delete, select, func, UniqueConstraint  # noqa W0611
 from sqlalchemy.orm import scoped_session, sessionmaker, mapped_column, close_all_sessions, declarative_base, Mapped
@@ -23,10 +25,14 @@ from alembic.migration import MigrationContext
 
 from flask_sqlalchemy import SQLAlchemy
 
+from .language_profiles import Profile, ProfileCatalog, ProfileSource
 from .config import settings
 from .get_args import args
-from utilities.text_list import parse_text_list_or_default
+from utilities.json_types import JsonValue
+from utilities.text_list import parse_string_list, parse_text_list_or_default
 from utilities.path_mappings import path_mappings
+from languages.formatting import LanguageInfo
+from utilities.subtitle_metadata import SubtitleFile, SubtitleOrder, subtitle_sort_key
 
 logger = logging.getLogger(__name__)
 
@@ -484,193 +490,74 @@ def migrate_db(app: Flask) -> None:
             .values(configured='0', updated='0'))
 
 
-def get_exclusion_clause(exclusion_type):
-    where_clause = []
+def get_exclusion_clause(exclusion_type: str) -> list[SQLColumnExpression[bool]]:
+    where_clause: list[SQLColumnExpression[bool]] = []
+    media_settings = settings.sonarr if exclusion_type == 'series' else settings.radarr
     if exclusion_type == 'series':
-        tagsList = settings.sonarr.excluded_tags
+        tagsList = media_settings.excluded_tags
         for tag in tagsList:
             where_clause.append(~(TableShows.tags.contains(f"\'{tag}\'")))
     else:
-        tagsList = settings.radarr.excluded_tags
+        tagsList = media_settings.excluded_tags
         for tag in tagsList:
             where_clause.append(~(TableMovies.tags.contains(f"\'{tag}\'")))
 
     if exclusion_type == 'series':
-        monitoredOnly = settings.sonarr.only_monitored
+        monitoredOnly = media_settings.only_monitored
         if monitoredOnly:
             where_clause.append((TableEpisodes.monitored == 'True'))  # noqa E712
             where_clause.append((TableShows.monitored == 'True'))  # noqa E712
     else:
-        monitoredOnly = settings.radarr.only_monitored
+        monitoredOnly = media_settings.only_monitored
         if monitoredOnly:
             where_clause.append((TableMovies.monitored == 'True'))  # noqa E712
 
     if exclusion_type == 'series':
-        typesList = settings.sonarr.excluded_series_types
+        typesList = media_settings.excluded_series_types
         for item in typesList:
             where_clause.append((TableShows.seriesType != item))
 
-        exclude_season_zero = settings.sonarr.exclude_season_zero
+        exclude_season_zero = media_settings.exclude_season_zero
         if exclude_season_zero:
             where_clause.append((TableEpisodes.season != 0))
 
     return where_clause
 
 
-def parse_profile_items(profile_type, raw_items):
-    """
-    Return (items, groups) for a languages profile row.
-
-    Basic profiles store a flat list of items and groups is None. Enhanced profiles store
-    {"groups": [...]}. For those, items is the flat list of every item across all groups, so
-    consumers that only need the wanted languages keep working, and groups keeps the structure.
-    """
-    data = json.loads(raw_items)
-    if profile_type == PROFILE_TYPE_ENHANCED and isinstance(data, dict):
-        groups = data.get('groups') or []
-        items = [item for group in groups for item in (group.get('items') or [])]
-        return items, groups
-    return data, None
-
-
 @region.cache_on_arguments()
-def update_profile_id_list():
-    profiles = []
-    for x in database.execute(
-            select(TableLanguagesProfiles.profileId,
-                   TableLanguagesProfiles.name,
-                   TableLanguagesProfiles.cutoff,
-                   TableLanguagesProfiles.items,
-                   TableLanguagesProfiles.mustContain,
-                   TableLanguagesProfiles.mustNotContain,
-                   TableLanguagesProfiles.originalFormat,
-                   TableLanguagesProfiles.tag,
-                   TableLanguagesProfiles.profileType)).all():
-        items, groups = parse_profile_items(x.profileType, x.items)
-        profile = {
-            'profileId': x.profileId,
-            'name': x.name,
-            'cutoff': x.cutoff,
-            'profileType': x.profileType,
-            'items': items,
-            'mustContain': ast.literal_eval(x.mustContain) if x.mustContain else [],
-            'mustNotContain': ast.literal_eval(x.mustNotContain) if x.mustNotContain else [],
-            'originalFormat': x.originalFormat,
-            'tag': x.tag,
-        }
-        if groups is not None:
-            profile['groups'] = groups
-        profiles.append(profile)
-    return profiles
+def load_profile_catalog() -> ProfileCatalog:
+    sources = tuple(ProfileSource(
+        row.profileId, row.name, row.cutoff, row.items, row.mustContain, row.mustNotContain,
+        row.originalFormat, row.tag, row.profileType,
+    ) for row in database.execute(select(
+        TableLanguagesProfiles.profileId, TableLanguagesProfiles.name, TableLanguagesProfiles.cutoff,
+        TableLanguagesProfiles.items, TableLanguagesProfiles.mustContain, TableLanguagesProfiles.mustNotContain,
+        TableLanguagesProfiles.originalFormat, TableLanguagesProfiles.tag, TableLanguagesProfiles.profileType,
+    )))
+    return ProfileCatalog(sources)
 
 
-def get_profiles_list(profile_id=None):
-    profile_id_list = update_profile_id_list()
-
-    if profile_id and profile_id != 'null':
-        for profile in profile_id_list:
-            if profile['profileId'] == profile_id:
-                return profile
-    else:
-        return profile_id_list
+def invalidate_profiles() -> None:
+    region.invalidate()
 
 
-def get_desired_languages(profile_id):
-    for profile in update_profile_id_list():
-        if profile['profileId'] == profile_id:
-            return [x['language'] for x in profile['items']]
+def get_profile(profile_id: int | None) -> Profile | None:
+    return load_profile_catalog().get(profile_id) if profile_id is not None else None
 
 
-def get_profile_id_name(profile_id):
-    for profile in update_profile_id_list():
-        if profile['profileId'] == profile_id:
-            return profile['name']
+def list_profiles() -> list[dict[str, 'JsonValue']]:
+    return load_profile_catalog().administrative_profiles()
 
 
-def get_profile_cutoff(profile_id):
-    try:
-        profile_id = int(profile_id)
-    except (TypeError, ValueError):
-        return None
+def get_audio_profile_languages(
+    audio_languages_list_str: str | list[str | None] | tuple[str | None, ...] | None,
+) -> list[LanguageInfo]:
+    from languages.formatting import format_audio_languages
+    from languages.get_languages import language_from_alpha2
 
-    for profile in update_profile_id_list():
-        if profile.get('profileId') != profile_id:
-            continue
-        cutoff = profile.get('cutoff')
-        items = profile.get('items')
-        if not cutoff or not isinstance(items, list):
-            return None
-        items = [item for item in items if isinstance(item, dict)]
-        if cutoff == 65535:
-            return items or None
-        if profile.get('groups') is not None:
-            # Enhanced profiles: the cutoff is a group id, so the cutoff items are all items of that group.
-            group = next((group for group in profile['groups'] if group.get('id') == cutoff), None)
-            group_items = [item for item in ((group or {}).get('items') or []) if isinstance(item, dict)]
-            return group_items or None
-        return next(([item] for item in items if item.get('id') == cutoff), None)
-    return None
-
-
-def get_audio_profile_languages(audio_languages_list_str):
-    from languages.get_languages import alpha2_from_language, alpha3_from_language, language_from_alpha2
-    audio_languages = []
-
-    und_default_language = language_from_alpha2(settings.general.default_und_audio_lang)
-
-    for language in parse_text_list_or_default(audio_languages_list_str or '[]', default=[]):
-        if language:
-            audio_languages.append(
-                {"name": language,
-                 "code2": alpha2_from_language(language) or None,
-                 "code3": alpha3_from_language(language) or None}
-            )
-        else:
-            if und_default_language:
-                logging.debug(f"Undefined language audio track treated as {und_default_language}")
-                audio_languages.append(
-                    {"name": und_default_language,
-                     "code2": alpha2_from_language(und_default_language) or None,
-                     "code3": alpha3_from_language(und_default_language) or None}
-                )
-
-    return audio_languages
-
-
-def get_profile_id(series_id=None, episode_id=None, movie_id=None):
-    if series_id:
-        data = database.execute(
-            select(TableShows.profileId)
-            .where(TableShows.sonarrSeriesId == series_id))\
-            .first()
-        if data:
-            return data.profileId
-    elif episode_id:
-        data = database.execute(
-            select(TableShows.profileId)
-            .select_from(TableShows)
-            .join(TableEpisodes)
-            .where(TableEpisodes.sonarrEpisodeId == episode_id)) \
-            .first()
-        if data:
-            return data.profileId
-
-    elif movie_id:
-        data = database.execute(
-            select(TableMovies.profileId)
-            .where(TableMovies.radarrId == movie_id))\
-            .first()
-        if data:
-            return data.profileId
-
-    return None
-
-
-def convert_list_to_clause(arr: list):
-    if isinstance(arr, list):
-        return f"({','.join(str(x) for x in arr)})"
-    else:
-        return ""
+    names = parse_text_list_or_default(audio_languages_list_str or '[]', default=[])
+    undefined_name = language_from_alpha2(settings.general.default_und_audio_lang)
+    return format_audio_languages(names, undefined_name)
 
 
 def upgrade_languages_profile_values():
@@ -807,79 +694,58 @@ def is_indexed_subtitle_path(*subtitles_paths) -> bool:
     return False
 
 
-def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[dict]:
-    """
-    Retrieves a list of subtitles based on the provided episode or movie identifiers.
+def get_media_tags(column: SQLColumnExpression[str | None]) -> list[str]:
+    values = database.execute(select(column).where(column.is_not(None)).distinct()).scalars()
+    tags: set[str] = set()
+    for value in values:
+        if value:
+            tags.update(parse_string_list(value))
+    return sorted(tags)
 
-    If `sonarr_episode_id` is provided, subtitles for the given episode are returned. If only
-    `radarr_id` is provided, subtitles for the given movie are returned. The information includes
-    details such as file path, language, forced subtitles flag, hearing impaired flag, and file size.
 
-    :param sonarr_episode_id: The Sonarr episode identifier, used specifically for episode subtitles.
-    :type sonarr_episode_id: int, optional
-    :param radarr_id: The Radarr identifier, used specifically for movie subtitles.
-    :type radarr_id: int, optional
-    :return: A list of dictionaries, each containing information about a subtitle file, including its
-             path, language metadata (name, alpha-2 code, and alpha-3 code), forced subtitles flag,
-             hearing impaired flag, and file size.
-    :rtype: List[dict]
-    """
-    subtitles = []
+def get_subtitles(sonarr_episode_id: int | None = None, radarr_id: int | None = None) -> list[SubtitleFile]:
     if sonarr_episode_id:
-        episodes_subtitles = database.execute(
-            select(TableEpisodesSubtitles.path,
-                   TableEpisodesSubtitles.language,
-                   TableEpisodesSubtitles.forced,
-                   TableEpisodesSubtitles.hi,
-                   TableEpisodesSubtitles.size,
-                   TableEpisodesSubtitles.embedded_track_id,
-                   TableEpisodesSubtitles.id)
-            .where(TableEpisodesSubtitles.sonarrEpisodeId == sonarr_episode_id)
-        ).all()
-
-        for episode_subtitles in episodes_subtitles:
-            subtitles.append(_subtitle_payload(episode_subtitles, path_mappings.path_replace))
-    elif radarr_id:
-        movies_subtitles = database.execute(
-            select(TableMoviesSubtitles.path,
-                   TableMoviesSubtitles.language,
-                   TableMoviesSubtitles.forced,
-                   TableMoviesSubtitles.hi,
-                   TableMoviesSubtitles.size,
-                   TableMoviesSubtitles.embedded_track_id,
-                   TableMoviesSubtitles.id)
-            .where(TableMoviesSubtitles.radarrId == radarr_id)
-        ).all()
-
-        for movie_subtitles in movies_subtitles:
-            subtitles.append(_subtitle_payload(movie_subtitles, path_mappings.path_replace_movie))
-
-    return _sort_subtitles(subtitles)
+        return get_subtitles_map('series', [sonarr_episode_id]).get(sonarr_episode_id, [])
+    if radarr_id:
+        return get_subtitles_map('movie', [radarr_id]).get(radarr_id, [])
+    return []
 
 
-def _subtitle_payload(subtitle, replace_path):
-    from languages.get_languages import alpha3_from_alpha2, language_from_alpha2
+def _subtitle_payload(
+    path: str | None, language: str, forced: bool, hi: bool, size: int | None,
+    embedded_track_id: int | None, subtitle_id: int, replace_path: Callable[[str | None], str | None],
+) -> SubtitleFile:
+    from languages.formatting import language_info_from_code
 
-    return {"id": subtitle.id,
-            "path": replace_path(subtitle.path),
-            "name": language_from_alpha2(subtitle.language),
-            "code2": subtitle.language,
-            "code3": alpha3_from_alpha2(subtitle.language),
-            "forced": subtitle.forced,
-            "hi": subtitle.hi,
-            "file_size": subtitle.size,
-            "embedded_track_id": subtitle.embedded_track_id}
+    return {**language_info_from_code(language),
+            'id': subtitle_id, 'path': replace_path(path), 'forced': forced, 'hi': hi,
+            'file_size': size, 'embedded_track_id': embedded_track_id}
 
 
-def _sort_subtitles(subtitles):
-    return sorted(subtitles, key=lambda i: (i['name'], i['forced']))
+_Subtitle = TypeVar('_Subtitle', bound=SubtitleOrder)
 
 
-def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, List[dict]]:
+def _sort_subtitles(subtitles: list[_Subtitle]) -> list[_Subtitle]:
+    return sorted(subtitles, key=subtitle_sort_key)
+
+
+def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, list[SubtitleFile]]:
     if not media_ids:
         return {}
+    return _load_subtitles_map(media_type, (
+        media_ids[index:index + SUBTITLE_MAP_QUERY_BATCH_SIZE]
+        for index in range(0, len(media_ids), SUBTITLE_MAP_QUERY_BATCH_SIZE)
+    ))
 
-    subtitles_by_media_id = defaultdict(list)
+
+def get_subtitles_for_query(media_type: str, media_ids: Select[tuple[int]]) -> dict[int, list[SubtitleFile]]:
+    return _load_subtitles_map(media_type, (media_ids.correlate(None),))
+
+
+def _load_subtitles_map(
+    media_type: str, selections: Iterable[list[int] | Select[tuple[int]]],
+) -> dict[int, list[SubtitleFile]]:
+    subtitles_by_media_id: dict[int, list[SubtitleFile]] = defaultdict(list)
     if media_type == "series":
         media_id_column = TableEpisodesSubtitles.sonarrEpisodeId
         subtitle_columns = (
@@ -909,12 +775,11 @@ def get_subtitles_map(media_type: str, media_ids: list[int]) -> dict[int, List[d
     else:
         return {}
 
-    # Keep bulk list endpoints compatible with SQLite's historical variable limit.
-    for index in range(0, len(media_ids), SUBTITLE_MAP_QUERY_BATCH_SIZE):
-        media_id_chunk = media_ids[index:index + SUBTITLE_MAP_QUERY_BATCH_SIZE]
-        rows = database.execute(
-            select(*subtitle_columns).where(media_id_column.in_(media_id_chunk))
-        ).all()
-        for row in rows:
-            subtitles_by_media_id[row[0]].append(_subtitle_payload(row, replace_path))
+    for selection in selections:
+        with database.execute(
+            select(*subtitle_columns).where(media_id_column.in_(selection))
+        ).yield_per(500) as rows:
+            for media_id, path, language, forced, hi, size, embedded_id, subtitle_id in rows:
+                subtitles_by_media_id[media_id].append(
+                    _subtitle_payload(path, language, forced, hi, size, embedded_id, subtitle_id, replace_path))
     return {media_id: _sort_subtitles(subtitles) for media_id, subtitles in subtitles_by_media_id.items()}

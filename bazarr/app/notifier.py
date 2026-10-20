@@ -3,6 +3,7 @@
 from apprise import Apprise, AppriseAsset
 import logging
 import re
+from datetime import datetime
 from urllib.parse import quote
 
 from .database import TableSettingsNotifier, TableEpisodes, TableShows, TableMovies, database, insert, delete, select
@@ -134,11 +135,16 @@ def send_notifications_movie(radarr_id, message):
     )
 
 
-def _build_media_variables(record, prefix):
+def _build_media_variables(
+    record: TableShows | TableEpisodes | TableMovies | None, prefix: str | None,
+) -> dict[str, str | int | bytes | datetime | None]:
     if record is None or not prefix:
         return {}
 
-    return {f'bazarr_{prefix}_{key}': value for key, value in record.to_dict().items()}
+    return {
+        f'bazarr_{prefix}_{column.name}': getattr(record, column.name)
+        for column in record.__table__.columns
+    }
 
 
 def _expand_notifier_url(url, media_variables):

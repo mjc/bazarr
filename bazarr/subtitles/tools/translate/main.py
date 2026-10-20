@@ -2,25 +2,37 @@
 
 import logging
 import os
+from typing import TypeAlias
 
-
+from sqlalchemy import Row
 from subliminal_patch.core import get_subtitle_path
-from subzero.language import Language
 
-from .core.translator_utils import validate_translation_params, convert_language_codes, get_translation_extension
+from .core.translation_request import (
+    EpisodeMedia, GeminiConfig, TranslationRequest, load_translator_config, resolve_translation_media,
+    resolve_translator_name,
+)
+from .core.translator_utils import (
+    add_translator_info, convert_language_codes, create_process_result, get_translation_extension,
+    validate_translation_params,
+)
 from .services.translator_factory import TranslatorFactory
-from languages.get_languages import alpha3_from_alpha2
+from languages.get_languages import language_from_alpha2
 from app.config import settings
 from app.jobs_queue import jobs_queue
+from radarr.history import history_log_movie
+from sonarr.history import history_log
 from utilities.helper import get_target_folder
 
+TranslationMetadata: TypeAlias = (
+    Row[tuple[str, int | None, int, int, str | None, int | None]] | Row[tuple[str, str | None, str]]
+)
 
-def extract_and_translate_embedded(subtitles_id, media_type, video_path, from_lang, to_lang, forced, hi,
-                                   sonarr_series_id, sonarr_episode_id, radarr_id, metadata,
-                                   original_format=False, job_id=None):
-    # Extract an embedded subtitles track then translate the resulting external file, both inside a single job.
-    # add_job_from_function must remain the first statement: it binds the caller's locals to this signature, so
-    # no other local variable can exist yet.
+
+def extract_and_translate_embedded(subtitles_id: int, media_type: str, video_path: str, from_lang: str,
+                                   to_lang: str, forced: bool, hi: bool, sonarr_series_id: int | None,
+                                   sonarr_episode_id: int | None, radarr_id: int | None, metadata: TranslationMetadata,
+                                   original_format: bool = False, job_id: int | None = None) -> None:
+    # Enqueue before adding locals: the job helper binds this frame's locals to the function signature.
     if not job_id:
         jobs_queue.add_job_from_function(f'Extracting and translating from {from_lang.upper()} to '
                                          f'{to_lang.upper()}', is_progress=True)
@@ -29,8 +41,7 @@ def extract_and_translate_embedded(subtitles_id, media_type, video_path, from_la
     from subtitles.embedded import extract_embedded_subtitle
     subtitles_path = extract_embedded_subtitle(subtitles_id=subtitles_id, media_type=media_type, job_id=job_id)
     if not subtitles_path:
-        logging.error(f'BAZARR was unable to extract embedded subtitles track id {subtitles_id}, '
-                      f'aborting translation')
+        logging.error('Unable to extract embedded subtitle %s', subtitles_id)
         return
 
     translate_subtitles_file(video_path=video_path, source_srt_file=subtitles_path, from_lang=from_lang,
@@ -40,85 +51,53 @@ def extract_and_translate_embedded(subtitles_id, media_type, video_path, from_la
                              job_id=job_id)
 
 
-def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, forced, hi,
-                             media_type, sonarr_series_id, sonarr_episode_id, radarr_id, metadata,
-                             original_format=False, job_id=None):
+def translate_subtitles_file(video_path: str, source_srt_file: str, from_lang: str, to_lang: str, forced: bool,
+                             hi: bool, media_type: str, sonarr_series_id: int | None, sonarr_episode_id: int | None,
+                             radarr_id: int | None, metadata: TranslationMetadata, original_format: bool = False,
+                             job_id: int | None = None) -> str | None:
     if not job_id:
-        jobs_queue.add_job_from_function(f'Translating from {from_lang.upper()} to {to_lang.upper()} using '
-                                         f'{settings.translator.translator_type.replace("_", " ").title()}',
-                                         is_progress=True)
-        return
+        jobs_queue.add_job_from_function(
+            f'Translating from {from_lang.upper()} to {to_lang.upper()} using '
+            f'{resolve_translator_name(settings.translator.translator_type).replace("_", " ").title()}',
+            is_progress=True)
+        return None
 
+    config = load_translator_config(settings.translator)
     try:
-        logging.debug(f'Translation request: video={video_path}, source={source_srt_file}, from={from_lang}, to={to_lang}')
-
         validate_translation_params(video_path, source_srt_file, from_lang, to_lang)
-        lang_obj, orig_to_lang = convert_language_codes(to_lang, forced, hi)
-
-        logging.debug(f'BAZARR is translating in {lang_obj} this subtitles {source_srt_file}')
-
-        translator_type = settings.translator.translator_type or 'google'
-
-        # Preserve the source subtitle format (.ass/.vtt) when requested instead of always
-        # writing .srt. Gemini only supports SRT and is handled by get_translation_extension.
-        dest_extension = get_translation_extension(source_srt_file, original_format, translator_type)
-        logging.debug(f'Translation destination extension: {dest_extension} '
-                      f'(original_format={original_format}, translator={translator_type})')
-
-        # get the destination path if the subtitles are alongside the video
-        dest_srt_file_if_alongside_video = get_subtitle_path(
-            video_path,
-            language=lang_obj if isinstance(lang_obj, Language) else lang_obj.subzero_language(),
-            extension=dest_extension,
-            forced_tag=forced,
-            hi_tag=hi
-        )
-
-        # get the real destination path taking into account if the user set up Bazarr to store external subtitles in
-        #  a custom folder or relative folder
-        dest_dir_for_srt = get_target_folder(video_path)
-        if dest_dir_for_srt:
-            # if the user has set up Bazarr to store external subtitles in a custom folder, we need to add the custom
-            # folder to the destination path
-            dest_srt_file = os.path.join(dest_dir_for_srt, os.path.basename(dest_srt_file_if_alongside_video))
+        language, target = convert_language_codes(to_lang, forced, hi)
+        media = resolve_translation_media(media_type, sonarr_series_id, sonarr_episode_id, radarr_id)
+        extension = get_translation_extension(source_srt_file, original_format, config.name)
+        alongside_video: str = get_subtitle_path(video_path, language=language, extension=extension,
+                                                forced_tag=forced, hi_tag=hi)
+        folder = get_target_folder(video_path)
+        destination = os.path.join(folder, os.path.basename(alongside_video)) if folder else alongside_video
+        request = TranslationRequest(source_srt_file, destination, video_path, from_lang, target, media, forced, hi)
+        translator = TranslatorFactory.create_translator(request, config)
+        output = translator.translate(job_id=job_id)
+        if output is None:
+            return None
+        if not os.path.isfile(output):
+            raise FileNotFoundError(f'Translator did not save its output: {output}')
+        if config.annotate:
+            label = config.model if isinstance(config, GeminiConfig) else (
+                'Lingarr' if config.name == 'lingarr' else 'Google Translate')
+            add_translator_info(output, f'# Subtitles translated with {label} # ')
+        suffix = ' using Lingarr.' if config.name == 'lingarr' else '.'
+        message = (f'{language_from_alpha2(from_lang)} subtitles translated to '
+                   f'{target.language.name}{suffix}')
+        result = create_process_result(message, request, output, config.default_score)
+        if isinstance(media, EpisodeMedia):
+            history_log(action=6, sonarr_series_id=media.series_id, sonarr_episode_id=media.episode_id, result=result)
         else:
-            # otherwise, we just use the destination path as it is
-            dest_srt_file = dest_srt_file_if_alongside_video
-
-        logging.debug(f'Using translator type: {translator_type}')
-
-        translator = TranslatorFactory.create_translator(
-            translator_type,
-            source_srt_file=source_srt_file,
-            dest_srt_file=dest_srt_file,
-            lang_obj=lang_obj,
-            from_lang=from_lang,
-            to_lang=alpha3_from_alpha2(to_lang),
-            media_type=media_type,
-            video_path=video_path,
-            orig_to_lang=orig_to_lang,
-            forced=forced,
-            hi=hi,
-            sonarr_series_id=sonarr_series_id,
-            sonarr_episode_id=sonarr_episode_id,
-            radarr_id=radarr_id
-        )
-
-        logging.debug(f'Created translator instance: {translator.__class__.__name__}')
-        result = translator.translate(job_id=job_id)
-        if result is False:
-            raise RuntimeError(f'{translator.__class__.__name__} returned a failed translation result')
-        logging.debug(f'BAZARR saved translated subtitles to {dest_srt_file}')
+            history_log_movie(action=6, radarr_id=media.movie_id, result=result)
         from api.subtitles.subtitles import postprocess_subtitles
-        # Call postprocess_subtitles after translation
-        postprocess_subtitles(dest_srt_file, media_type, metadata, sonarr_episode_id if media_type == 'episode' else radarr_id)
-        return result
-
-    except Exception as e:
-        logging.error(f'Translation failed: {str(e)}', exc_info=True)
-        raise
-
-    finally:
+        postprocess_subtitles(output, media.kind, metadata,
+                             media.episode_id if isinstance(media, EpisodeMedia) else media.movie_id)
         jobs_queue.update_job_name(job_id=job_id,
                                    new_job_name=f'Translated from {from_lang.upper()} to {to_lang.upper()} using '
-                                                f'{settings.translator.translator_type.replace("_", " ").title()}')
+                                                f'{config.name.replace("_", " ").title()}')
+        return output
+    except (OSError, ValueError, RuntimeError):
+        logging.exception('Translation failed')
+        raise

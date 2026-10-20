@@ -7,11 +7,10 @@ import datetime
 
 from typing import Union
 
-from app.config import settings
+from .translation_request import TranslationRequest, TranslationTarget
 from subzero.language import Language
 from subliminal_patch.score import MAX_SCORES
-from languages.custom_lang import CustomLanguage
-from languages.get_languages import alpha3_from_alpha2, language_from_alpha2, language_from_alpha3
+from languages.get_languages import alpha3_from_alpha2, resolve_language
 from subtitles.processing import ProcessSubtitlesResult
 from utilities.path_mappings import path_mappings
 
@@ -20,7 +19,7 @@ from app.database import TableShows, TableEpisodes, TableMovies, database, selec
 logger = logging.getLogger(__name__)
 
 
-def validate_translation_params(video_path, source_srt_file, from_lang, to_lang):
+def validate_translation_params(video_path: str, source_srt_file: str, from_lang: str, to_lang: str) -> bool:
     """Validate translation parameters."""
     if not os.path.exists(source_srt_file):
         raise FileNotFoundError(f"Source subtitle file not found: {source_srt_file}")
@@ -73,7 +72,7 @@ def resolve_translation_source(subtitles, subtitles_path, subtitles_id, language
 SUPPORTED_TRANSLATION_EXTENSIONS = ('.srt', '.ass', '.ssa', '.vtt')
 
 
-def get_translation_extension(source_srt_file, original_format, translator_type):
+def get_translation_extension(source_srt_file: str, original_format: bool, translator_type: str) -> str:
     """
     Return the extension to use for the translated subtitle file.
 
@@ -97,58 +96,40 @@ def get_translation_extension(source_srt_file, original_format, translator_type)
     return src_ext
 
 
-def convert_language_codes(to_lang, forced=False, hi=False):
+def convert_language_codes(to_lang: str, forced: bool = False, hi: bool = False) -> tuple[Language, TranslationTarget]:
     """Convert and validate language codes."""
-    orig_to_lang = to_lang
-    to_lang = alpha3_from_alpha2(to_lang)
-
-    try:
-        lang_obj = Language(to_lang)
-    except ValueError:
-        custom_lang_obj = CustomLanguage.from_value(to_lang, "alpha3")
-        if custom_lang_obj:
-            lang_obj = CustomLanguage.subzero_language(custom_lang_obj)
-        else:
-            raise ValueError(f'Unable to translate to {to_lang}')
-
-    if forced:
-        lang_obj = Language.rebuild(lang_obj, forced=True)
-    if hi:
-        lang_obj = Language.rebuild(lang_obj, hi=True)
-
-    return lang_obj, orig_to_lang
+    resolved = resolve_language(to_lang)
+    if resolved is None:
+        raise ValueError(f'Unable to translate to {to_lang}')
+    lang_obj = resolved.to_language(forced=forced, hi=hi)
+    normalized_code2 = lang_obj.alpha2
+    if not isinstance(normalized_code2, str):
+        raise ValueError(f'Unable to translate to {to_lang}')
+    return lang_obj, TranslationTarget(resolved, to_lang, normalized_code2)
 
 
-def create_process_result(message, video_path, orig_to_lang, forced, hi, dest_srt_file, media_type):
-    """Create a ProcessSubtitlesResult object with common parameters."""
-    if media_type == 'episode':
+def create_process_result(message: str, request: TranslationRequest, output_path: str,
+                          default_score: int) -> ProcessSubtitlesResult:
+    if request.media.kind == 'episode':
         prr = path_mappings.path_replace_reverse
-        score = int((settings.translator.default_score / 100) * MAX_SCORES['episode'])
     else:
         prr = path_mappings.path_replace_reverse_movie
-        score = int((settings.translator.default_score / 100) * MAX_SCORES['movie'])
-
+    score = int((default_score / 100) * MAX_SCORES[request.media.kind])
     return ProcessSubtitlesResult(
         message=message,
-        reversed_path=prr(video_path),
-        downloaded_language_code2=orig_to_lang,
+        reversed_path=prr(request.video_path),
+        downloaded_language_code2=request.target.requested_code2,
         downloaded_provider=None,
         score=score,
-        forced=forced,
+        forced=request.forced,
         subtitle_id=None,
-        reversed_subtitles_path=prr(dest_srt_file),
-        hearing_impaired=hi
+        reversed_subtitles_path=prr(output_path),
+        hearing_impaired=request.hi,
     )
 
 
-def add_translator_info(dest_srt_file, info):
-    if settings.translator.translator_info:
-        # The info cue is injected via the SRT library, so it only applies to .srt outputs.
-        # For other formats (.ass/.vtt) we skip it rather than risk corrupting the file.
-        if os.path.splitext(dest_srt_file)[1].lower() != '.srt':
-            logger.debug(f'Skipping translator info cue for non-SRT file: {dest_srt_file}')
-            return
-
+def add_translator_info(dest_srt_file: str, info: str) -> None:
+    if os.path.splitext(dest_srt_file)[1].lower() == '.srt':
         # Load the SRT content
         with open(dest_srt_file, "r", encoding="utf-8") as f:
             srt_content = f.read()

@@ -9,13 +9,21 @@ import re
 from datetime import datetime, timedelta, timezone
 from zipfile import ZipFile, BadZipFile, ZIP_DEFLATED
 from glob import glob
-from typing import Literal, overload
+from typing import Literal, TypedDict, overload
 
 from app.get_args import args
 from app.config import settings
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue
 from utilities.central import restart_bazarr
+
+
+class BackupInfo(TypedDict):
+    date: str
+    filename: str
+    size: str
+    type: str
+
 
 _BACKUP_FILENAME_RE = re.compile(r'^bazarr_backup_v[\w.\-]+\.zip$')
 
@@ -128,10 +136,10 @@ def get_backup_files(fullpath: Literal[True] = True) -> list[str]: ...
 
 
 @overload
-def get_backup_files(fullpath: Literal[False]) -> list[dict[str, str]]: ...
+def get_backup_files(fullpath: Literal[False]) -> list[BackupInfo]: ...
 
 
-def get_backup_files(fullpath: bool = True) -> list[str] | list[dict[str, str]]:
+def get_backup_files(fullpath: bool = True) -> list[str] | list[BackupInfo]:
     """
     Retrieve the list of Bazarr backup archive files located in the
     configured backup directory.

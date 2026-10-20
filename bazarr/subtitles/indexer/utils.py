@@ -9,36 +9,7 @@ from subzero.language import Language
 from charset_normalizer import from_path
 
 from constants import MAXIMUM_SUBTITLE_SIZE
-from app.config import settings
-from utilities.path_mappings import path_mappings
 from languages.custom_lang import CustomLanguage
-
-
-def get_external_subtitles_path(file, subtitle):
-    fld = os.path.dirname(file)
-
-    if settings.general.subfolder == "current":
-        path = os.path.join(fld, subtitle)
-    elif settings.general.subfolder == "absolute":
-        custom_fld = settings.general.subfolder_custom
-        if os.path.exists(os.path.join(fld, subtitle)):
-            path = os.path.join(fld, subtitle)
-        elif os.path.exists(os.path.join(custom_fld, subtitle)):
-            path = os.path.join(custom_fld, subtitle)
-        else:
-            path = None
-    elif settings.general.subfolder == "relative":
-        custom_fld = os.path.join(fld, settings.general.subfolder_custom)
-        if os.path.exists(os.path.join(fld, subtitle)):
-            path = os.path.join(fld, subtitle)
-        elif os.path.exists(os.path.join(custom_fld, subtitle)):
-            path = os.path.join(custom_fld, subtitle)
-        else:
-            path = None
-    else:
-        path = None
-
-    return path
 
 
 def guess_external_subtitles(dest_folder, subtitles, previously_indexed_subtitles_to_exclude=None):

@@ -18,14 +18,12 @@ from collections import Counter
 from typing import List
 from srt import Subtitle
 
-from app.config import settings
-from sonarr.history import history_log
-from radarr.history import history_log_movie
 from utilities.path_mappings import path_mappings
 from subtitles.processing import ProcessSubtitlesResult
-from app.jobs_queue import jobs_queue
+from app.jobs_queue import JobCanceled, jobs_queue
 from languages.get_languages import alpha3_from_alpha2, language_from_alpha2, language_from_alpha3
-from ..core.translator_utils import add_translator_info, get_description, create_process_result
+from ..core.translator_utils import get_description
+from ..core.translation_request import EpisodeMedia, GeminiConfig, TranslationRequest
 
 logger = logging.getLogger(__name__)
 DEFAULT_GEMINI_BATCH_SIZE = 300
@@ -44,22 +42,9 @@ class SubtitleObject(typing.TypedDict):
 
 class GeminiTranslatorService:
 
-    def __init__(self, source_srt_file, dest_srt_file, to_lang, media_type, sonarr_series_id, sonarr_episode_id,
-                 radarr_id, forced, hi, video_path, from_lang, orig_to_lang, **kwargs):
-        self.source_srt_file = source_srt_file
-        self.dest_srt_file = dest_srt_file
-        self.to_lang = to_lang
-        self.media_type = media_type
-        self.sonarr_series_id = sonarr_series_id
-        self.radarr_id = radarr_id
-        self.from_lang = from_lang
-        self.video_path = video_path
-        self.forced = forced
-        self.hi = hi
-        self.sonarr_series_id = sonarr_series_id
-        self.sonarr_episode_id = sonarr_episode_id
-        self.radarr_id = radarr_id
-        self.orig_to_lang = orig_to_lang
+    def __init__(self, request: TranslationRequest, config: GeminiConfig) -> None:
+        self.request = request
+        self.config = config
 
         self.gemini_api_key = None
         self.api_keys = []
@@ -67,11 +52,11 @@ class GeminiTranslatorService:
         self.current_api_index = -1
         self.current_api_number = 1
         self.backup_api_number = 2
-        self.target_language = None
-        self.input_file = None
-        self.output_file = None
+        self.target_language = ''
+        self.input_file = request.source_srt_file
+        self.output_file = request.dest_srt_file
         self.start_line = 1
-        self.description = None
+        self.description = ''
         self.model_name = "gemini-2.0-flash"
         self.batch_size = DEFAULT_GEMINI_BATCH_SIZE
         self.free_quota = True
@@ -79,56 +64,23 @@ class GeminiTranslatorService:
         self.interrupt_flag = False
         self.progress_file = None
         self.current_progress = 0
-        self.job_id = None
+        self.job_id: int | None = None
 
-    def translate(self, job_id):
+    def translate(self, job_id: int | None) -> str | None:
         self.job_id = job_id
-        subs = pysubs2.load(self.source_srt_file, encoding='utf-8')
-        subs.remove_miscellaneous_events()
-
-        try:
-            logger.debug(f'BAZARR is sending subtitle file to Gemini for translation')
-            logger.info(f"BAZARR is sending subtitle file to Gemini for translation " + self.source_srt_file)
-
-            self.api_keys = self._get_configured_api_keys()
-            self.current_api_key = self._select_next_api_key()
-            self.gemini_api_key = self.current_api_key
-            self.target_language = language_from_alpha3(self.to_lang)
-            self.input_file = self.source_srt_file
-            self.output_file = self.dest_srt_file
-            self.model_name = settings.translator.gemini_model
-            self.batch_size = self._get_batch_size()
-            self.description = get_description(self.media_type, self.radarr_id, self.sonarr_series_id)
-
-            if self.input_file:
-                self.progress_file = os.path.join(os.path.dirname(self.input_file), f".{os.path.basename(self.input_file)}.progress")
-
-            self._check_saved_progress()
-
-            try:
-                self._translate_with_gemini()
-                add_translator_info(self.dest_srt_file, f"# Subtitles translated with {settings.translator.gemini_model} # ")
-            except Exception as e:
-                jobs_queue.update_job_progress(job_id=job_id, progress_message=f'Gemini translation error: {str(e)}')
-                raise
-
-        except Exception as e:
-            logger.error(f'BAZARR encountered an error translating with Gemini: {str(e)}')
-            raise
-
-        else:
-            message = (f"{language_from_alpha2(self.from_lang)} subtitles translated to "
-                       f"{language_from_alpha3(self.to_lang)}.")
-            result = create_process_result(message, self.video_path, self.orig_to_lang, self.forced, self.hi,
-                                           self.dest_srt_file, self.media_type)
-
-            if self.media_type == 'episode':
-                history_log(action=6, sonarr_series_id=self.sonarr_series_id, sonarr_episode_id=self.sonarr_episode_id,
-                            result=result)
-            else:
-                history_log_movie(action=6, radarr_id=self.radarr_id, result=result)
-                
-            return self.dest_srt_file
+        self.api_keys = self._get_configured_api_keys()
+        self.current_api_key = self._select_next_api_key()
+        self.gemini_api_key = self.current_api_key
+        self.target_language = language_from_alpha3(self.request.target.language.code3) or ''
+        self.model_name = self.config.model
+        self.batch_size = self.config.batch_size
+        media = self.request.media
+        self.description = get_description(media.kind,
+                                           media.movie_id if not isinstance(media, EpisodeMedia) else None,
+                                           media.series_id if isinstance(media, EpisodeMedia) else None)
+        self.progress_file = os.path.join(os.path.dirname(self.input_file), f'.{os.path.basename(self.input_file)}.progress')
+        self._check_saved_progress()
+        return self._translate_with_gemini()
 
     @staticmethod
     def get_instruction(language: str, description: str) -> str:
@@ -213,27 +165,10 @@ class GeminiTranslatorService:
         return False
 
     def _get_batch_size(self) -> int:
-        try:
-            batch_size = int(settings.translator.gemini_batch_size)
-        except (AttributeError, TypeError, ValueError):
-            batch_size = DEFAULT_GEMINI_BATCH_SIZE
-        return max(1, batch_size)
+        return self.config.batch_size
 
     def _get_configured_api_keys(self) -> List[str]:
-        keys = []
-        seen_keys = set()
-        configured_keys = getattr(settings.translator, "gemini_keys", [])
-
-        if not isinstance(configured_keys, list):
-            configured_keys = [configured_keys]
-
-        for raw_key in configured_keys:
-            key = str(raw_key).strip()
-            if key and key not in seen_keys:
-                keys.append(key)
-                seen_keys.add(key)
-
-        return keys
+        return list(self.config.keys)
 
     @staticmethod
     def _is_key_on_cooldown(api_key: str) -> bool:
@@ -469,38 +404,37 @@ class GeminiTranslatorService:
             else:
                 translated_subtitle[int(line["index"])].content = line["content"]
 
-    def _translate_with_gemini(self):
+    def _translate_with_gemini(self) -> str | None:
         if not self.api_keys:
             jobs_queue.update_job_progress(
                 job_id=self.job_id,
                 progress_message="Please provide at least one valid Gemini API key.",
             )
-            return
+            return None
 
         if not self.current_api_key:
             jobs_queue.update_job_progress(
                 job_id=self.job_id,
                 progress_message="All Gemini API keys are currently rate limited. Please wait before retrying.",
             )
-            return
+            return None
 
         if not self.target_language:
             jobs_queue.update_job_progress(job_id=self.job_id, progress_message="Please provide a target language.")
-            return
+            return None
 
         if not self.input_file:
             jobs_queue.update_job_progress(job_id=self.job_id, progress_message="Please provide a subtitle file.")
-            return
+            return None
 
+        total = 0
         try:
             with open(self.input_file, "r", encoding="utf-8") as original_file:
                 original_text = original_file.read()
                 original_subtitle = list(srt.parse(original_text))
-
-                try:
-                    translated_subtitle = original_subtitle.copy()
-                except FileNotFoundError:
-                    translated_subtitle = original_subtitle.copy()
+                if not original_subtitle:
+                    jobs_queue.update_job_progress(job_id=self.job_id, progress_message='No subtitle lines to translate.')
+                    return None
 
                 # Use with statement for the output file too
                 with open(self.output_file, "w", encoding="utf-8") as translated_file:
@@ -519,7 +453,7 @@ class GeminiTranslatorService:
                     self._save_progress(i)
 
                     jobs_queue.update_job_progress(job_id=self.job_id, progress_max=total,
-                                                   progress_message=self.source_srt_file)
+                                                   progress_message=self.request.source_srt_file)
 
                     while (i < total or len(batch) > 0) and not self.interrupt_flag:
                         if i < total and len(batch) < self.batch_size:
@@ -529,7 +463,7 @@ class GeminiTranslatorService:
 
                         try:
                             start_time = time.time()
-                            self._process_batch(batch, translated_subtitle, total)
+                            self._process_batch(batch, original_subtitle, total)
                             end_time = time.time()
 
                             # Save progress after each batch
@@ -545,16 +479,17 @@ class GeminiTranslatorService:
 
                     # Check if we exited the loop due to an interrupt
                     jobs_queue.update_job_progress(job_id=self.job_id, progress_value=total,
-                                                   progress_message=self.source_srt_file)
+                                                   progress_message=self.request.source_srt_file)
                     if self.interrupt_flag:
-                        # File will be automatically closed by the with statement
                         self._clear_progress()
+                        raise JobCanceled
 
                     # Write the final result - this happens inside the with block
-                    translated_file.write(srt.compose(translated_subtitle))
+                    translated_file.write(srt.compose(original_subtitle))
 
                     # Clear progress file on successful completion
                     self._clear_progress()
+            return self.output_file
 
         except Exception as e:
             logger.error(f'BAZARR encountered an error translating with Gemini: {str(e)}')

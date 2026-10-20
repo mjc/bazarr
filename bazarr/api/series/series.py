@@ -2,7 +2,7 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 from functools import reduce
 
 from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableMissingSubtitles, database, select, \
@@ -12,11 +12,12 @@ from subtitles.indexer.series import list_missing_subtitles, series_scan_subtitl
 from subtitles.mass_download import series_download_subtitles
 from subtitles.wanted import wanted_search_missing_subtitles_series
 from app.event_handler import event_stream
+from api.response_types import SeriesPageResponse
+from api.response_data import load_formatter, load_series_audio_languages
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
-from api.utils import authenticate, None_Keys, postprocess, add_list_query_args, profile_filter_clause, \
-    monitored_filter_clause, tags_filter_clause, series_audio_language_filter_clause, apply_sort, ended_filter_clause, \
-    get_series_audio_languages
+from api.utils import authenticate, None_Keys, add_list_query_args, profile_filter_clause, \
+    monitored_filter_clause, tags_filter_clause, series_audio_language_filter_clause, apply_sort, ended_filter_clause
 
 api_ns_series = Namespace('Series', description='List series metadata, update series languages profile or run actions '
                                                 'for specific series.')
@@ -67,7 +68,7 @@ class Series(Resource):
     @api_ns_series.expect(get_request_parser)
     @api_ns_series.response(200, 'Success')
     @api_ns_series.response(401, 'Not Authenticated')
-    def get(self):
+    def get(self) -> SeriesPageResponse:
         """List series metadata for specific series"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -160,16 +161,27 @@ class Series(Resource):
         }, TableShows.sortTitle, sort_by, sort_order)
 
         if length > 0:
-            stmt = stmt.limit(length).offset(start)
+            stmt = stmt.order_by(TableShows.sonarrSeriesId).limit(length).offset(start)
 
         series = database.execute(stmt).all()
-        audio_languages = get_series_audio_languages([
-            row.sonarrSeriesId for row in series if row.audio_language == '[]'
-        ])
-        results = [postprocess({
+        formatter = load_formatter()
+        if (not length or length < 0) and missing is None:
+            # Unpaginated audio loading does not need the episode-count joins.
+            audio_ids = select(TableShows.sonarrSeriesId).where(TableShows.audio_language == '[]', *where_clauses)
+        else:
+            page_query = stmt.with_only_columns(TableShows.sonarrSeriesId, TableShows.audio_language,
+                                                maintain_column_froms=True)
+            if not length or length < 0:
+                page_query = page_query.order_by(None)
+            page = page_query.subquery()
+            audio_ids = select(page.c.sonarrSeriesId).where(page.c.audio_language == '[]')
+        audio_by_series = load_series_audio_languages(
+            audio_ids, formatter.audio_names,
+        ) if any(x.audio_language == '[]' for x in series) else {}
+        results = [formatter.series({
             'tvdbId': x.tvdbId,
             'alternativeTitles': x.alternativeTitles,
-            'audio_language': audio_languages[x.sonarrSeriesId] if x.audio_language == '[]' else x.audio_language,
+            'audio_language': x.audio_language,
             'created_at_timestamp': x.created_at_timestamp,
             'fanart': x.fanart,
             'imdbId': x.imdbId,
@@ -187,7 +199,7 @@ class Series(Resource):
             'lastAired': x.lastAired,
             'episodeFileCount': x.episodeFileCount,
             'episodeMissingCount': x.episodeMissingCount,
-        }) for x in series]
+        }, episode_audio=audio_by_series.get(x.sonarrSeriesId, ())) for x in series]
 
         count_stmt = select(func.count()) \
             .select_from(TableShows) \
@@ -198,7 +210,7 @@ class Series(Resource):
 
         count = database.execute(count_stmt).scalar()
 
-        return marshal({'data': results, 'total': count}, self.get_response_model)
+        return {'data': results, 'total': count}
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('seriesid', type=int, action='append', required=False, default=[],

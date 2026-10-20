@@ -1,17 +1,18 @@
 # coding=utf-8
-# fmt: off
 
-import os
-import sys
 import logging
+import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Literal, Protocol, TypedDict
 
-from subzero.language import Language
 from subliminal_patch.core import save_subtitles
 from subliminal_patch.subtitle import Subtitle
+from subtitles.content import validate_subtitle
 from subliminal_patch.score import MAX_SCORES
-from pysubs2.formats import get_format_identifier
 
-from languages.get_languages import language_from_alpha3, alpha2_from_alpha3, alpha3_from_alpha2
+from languages.get_languages import resolve_language
+from languages.formatting import LanguageInfo
 from app.config import settings, get_array_from
 from utilities.helper import get_target_folder, force_unicode
 from utilities.post_processing import pp_replace, set_chmod
@@ -20,235 +21,177 @@ from radarr.history import history_log_movie
 from radarr.notify import notify_radarr
 from sonarr.history import history_log
 from sonarr.notify import notify_sonarr
-from languages.custom_lang import CustomLanguage
-from app.database import (TableEpisodes, TableMovies, TableShows, get_profiles_list, get_audio_profile_languages,
+from app.database import (TableEpisodes, TableMovies, TableShows, get_profile, get_audio_profile_languages,
                           database, select)
 from app.jobs_queue import jobs_queue
 from app.event_handler import event_stream
-from app.notifier import send_notifications
-from app.notifier import send_notifications_movie
+from app.notifier import send_notifications, send_notifications_movie
 from subtitles.indexer.series import store_subtitles
 from subtitles.indexer.movies import store_subtitles_movie
 from subtitles.processing import ProcessSubtitlesResult
-
-from .sync import sync_subtitles
-from .post_processing import postprocessing
 from plex.operations import plex_set_movie_added_date_now, plex_set_episode_added_date_now, plex_refresh_item
 from jellyfin.operations import jellyfin_refresh_item
 
-
-def _get_profile_original_format(profile_id):
-    profile = get_profiles_list(profile_id)
-    if not isinstance(profile, dict):
-        return False
-
-    return bool(profile.get("originalFormat", 0))
+from .sync import sync_subtitles
+from .post_processing import postprocessing
 
 
-def _get_audio_language_payload(audio_languages):
-    empty_audio_language = {'name': '', 'code2': '', 'code3': ''}
-    if not isinstance(audio_languages, list) or not audio_languages:
-        return empty_audio_language
-
-    first_audio_language = audio_languages[0]
-    if not isinstance(first_audio_language, dict):
-        return empty_audio_language
-
-    return {
-        key: value if isinstance(value := first_audio_language.get(key), str) else ''
-        for key in empty_audio_language
-    }
+class UploadedSubtitle(Protocol):
+    def getvalue(self) -> bytes: ...
 
 
-def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, filename, audio_language, job_id=None,
-                           sonarrSeriesId=None, sonarrEpisodeId=None, radarrId=None):
-    if not job_id:
-        return jobs_queue.add_job_from_function(f"Uploading {filename}", is_progress=False)
+class AudioLanguagePayload(TypedDict):
+    name: str
+    code2: str
+    code3: str
 
-    logging.debug(f'BAZARR Manually uploading subtitles: {filename}')
 
-    single = settings.general.single_language
+@dataclass(frozen=True, slots=True)
+class EpisodeUploadMetadata:
+    sonarrSeriesId: int
+    sonarrEpisodeId: int
+    season: int
+    episode: int
+    profileId: int | None
+    imdbId: str | None
+    tvdbId: int | None
 
-    use_postprocessing = settings.general.use_postprocessing
-    postprocessing_cmd = settings.general.postprocessing_cmd
 
-    chmod = int(settings.general.chmod, 8) if not sys.platform.startswith(
-        'win') and settings.general.chmod_enabled else None
+@dataclass(frozen=True, slots=True)
+class MovieUploadMetadata:
+    radarrId: int
+    profileId: int | None
+    imdbId: str | None
+    tmdbId: str
 
-    language = alpha3_from_alpha2(language)
 
-    custom = CustomLanguage.from_value(language, "alpha3")
-    if custom is None:
-        lang_obj = Language(language)
-    else:
-        lang_obj = custom.subzero_language()
-
-    if hi:
-        lang_obj = Language.rebuild(lang_obj, hi=True)
-
-    if forced:
-        lang_obj = Language.rebuild(lang_obj, forced=True)
-
+def _load_metadata(media_type: Literal['series', 'movie'], episode_id: int | None,
+                   movie_id: int | None) -> EpisodeUploadMetadata | MovieUploadMetadata | None:
     if media_type == 'series':
-        episode_metadata = database.execute(
-            select(TableEpisodes.sonarrSeriesId,
-                   TableEpisodes.sonarrEpisodeId,
-                   TableEpisodes.season,
-                   TableEpisodes.episode,
-                   TableShows.profileId,
-                   TableShows.imdbId,
-                   TableShows.tvdbId)
-            .select_from(TableEpisodes)
-            .join(TableShows)
-            .where(TableEpisodes.sonarrEpisodeId == sonarrEpisodeId)) \
-            .first()
+        row = database.execute(select(
+            TableEpisodes.sonarrSeriesId, TableEpisodes.sonarrEpisodeId, TableEpisodes.season,
+            TableEpisodes.episode, TableShows.profileId, TableShows.imdbId, TableShows.tvdbId,
+        ).select_from(TableEpisodes).join(TableShows)
+         .where(TableEpisodes.sonarrEpisodeId == episode_id)).first()
+        return EpisodeUploadMetadata(*row) if row is not None else None
+    row = database.execute(select(TableMovies.radarrId, TableMovies.profileId, TableMovies.imdbId, TableMovies.tmdbId)
+                           .where(TableMovies.radarrId == movie_id)).first()
+    return MovieUploadMetadata(*row) if row is not None else None
 
-        if episode_metadata:
-            use_original_format = _get_profile_original_format(episode_metadata.profileId)
-        else:
-            return
-    else:
-        movie_metadata = database.execute(
-            select(TableMovies.radarrId, TableMovies.profileId,
-                   TableMovies.imdbId, TableMovies.tmdbId)
-            .where(TableMovies.radarrId == radarrId)) \
-            .first()
 
-        if movie_metadata:
-            use_original_format = _get_profile_original_format(movie_metadata.profileId)
-        else:
-            return
+def _get_audio_language_payload(audio_languages: Sequence[LanguageInfo] | None) -> AudioLanguagePayload:
+    first = audio_languages[0] if audio_languages else None
+    return {'name': first['name'] or '' if first else '',
+            'code2': first['code2'] or '' if first else '',
+            'code3': first['code3'] or '' if first else ''}
 
-    audio_language = _get_audio_language_payload(get_audio_profile_languages(audio_language))
 
-    sub = Subtitle(
-        lang_obj,
-        mods=get_array_from(settings.general.subzero_mods),
-        original_format=use_original_format
-    )
+def manual_upload_subtitle(
+    path: str, language: str | None, forced: bool, hi: bool, media_type: Literal['series', 'movie'],
+    subtitle: UploadedSubtitle, filename: str | None,
+    audio_language: str | list[str | None] | tuple[str | None, ...] | None,
+    job_id: int | None = None, sonarrSeriesId: int | None = None,
+    sonarrEpisodeId: int | None = None, radarrId: int | None = None,
+) -> int | tuple[str, int] | None:
+    if not job_id:
+        return jobs_queue.add_job_from_function(f'Uploading {filename}', is_progress=False)
 
+    resolved = resolve_language(language)
+    if resolved is None:
+        logging.error('BAZARR subtitle upload language is unknown or incomplete: %s', language)
+        return None
+    metadata = _load_metadata(media_type, sonarrEpisodeId, radarrId)
+    if metadata is None:
+        return None
+    profile = get_profile(metadata.profileId)
+    use_original_format = profile.original_format if profile is not None else False
+    general = settings.general
+    chmod = int(general.chmod, 8) if not sys.platform.startswith('win') and general.chmod_enabled else None
+    logging.debug('BAZARR Manually uploading subtitles: %s', filename)
+
+    sub = Subtitle(resolved.to_language(forced=forced, hi=hi), mods=get_array_from(general.subzero_mods),
+                   original_format=use_original_format)
     sub.content = subtitle.getvalue()
-    if not sub.is_valid():
-        logging.exception(f'BAZARR Invalid subtitle file: {filename}')
-        sub.mods = None
-
-    if settings.general.utf8_encode:
-        sub.set_encoding("utf-8")
-
+    if not validate_subtitle(sub):
+        logging.error('BAZARR Invalid subtitle file: %s', filename)
+        return None
+    if general.utf8_encode:
+        sub.set_encoding('utf-8')
+    # Validation discovers the content's format; the filename may be wrong.
+    formats = (sub.format,) if use_original_format else ('srt',)
     try:
-        sub.format = (get_format_identifier(os.path.splitext(filename)[1]),)
-    except Exception:
-        pass
+        saved = save_subtitles(path, [sub], single=general.single_language, tags=None,
+                               directory=get_target_folder(path), chmod=chmod, formats=formats,
+                               path_decoder=force_unicode)
+    except (OSError, UnicodeError, ValueError):
+        logging.exception('BAZARR Error saving subtitles for %s', path)
+        return None
+    if not saved or not isinstance(subtitle_path := saved[0].storage_path, str) or not subtitle_path:
+        logging.error('BAZARR Error saving subtitles for %s', path)
+        return None
 
-    saved_subtitles = []
-    try:
-        # ensure that formats must be a tuple of strings
-        sub_format = (sub.format,) if isinstance(sub.format, str) else sub.format
-        saved_subtitles = save_subtitles(path,
-                                         [sub],
-                                         single=single,
-                                         tags=None,  # fixme
-                                         directory=get_target_folder(path),
-                                         chmod=chmod,
-                                         formats=sub_format if use_original_format else ("srt",),
-                                         path_decoder=force_unicode)
-    except Exception as e:
-        logging.exception(f'BAZARR Error saving Subtitles file to disk for this file {path}: {str(e)}')
-        return
-
-    if len(saved_subtitles) < 1:
-        logging.exception(f'BAZARR Error saving Subtitles file to disk for this file: {path}')
-        return
-
-    subtitle_path = saved_subtitles[0].storage_path
-
-    if hi:
-        modifier_string = " HI"
-    elif forced:
-        modifier_string = " forced"
-    else:
-        modifier_string = ""
-
-    if hi:
-        modifier_code = ":hi"
-    elif forced:
-        modifier_code = ":forced"
-    else:
-        modifier_code = ""
-    uploaded_language_code3 = language + modifier_code
-    uploaded_language = language_from_alpha3(language) + modifier_string
-    uploaded_language_code2 = alpha2_from_alpha3(language) + modifier_code
-
-    if use_postprocessing:
-        args = pp_replace(postprocessing_cmd, path, subtitle_path, uploaded_language, uploaded_language_code2,
-                          uploaded_language_code3, audio_language['name'], audio_language['code2'],
-                          audio_language['code3'], 100, "1", "manual", "user", "unknown", sonarrSeriesId,
-                          sonarrEpisodeId or radarrId,)
+    modifier_string = ' HI' if hi else ' forced' if forced else ''
+    modifier_code = ':hi' if hi else ':forced' if forced else ''
+    uploaded_name = resolved.name + modifier_string
+    uploaded_code2 = resolved.code2 + modifier_code
+    uploaded_code3 = resolved.code3 + modifier_code
+    if general.use_postprocessing:
+        audio = _get_audio_language_payload(get_audio_profile_languages(audio_language))
+        args = pp_replace(general.postprocessing_cmd, path, subtitle_path, uploaded_name, uploaded_code2,
+                          uploaded_code3, audio['name'], audio['code2'], audio['code3'], 100, '1', 'manual',
+                          'user', 'unknown', metadata.sonarrSeriesId if isinstance(metadata, EpisodeUploadMetadata) else None,
+                          metadata.sonarrEpisodeId if isinstance(metadata, EpisodeUploadMetadata) else metadata.radarrId)
         postprocessing(args, path)
         set_chmod(subtitles_path=subtitle_path)
 
-    if media_type == 'series':
-        sync_subtitles(video_path=path, srt_path=subtitle_path, srt_lang=uploaded_language_code2, percent_score=100,
-                       sonarr_series_id=episode_metadata.sonarrSeriesId, forced=forced, hi=hi,
-                       sonarr_episode_id=episode_metadata.sonarrEpisodeId, job_id=job_id)
+    if isinstance(metadata, EpisodeUploadMetadata):
+        sync_subtitles(video_path=path, srt_path=subtitle_path, srt_lang=uploaded_code2, percent_score=100,
+                       sonarr_series_id=metadata.sonarrSeriesId, forced=forced, hi=hi,
+                       sonarr_episode_id=metadata.sonarrEpisodeId, job_id=job_id)
         reversed_path = path_mappings.path_replace_reverse(path)
         reversed_subtitles_path = path_mappings.path_replace_reverse(subtitle_path)
-        notify_sonarr(episode_metadata.sonarrSeriesId)
-        event_stream(type='series', action='update', payload=episode_metadata.sonarrSeriesId)
-        event_stream(type='episode-wanted', action='delete', payload=episode_metadata.sonarrEpisodeId)
+        notify_sonarr(metadata.sonarrSeriesId)
+        event_stream(type='series', action='update', payload=metadata.sonarrSeriesId)
+        event_stream(type='episode-wanted', action='delete', payload=metadata.sonarrEpisodeId)
     else:
-        sync_subtitles(video_path=path, srt_path=subtitle_path, srt_lang=uploaded_language_code2, percent_score=100,
-                       radarr_id=movie_metadata.radarrId, forced=forced, hi=hi, job_id=job_id)
+        sync_subtitles(video_path=path, srt_path=subtitle_path, srt_lang=uploaded_code2, percent_score=100,
+                       radarr_id=metadata.radarrId, forced=forced, hi=hi, job_id=job_id)
         reversed_path = path_mappings.path_replace_reverse_movie(path)
         reversed_subtitles_path = path_mappings.path_replace_reverse_movie(subtitle_path)
-        notify_radarr(movie_metadata.radarrId)
-        event_stream(type='movie', action='update', payload=movie_metadata.radarrId)
-        event_stream(type='movie-wanted', action='delete', payload=movie_metadata.radarrId)
+        notify_radarr(metadata.radarrId)
+        event_stream(type='movie', action='update', payload=metadata.radarrId)
+        event_stream(type='movie-wanted', action='delete', payload=metadata.radarrId)
 
-    result = ProcessSubtitlesResult(message=f"{language_from_alpha3(language)}{modifier_string} Subtitles manually "
-                                            "uploaded.",
-                                    reversed_path=reversed_path,
-                                    downloaded_language_code2=uploaded_language_code2,
-                                    downloaded_provider=None,
-                                    score=None,
-                                    forced=None,
-                                    subtitle_id=None,
-                                    reversed_subtitles_path=reversed_subtitles_path,
+    result = ProcessSubtitlesResult(message=f'{uploaded_name} Subtitles manually uploaded.', reversed_path=reversed_path,
+                                    downloaded_language_code2=uploaded_code2, downloaded_provider=None, score=None,
+                                    forced=None, subtitle_id=None, reversed_subtitles_path=reversed_subtitles_path,
                                     hearing_impaired=None)
-
-    if not result:
-        logging.debug(f"BAZARR unable to process subtitles for this {'episode' if media_type == 'series' else 'movie'}:"
-                      f" {path}")
+    if isinstance(metadata, EpisodeUploadMetadata):
+        store_subtitles(metadata.sonarrEpisodeId)
+        history_log(4, metadata.sonarrSeriesId, metadata.sonarrEpisodeId, result,
+                    fake_provider='manual', fake_score=MAX_SCORES['episode'])
+        if not general.dont_notify_manual_actions:
+            send_notifications(metadata.sonarrSeriesId, metadata.sonarrEpisodeId, result.message)
+        if general.use_plex:
+            plex = settings.plex
+            if plex.update_series_library:
+                plex_refresh_item(metadata.imdbId, is_movie=False, season=metadata.season, episode=metadata.episode)
+            if plex.set_episode_added:
+                plex_set_episode_added_date_now(metadata)
+        if general.use_jellyfin and settings.jellyfin.update_series_library:
+            jellyfin_refresh_item(metadata.imdbId, is_movie=False, season=metadata.season, episode=metadata.episode,
+                                  tvdb_id=metadata.tvdbId)
     else:
-        provider = "manual"
-        if media_type == 'series':
-            store_subtitles(sonarrEpisodeId)
-            history_log(4, sonarrSeriesId, sonarrEpisodeId, result, fake_provider=provider,
-                        fake_score=MAX_SCORES['episode'])
-            if not settings.general.dont_notify_manual_actions:
-                send_notifications(sonarrSeriesId, sonarrEpisodeId, result.message)
-            if settings.general.use_plex:
-                if settings.plex.update_series_library:
-                    plex_refresh_item(episode_metadata.imdbId, is_movie=False,
-                                      season=episode_metadata.season, episode=episode_metadata.episode)
-                if settings.plex.set_episode_added:
-                    plex_set_episode_added_date_now(episode_metadata)
-            if settings.general.use_jellyfin and settings.jellyfin.update_series_library:
-                jellyfin_refresh_item(episode_metadata.imdbId, is_movie=False,
-                                      season=episode_metadata.season, episode=episode_metadata.episode,
-                                      tvdb_id=episode_metadata.tvdbId)
-        else:
-            store_subtitles_movie(radarrId)
-            history_log_movie(4, radarrId, result, fake_provider=provider, fake_score=MAX_SCORES['movie'])
-            if not settings.general.dont_notify_manual_actions:
-                send_notifications_movie(radarrId, result.message)
-            if settings.general.use_plex:
-                if settings.plex.update_movie_library:
-                    plex_refresh_item(movie_metadata.imdbId, is_movie=True)
-                if settings.plex.set_movie_added:
-                    plex_set_movie_added_date_now(movie_metadata)
-            if settings.general.use_jellyfin and settings.jellyfin.update_movie_library:
-                jellyfin_refresh_item(movie_metadata.imdbId, is_movie=True,
-                                      tmdb_id=movie_metadata.tmdbId)
-
+        store_subtitles_movie(metadata.radarrId)
+        history_log_movie(4, metadata.radarrId, result, fake_provider='manual', fake_score=MAX_SCORES['movie'])
+        if not general.dont_notify_manual_actions:
+            send_notifications_movie(metadata.radarrId, result.message)
+        if general.use_plex:
+            plex = settings.plex
+            if plex.update_movie_library:
+                plex_refresh_item(metadata.imdbId, is_movie=True)
+            if plex.set_movie_added:
+                plex_set_movie_added_date_now(metadata)
+        if general.use_jellyfin and settings.jellyfin.update_movie_library:
+            jellyfin_refresh_item(metadata.imdbId, is_movie=True, tmdb_id=metadata.tmdbId)
     return '', 204

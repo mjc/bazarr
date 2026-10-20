@@ -31,6 +31,7 @@ from shutil import move
 from utilities.text_list import parse_text_list_or_default
 
 from .get_args import args
+from .settings_cache import settings_cache
 
 NoneType = type(None)
 
@@ -560,25 +561,28 @@ while failed_validator:
             stop_bazarr(EXIT_VALIDATION_ERROR)
 
 
-def write_config():
-    if settings.as_dict() == Dynaconf(
-        settings_file=config_yaml_file,
-        core_loaders=['YAML']
-    ).as_dict():
-        logging.debug("Nothing changed when comparing to config file. Skipping write to file.")
-    else:
-        try:
-            write(settings_path=config_yaml_file + '.tmp',
-                  settings_data={k.lower(): v for k, v in settings.as_dict().items()},
-                  merge=False)
-        except Exception as error:
-            logging.exception(f"Exception raised while trying to save temporary settings file: {error}")
+def write_config() -> None:
+    try:
+        if settings.as_dict() == Dynaconf(
+            settings_file=config_yaml_file,
+            core_loaders=['YAML']
+        ).as_dict():
+            logging.debug("Nothing changed when comparing to config file. Skipping write to file.")
         else:
             try:
-                move(config_yaml_file + '.tmp', config_yaml_file)
+                write(settings_path=config_yaml_file + '.tmp',
+                      settings_data={k.lower(): v for k, v in settings.as_dict().items()},
+                      merge=False)
             except Exception as error:
-                logging.exception(f"Exception raised while trying to overwrite settings file with temporary settings "
-                                  f"file: {error}")
+                logging.exception(f"Exception raised while trying to save temporary settings file: {error}")
+            else:
+                try:
+                    move(config_yaml_file + '.tmp', config_yaml_file)
+                except Exception as error:
+                    logging.exception(f"Exception raised while trying to overwrite settings file with temporary settings "
+                                      f"file: {error}")
+    finally:
+        settings_cache.invalidate()
 
 
 base_url = settings.general.base_url.rstrip('/')
@@ -961,7 +965,10 @@ def save_settings(settings_items):
         settings.validators.validate()
         validate_log_regex()
     except ValidationError:
-        settings.reload()
+        try:
+            settings.reload()
+        finally:
+            settings_cache.invalidate()
         raise
     else:
         write_config()

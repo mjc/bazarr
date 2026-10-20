@@ -1,12 +1,11 @@
 # coding=utf-8
 
 import datetime
-import operator
-import itertools
+from dataclasses import dataclass
+from typing import TypedDict
 
-from dateutil import rrule
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
-from functools import reduce
+from sqlalchemy import Date, Select, func
+from flask_restx import Resource, Namespace, reqparse, fields
 
 from app.database import TableHistory, TableHistoryMovie, database, select
 
@@ -15,10 +14,59 @@ from ..utils import authenticate
 api_ns_history_stats = Namespace('History Statistics', description='Get history statistics')
 
 
+class HistoryCount(TypedDict):
+    date: str
+    count: int
+
+
+class HistoryStatsResponse(TypedDict):
+    series: list[HistoryCount]
+    movies: list[HistoryCount]
+
+
+WINDOW_DAYS = {'week': 6, 'month': 30, 'trimester': 90, 'year': 364}
+
+
+@dataclass(frozen=True)
+class HistoryQuery:
+    start: datetime.datetime
+    end: datetime.datetime
+    action: str
+    provider: str
+    language: str
+
+    def statement(self, table: type[TableHistory] | type[TableHistoryMovie]) -> Select[tuple[datetime.date, int]]:
+        day = func.date(table.timestamp, type_=Date)
+        statement = select(day, func.count()).where(table.timestamp.between(self.start, self.end))
+        statement = statement.where(table.action.in_([1, 2, 3]) if self.action == 'All'
+                                    else table.action == self.action)
+        if self.provider != 'All':
+            statement = statement.where(table.provider == self.provider)
+        if self.language != 'All':
+            statement = statement.where(table.language == self.language)
+        return statement.group_by(day)
+
+    def counts(self, table: type[TableHistory] | type[TableHistoryMovie]) -> dict[datetime.date, int]:
+        return {day: count for day, count in database.execute(self.statement(table))}
+
+    def response(self) -> HistoryStatsResponse:
+        series_counts = self.counts(TableHistory)
+        movie_counts = self.counts(TableHistoryMovie)
+        series: list[HistoryCount] = []
+        movies: list[HistoryCount] = []
+        first_day = self.start.date()
+        for offset in range((self.end.date() - first_day).days + 1):
+            day = first_day + datetime.timedelta(days=offset)
+            label = day.isoformat()
+            series.append({'date': label, 'count': series_counts.get(day, 0)})
+            movies.append({'date': label, 'count': movie_counts.get(day, 0)})
+        return {'series': series, 'movies': movies}
+
+
 @api_ns_history_stats.route('history/stats')
 class HistoryStats(Resource):
     get_request_parser = reqparse.RequestParser()
-    get_request_parser.add_argument('timeFrame', type=str, default='month',
+    get_request_parser.add_argument('timeFrame', type=str, default='month', choices=tuple(WINDOW_DAYS),
                                     help='Timeframe to get stats for. Must be in ["week", "month", "trimester", '
                                          '"year"]')
     get_request_parser.add_argument('action', type=str, default='All', help='Action type to filter for.')
@@ -43,81 +91,12 @@ class HistoryStats(Resource):
     @authenticate
     @api_ns_history_stats.response(401, 'Not Authenticated')
     @api_ns_history_stats.expect(get_request_parser)
-    def get(self):
+    def get(self) -> HistoryStatsResponse:
         """Get history statistics"""
         args = self.get_request_parser.parse_args()
-        timeframe = args.get('timeFrame')
-        action = args.get('action')
-        provider = args.get('provider')
-        language = args.get('language')
-
-        # timeframe must be in ['week', 'month', 'trimester', 'year']
-        if timeframe == 'year':
-            delay = 364 * 24 * 60 * 60
-        elif timeframe == 'trimester':
-            delay = 90 * 24 * 60 * 60
-        elif timeframe == 'month':
-            delay = 30 * 24 * 60 * 60
-        elif timeframe == 'week':
-            delay = 6 * 24 * 60 * 60
-
         now = datetime.datetime.now()
-        past = now - datetime.timedelta(seconds=delay)
-
-        history_where_clauses = [(TableHistory.timestamp.between(past, now))]
-        history_where_clauses_movie = [(TableHistoryMovie.timestamp.between(past, now))]
-
-        if action != 'All':
-            history_where_clauses.append((TableHistory.action == action))
-            history_where_clauses_movie.append((TableHistoryMovie.action == action))
-        else:
-            history_where_clauses.append((TableHistory.action.in_([1, 2, 3])))
-            history_where_clauses_movie.append((TableHistoryMovie.action.in_([1, 2, 3])))
-
-        if provider != 'All':
-            history_where_clauses.append((TableHistory.provider == provider))
-            history_where_clauses_movie.append((TableHistoryMovie.provider == provider))
-
-        if language != 'All':
-            history_where_clauses.append((TableHistory.language == language))
-            history_where_clauses_movie.append((TableHistoryMovie.language == language))
-
-        history_where_clause = reduce(operator.and_, history_where_clauses)
-        history_where_clause_movie = reduce(operator.and_, history_where_clauses_movie)
-
-        data_series = [{
-            'timestamp': x.timestamp,
-            'id': x.id,
-        } for x in database.execute(
-            select(TableHistory.timestamp, TableHistory.id)
-            .where(history_where_clause))
-            .all()]
-        data_series = [{'date': date[0], 'count': sum(1 for item in date[1])} for date in
-                       itertools.groupby(list(data_series),
-                                         key=lambda x: x['timestamp'].strftime(
-                                             '%Y-%m-%d'))]
-
-        data_movies = [{
-            'timestamp': x.timestamp,
-            'id': x.id,
-        } for x in database.execute(
-            select(TableHistoryMovie.timestamp, TableHistoryMovie.id)
-            .where(history_where_clause_movie))
-            .all()]
-        data_movies = [{'date': date[0], 'count': sum(1 for item in date[1])} for date in
-                       itertools.groupby(list(data_movies),
-                                         key=lambda x: x['timestamp'].strftime(
-                                             '%Y-%m-%d'))]
-
-        for dt in rrule.rrule(rrule.DAILY,
-                              dtstart=datetime.datetime.now() - datetime.timedelta(seconds=delay),
-                              until=datetime.datetime.now()):
-            if not any(d['date'] == dt.strftime('%Y-%m-%d') for d in data_series):
-                data_series.append({'date': dt.strftime('%Y-%m-%d'), 'count': 0})
-            if not any(d['date'] == dt.strftime('%Y-%m-%d') for d in data_movies):
-                data_movies.append({'date': dt.strftime('%Y-%m-%d'), 'count': 0})
-
-        sorted_data_series = sorted(data_series, key=lambda i: i['date'])
-        sorted_data_movies = sorted(data_movies, key=lambda i: i['date'])
-
-        return marshal({'series': sorted_data_series, 'movies': sorted_data_movies}, self.get_response_model)
+        query = HistoryQuery(
+            start=now - datetime.timedelta(days=WINDOW_DAYS[args['timeFrame']]), end=now,
+            action=args['action'], provider=args['provider'], language=args['language'],
+        )
+        return query.response()

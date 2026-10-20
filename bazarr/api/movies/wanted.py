@@ -2,14 +2,15 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 from functools import reduce
 
-from app.database import get_exclusion_clause, TableMovies, TableMissingSubtitles, database, select, func, get_subtitles_map
+from app.database import get_exclusion_clause, TableMovies, TableMissingSubtitles, database, select, func
 from api.swaggerui import subtitles_language_model
-from subtitles.wanted_state import get_missing_languages_map
 
-from api.utils import authenticate, postprocess
+from api.utils import authenticate
+from api.response_data import load_formatter, load_missing_languages
+from api.response_types import WantedPageResponse
 
 
 api_ns_movies_wanted = Namespace('Movies Wanted', description='List movies wanted subtitles')
@@ -41,7 +42,7 @@ class MoviesWanted(Resource):
     @authenticate
     @api_ns_movies_wanted.response(401, 'Not Authenticated')
     @api_ns_movies_wanted.expect(get_request_parser)
-    def get(self):
+    def get(self) -> WantedPageResponse:
         """List movies wanted subtitles"""
         args = self.get_request_parser.parse_args()
         radarrid = args.get("radarrid[]")
@@ -70,16 +71,17 @@ class MoviesWanted(Resource):
             stmt = stmt.order_by(TableMovies.radarrId.desc()).limit(length).offset(start)
 
         movies = database.execute(stmt).all()
-        missing_languages = get_missing_languages_map('movie', [x.radarrId for x in movies])
-        subtitles_map = get_subtitles_map('movie', [x.radarrId for x in movies])
+        media_ids = stmt.with_only_columns(TableMovies.radarrId, maintain_column_froms=True)
+        missing_languages = load_missing_languages('movie', media_ids) if movies else {}
+        formatter = load_formatter()
 
-        results = [postprocess({
+        results = [formatter.wanted({
             'title': x.title,
-            'missing_subtitles': missing_languages[x.radarrId],
+            'missing_subtitles': missing_languages.get(x.radarrId, ()),
             'radarrId': x.radarrId,
             'sceneName': x.sceneName,
             'tags': x.tags,
-        }, subtitles=subtitles_map.get(x.radarrId, [])) for x in movies]
+        }) for x in movies]
 
         count = database.execute(
             select(func.count())
@@ -87,4 +89,4 @@ class MoviesWanted(Resource):
             .where(wanted_condition)) \
             .scalar()
 
-        return marshal({'data': results, 'total': count}, self.get_response_model)
+        return {'data': results, 'total': count}

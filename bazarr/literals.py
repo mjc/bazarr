@@ -3,6 +3,9 @@
 # only primitive types can be specified here
 # for other derived values, use constants.py
 
+# Profile wire value for excluding hearing-impaired subtitles.
+HI_EXCLUDED = 'Excluded'
+
 # bazarr environment variable names
 ENV_STOPFILE = 'STOPFILE'
 ENV_RESTARTFILE = 'RESTARTFILE'

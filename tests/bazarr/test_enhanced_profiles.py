@@ -18,7 +18,7 @@ def _group(group_id, operator, *items):
 
 
 def _enhanced(groups, cutoff=None):
-    # Same shape update_profile_id_list() returns for an enhanced profile: flat items plus groups.
+    # Administrative enhanced profile shape: flat items plus groups.
     flat_items = [item for group in groups for item in group['items']]
     return {'profileId': 1, 'name': 'enhanced', 'cutoff': cutoff, 'profileType': 'enhanced',
             'items': flat_items, 'groups': groups,

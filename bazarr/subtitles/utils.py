@@ -12,7 +12,7 @@ from subliminal_patch.score import MAX_SCORES, DEFAULT_SCORES
 
 from app.config import settings
 from languages.custom_lang import CustomLanguage
-from app.database import get_profiles_list
+from app.database import get_profile
 
 from .refiners import registered as registered_refiners
 
@@ -96,10 +96,10 @@ def _get_scores(media_type, min_movie=None, min_ep=None):
 
 def get_ban_list(profile_id):
     if profile_id:
-        profile = get_profiles_list(profile_id)
+        profile = get_profile(profile_id)
         if profile:
-            return {'must_contain': profile.get('mustContain') or [],
-                    'must_not_contain': profile.get('mustNotContain') or []}
+            return {'must_contain': list(profile.must_contain),
+                    'must_not_contain': list(profile.must_not_contain)}
     return None
 
 

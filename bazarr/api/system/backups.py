@@ -1,10 +1,17 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from typing import TypedDict
 
-from utilities.backup import get_backup_files, prepare_restore, delete_backup_file, backup_to_zip
+from flask_restx import Resource, Namespace, reqparse, fields
+
+from utilities.backup import BackupInfo, get_backup_files, prepare_restore, delete_backup_file, backup_to_zip
 
 from ..utils import authenticate
+
+
+class BackupsResponse(TypedDict):
+    data: list[BackupInfo]
+
 
 api_ns_system_backups = Namespace('System Backups', description='List, create, restore or delete backups')
 
@@ -22,10 +29,10 @@ class SystemBackups(Resource):
     @api_ns_system_backups.expect(None)
     @api_ns_system_backups.response(204, 'Success')
     @api_ns_system_backups.response(401, 'Not Authenticated')
-    def get(self):
+    def get(self) -> BackupsResponse:
         """List backup files"""
         backups = get_backup_files(fullpath=False)
-        return marshal(backups, self.get_response_model, envelope='data')
+        return {'data': backups}
 
     @authenticate
     @api_ns_system_backups.expect(None)

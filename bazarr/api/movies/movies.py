@@ -1,20 +1,17 @@
 # coding=utf-8
 
-from typing import cast
-
-from api.utils import JsonObject
-
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
-from app.database import TableMissingSubtitles, TableMovies, database, update, select, func, get_subtitles_map
+from flask_restx import Resource, Namespace, reqparse, fields
+from app.database import TableMissingSubtitles, TableMovies, database, update, select, func, get_subtitles_for_query
 from radarr.sync.movies import update_one_movie
 from subtitles.indexer.movies import list_missing_subtitles_movies, movies_scan_subtitles
 from app.event_handler import event_stream
 from subtitles.wanted import wanted_search_missing_subtitles_movies
-from subtitles.wanted_state import get_missing_languages_map
 from subtitles.mass_download import movies_download_subtitles
+from api.response_types import MoviesPageResponse
+from api.response_data import load_formatter, load_missing_languages
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
-from api.utils import authenticate, None_Keys, postprocess, add_list_query_args, profile_filter_clause, \
+from api.utils import authenticate, None_Keys, add_list_query_args, profile_filter_clause, \
     monitored_filter_clause, tags_filter_clause, audio_language_filter_clause, apply_sort
 
 api_ns_movies = Namespace('Movies', description='List movies metadata, update movie languages profile or run actions '
@@ -63,7 +60,7 @@ class Movies(Resource):
     @api_ns_movies.expect(get_request_parser)
     @api_ns_movies.response(200, 'Success')
     @api_ns_movies.response(401, 'Not Authenticated')
-    def get(self) -> JsonObject:
+    def get(self) -> MoviesPageResponse:
         """List movies metadata for specific movies"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -126,19 +123,23 @@ class Movies(Resource):
         }, TableMovies.sortTitle, sort_by, sort_order)
 
         if length > 0:
-            stmt = stmt.limit(length).offset(start)
+            stmt = stmt.order_by(TableMovies.radarrId).limit(length).offset(start)
 
         movies = database.execute(stmt).all()
-        missing_languages = get_missing_languages_map('movie', [x.radarrId for x in movies])
-        subtitles_map = get_subtitles_map('movie', [x.radarrId for x in movies])
+        media_ids = stmt.with_only_columns(TableMovies.radarrId, maintain_column_froms=True)
+        if not length or length < 0:
+            media_ids = media_ids.order_by(None)
+        missing_languages = load_missing_languages('movie', media_ids) if movies else {}
+        subtitles_map = get_subtitles_for_query('movie', media_ids) if movies else {}
+        formatter = load_formatter(x.profileId for x in movies)
 
-        results = [postprocess({
+        results = [formatter.movie({
             'alternativeTitles': x.alternativeTitles,
             'audio_language': x.audio_language,
             'created_at_timestamp': x.created_at_timestamp,
             'fanart': x.fanart,
             'imdbId': x.imdbId,
-            'missing_subtitles': missing_languages[x.radarrId],
+            'missing_subtitles': missing_languages.get(x.radarrId, ()),
             'monitored': x.monitored,
             'overview': x.overview,
             'path': x.path,
@@ -149,7 +150,7 @@ class Movies(Resource):
             'tags': x.tags,
             'title': x.title,
             'year': x.year,
-        }, subtitles=subtitles_map.get(x.radarrId, [])) for x in movies]
+        }, subtitles=subtitles_map.get(x.radarrId, ())) for x in movies]
 
         count_stmt = select(func.count()).select_from(TableMovies)
         if where_clauses:
@@ -157,7 +158,7 @@ class Movies(Resource):
 
         count = database.execute(count_stmt).scalar()
 
-        return cast(JsonObject, marshal({'data': results, 'total': count}, self.get_response_model))
+        return {'data': results, 'total': count}
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('radarrid', type=int, action='append', required=False, default=[],

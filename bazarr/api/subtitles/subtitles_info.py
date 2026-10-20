@@ -1,6 +1,7 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
+from api.response_types import SubtitleNameResult, SubtitleNamesResponse
 from subliminal_patch.core import guessit
 
 from ..utils import authenticate
@@ -27,17 +28,16 @@ class SubtitleNameInfo(Resource):
     @api_ns_subtitles_info.response(200, 'Success')
     @api_ns_subtitles_info.response(401, 'Not Authenticated')
     @api_ns_subtitles_info.expect(get_request_parser)
-    def get(self):
+    def get(self) -> SubtitleNamesResponse:
         """Guessit over subtitles filename"""
         args = self.get_request_parser.parse_args()
-        names = args.get('filenames[]')
-        results = []
+        names: list[str] = args['filenames[]']
+        results: list[SubtitleNameResult] = []
         for name in names:
             opts = dict()
             opts['type'] = 'episode'
             guessit_result = guessit(name, options=opts)
-            result = {}
-            result['filename'] = name
+            result: SubtitleNameResult = {'filename': name, 'subtitle_language': None, 'season': 0, 'episode': 0}
             if 'subtitle_language' in guessit_result:
                 result['subtitle_language'] = str(guessit_result['subtitle_language'])
 
@@ -68,6 +68,10 @@ class SubtitleNameInfo(Resource):
             else:
                 result['season'] = 0
 
+            episode = result['episode']
+            season = result['season']
+            result['episode'] = int(episode) if episode is not None else None
+            result['season'] = int(season) if season is not None else None
             results.append(result)
 
-        return marshal(results, self.get_response_model, envelope='data')
+        return {'data': results}

@@ -1,7 +1,8 @@
 # coding=utf-8
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 
+from api.response_types import TaskResponse, TasksResponse
 from app.scheduler import scheduler
 
 from ..utils import authenticate
@@ -27,12 +28,12 @@ class SystemTasks(Resource):
     @api_ns_system_tasks.expect(None)
     @api_ns_system_tasks.response(200, 'Success')
     @api_ns_system_tasks.response(401, 'Not Authenticated')
-    def get(self):
+    def get(self) -> TasksResponse:
         """List tasks"""
         args = self.get_request_parser.parse_args()
         taskid = args.get('taskid')
 
-        task_list = scheduler.get_task_list()
+        task_list: list[TaskResponse] = scheduler.get_task_list()
 
         if taskid:
             for item in task_list:
@@ -40,7 +41,7 @@ class SystemTasks(Resource):
                     task_list = [item]
                     continue
 
-        return marshal(task_list, self.get_response_model, envelope='data')
+        return {'data': task_list}
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('taskid', type=str, required=True, help='Task id of the task to run')

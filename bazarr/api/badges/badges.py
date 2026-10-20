@@ -3,8 +3,9 @@
 import operator
 
 from functools import reduce
-from flask_restx import Resource, Namespace, fields, marshal
+from flask_restx import Resource, Namespace, fields
 
+from api.response_types import BadgesResponse
 from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableMovies, TableMissingSubtitles, database, \
     select, func
 from app.config import settings
@@ -35,7 +36,7 @@ class Badges(Resource):
     @authenticate
     @api_ns_badges.response(401, 'Not Authenticated')
     @api_ns_badges.expect(None)
-    def get(self):
+    def get(self) -> BadgesResponse:
         """Get badges count to update the UI"""
         episodes_conditions = [(TableMissingSubtitles.media_type == 'series'),
                                (TableMissingSubtitles.media_id == TableEpisodes.sonarrEpisodeId)]
@@ -64,7 +65,7 @@ class Badges(Resource):
 
         live_str = "LIVE" if settings.general.show_live_badge else ""
 
-        result = {
+        result: BadgesResponse = {
             "episodes": missing_episodes_count,
             "movies": missing_movies_count,
             "providers": throttled_providers,
@@ -73,4 +74,4 @@ class Badges(Resource):
             'radarr_signalr': live_str if radarr_signalr_client.connected else "DOWN",
             'announcements': len(get_all_announcements()),
         }
-        return marshal(result, self.get_model)
+        return result

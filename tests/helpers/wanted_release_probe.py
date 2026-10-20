@@ -160,7 +160,7 @@ else:
                                                        path='/probe/ja.srt', size=1, **values))
     new_language = {3630: 'it', 3631: 'es', 3632: 'pt', 3633: 'nl', 3634: 'sv'}[options.stage]
     db.database.execute(db.update(db.TableLanguagesProfiles).values(items=profile(['en', new_language])))
-    db.update_profile_id_list.invalidate()
+    db.invalidate_profiles()
     movie_indexer = importlib.import_module('subtitles.indexer.movies')
     episode_indexer = importlib.import_module('subtitles.indexer.series')
     movie_indexer.list_missing_subtitles_movies(no=7)
@@ -212,7 +212,7 @@ else:
     # Change missing languages through the real indexers. With only the old,
     # recently retried English subtitle missing, both sync checks must throttle.
     db.database.execute(db.update(db.TableLanguagesProfiles).values(items=profile(['en'])))
-    db.update_profile_id_list.invalidate()
+    db.invalidate_profiles()
     movie_indexer.list_missing_subtitles_movies(no=7)
     episode_indexer.list_missing_subtitles(epno=17)
     settings.general.adaptive_searching = True
@@ -225,7 +225,7 @@ else:
     # Leave the latest missing-language update in place before installing the
     # next release. The next migration must import this value, not the seed.
     db.database.execute(db.update(db.TableLanguagesProfiles).values(items=profile(['en', new_language])))
-    db.update_profile_id_list.invalidate()
+    db.invalidate_profiles()
     movie_indexer.list_missing_subtitles_movies(no=7)
     episode_indexer.list_missing_subtitles(epno=17)
     expected['missing'] = {f'{kind}|{media_id}': ['en', new_language]

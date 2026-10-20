@@ -1,3 +1,4 @@
+from tests.helpers.profile_records import profile_record
 """
 Search order and profile options for the subtitle search, with the provider calls faked.
 
@@ -45,7 +46,7 @@ def _run_search(profile, languages, reload_side_effect=None, on_download=None):
     reload = mock.MagicMock(side_effect=reload_side_effect) if reload_side_effect else mock.MagicMock(return_value=[])
 
     with mock.patch('subtitles.download.settings', settings), \
-         mock.patch('subtitles.download.get_profiles_list', return_value=profile), \
+         mock.patch('subtitles.download.get_profile', return_value=profile_record(profile)), \
          mock.patch('subtitles.download._get_pool') as pool, \
          mock.patch('subtitles.download._set_forced_providers'), \
          mock.patch('subtitles.download._get_scores', return_value=(0, 100, {})), \
@@ -136,7 +137,7 @@ def test_enhanced_profile_must_contain_reaches_the_release_filter():
     groups = [{'id': 1, 'operator': 'AND', 'items': [_item(1, 'en')]}]
     profile = _profile([_item(1, 'en')], groups=groups, must_contain=['WEB'])
 
-    with mock.patch('subtitles.utils.get_profiles_list', return_value=profile):
+    with mock.patch('subtitles.utils.get_profile', return_value=profile_record(profile)):
         ban_list = get_ban_list(1)
 
     assert ban_list == {'must_contain': ['WEB'], 'must_not_contain': []}

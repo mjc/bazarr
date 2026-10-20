@@ -5,10 +5,23 @@ import pycountry
 from subzero.language import Language
 
 from .custom_lang import CustomLanguage
+from .registry import LanguageRegistry, ResolvedLanguage
 from app.database import TableSettingsLanguages, database, insert, update, select
 
 
-def load_language_in_db():
+_language_registry = LanguageRegistry(())
+_AUDIO_LANGUAGE_CODES = {'Chinese': 'zh', 'Portuguese (Brazil)': 'pb', 'Spanish (Latino)': 'ea'}
+
+
+def get_language_registry() -> LanguageRegistry:
+    return _language_registry
+
+
+def resolve_language(code2: str | None) -> ResolvedLanguage | None:
+    return _language_registry.resolve(code2)
+
+
+def load_language_in_db() -> None:
     # Get languages list in langs tuple
     langs = [{'code3': lang.alpha_3, 'code2': lang.alpha_2, 'name': lang.name, 'enabled': 0}
              for lang in pycountry.languages
@@ -32,12 +45,12 @@ def load_language_in_db():
     # Insert custom languages in database table
     CustomLanguage.register(TableSettingsLanguages)
 
-    # Create languages dictionary for faster conversion than calling database
-    create_languages_dict()
+    # Replace all lookup indexes together after loading the language table.
+    refresh_language_registry()
 
 
-def create_languages_dict():
-    global languages_dict
+def refresh_language_registry() -> None:
+    global _language_registry
     # replace chinese by chinese simplified
     database.execute(
         update(TableSettingsLanguages)
@@ -50,57 +63,55 @@ def create_languages_dict():
         .values(name='Greek')
         .where(TableSettingsLanguages.code3 == 'ell'))
 
-    languages_dict = [{
+    registry = LanguageRegistry({
         'code3': x.code3,
         'code2': x.code2,
         'name': x.name,
         'code3b': x.code3b,
     } for x in database.execute(
         select(TableSettingsLanguages.code3, TableSettingsLanguages.code2, TableSettingsLanguages.name,
-               TableSettingsLanguages.code3b))
-        .all()]
+               TableSettingsLanguages.code3b)))
+    _language_registry = registry
 
 
-def audio_language_from_name(lang):
-    lang_map = {
-        'Chinese': 'zh',
-        'Portuguese (Brazil)': 'pb',
-        'Spanish (Latino)': 'ea',
-    }
-
-    alpha2_code = lang_map.get(lang, None)
-
-    if alpha2_code is None:
-        return lang
-
-    return language_from_alpha2(alpha2_code)
+def audio_language_from_name(lang: str | None) -> str | None:
+    if lang is None:
+        return None
+    alpha2_code = _AUDIO_LANGUAGE_CODES.get(lang)
+    return language_from_alpha2(alpha2_code) if alpha2_code is not None else lang
 
 
-def language_from_alpha2(lang):
-    return next((item['name'] for item in languages_dict if item['code2'] == lang[:2]), None)
+def language_from_alpha2(lang: str) -> str | None:
+    language = _language_registry.from_code2(lang)
+    return language.name if language is not None else None
 
 
-def language_from_alpha3(lang):
-    return next((item['name'] for item in languages_dict if lang[:3] in [item['code3'], item['code3b']]), None)
+def language_from_alpha3(lang: str) -> str | None:
+    language = _language_registry.from_code3(lang)
+    return language.name if language is not None else None
 
 
-def alpha2_from_alpha3(lang):
-    return next((item['code2'] for item in languages_dict if lang[:3] in [item['code3'], item['code3b']]), None)
+def alpha2_from_alpha3(lang: str) -> str | None:
+    language = _language_registry.from_code3(lang)
+    return language.code2 if language is not None else None
 
 
-def alpha2_from_language(lang):
-    return next((item['code2'] for item in languages_dict if item['name'] == lang), None)
+def alpha2_from_language(lang: str) -> str | None:
+    language = _language_registry.from_name(lang)
+    return language.code2 if language is not None else None
 
 
-def alpha3_from_alpha2(lang):
-    return next((item['code3'] for item in languages_dict if item['code2'] == lang[:2]), None)
+def alpha3_from_alpha2(lang: str) -> str | None:
+    language = _language_registry.from_code2(lang)
+    return language.code3 if language is not None else None
 
 
-def alpha3_from_language(lang):
-    return next((item['code3'] for item in languages_dict if item['name'] == lang), None)
+def alpha3_from_language(lang: str) -> str | None:
+    language = _language_registry.from_name(lang)
+    return language.code3 if language is not None else None
 
 
-def get_language_set():
+def get_language_set() -> set[Language]:
     languages = database.execute(
         select(TableSettingsLanguages.code3)
         .where(TableSettingsLanguages.enabled == 1))\

@@ -1,17 +1,18 @@
 # coding=utf-8
 
 import operator
-import ast
 from functools import reduce
+from sqlalchemy.sql.selectable import ScalarSelect
 
+from api.response_types import HistoryPageResponse, HistoryResponse, HistoryRow
+from api.response_data import load_formatter, load_history_languages
 from api.swaggerui import subtitles_language_model
 from app.database import (TableEpisodes, TableShows, TableHistory, TableBlacklist, database, select,
                           TableEpisodesSubtitles, func)
-from subtitles.upgrade import get_upgradable_episode_subtitles,  _language_still_desired
+from subtitles.upgrade import get_upgradable_episode_subtitles
 
-import pretty
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
-from ..utils import authenticate, postprocess
+from flask_restx import Resource, Namespace, reqparse, fields
+from ..utils import authenticate
 
 api_ns_episodes_history = Namespace('Episodes History', description='List episodes history events')
 
@@ -56,7 +57,7 @@ class EpisodesHistory(Resource):
     @authenticate
     @api_ns_episodes_history.response(401, 'Not Authenticated')
     @api_ns_episodes_history.expect(get_request_parser)
-    def get(self):
+    def get(self) -> HistoryPageResponse:
         """List episodes history events"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -67,10 +68,12 @@ class EpisodesHistory(Resource):
                                        TableBlacklist.subs_id) \
             .subquery()
 
-        external_subtitles_sq = select(
-            TableEpisodesSubtitles.sonarrEpisodeId,
-            func.min(TableEpisodesSubtitles.path).label('path')
-        ).group_by(TableEpisodesSubtitles.sonarrEpisodeId).subquery()
+        external_subtitles: ScalarSelect[str | None] = (
+            select(func.min(TableEpisodesSubtitles.path))
+            .where(TableEpisodesSubtitles.sonarrEpisodeId == TableHistory.sonarrEpisodeId)
+            .correlate(TableHistory)
+            .scalar_subquery()
+        )
 
         query_conditions = [(TableEpisodes.title.is_not(None))]
         if episodeid:
@@ -99,88 +102,59 @@ class EpisodesHistory(Resource):
                       TableShows.profileId,
                       TableHistory.matched,
                       TableHistory.not_matched,
-                      external_subtitles_sq.c.path.label('external_subtitles'),
+                      external_subtitles.label('external_subtitles'),
                       blacklisted_subtitles.c.subs_id.label('blacklisted')) \
             .select_from(TableHistory) \
             .join(TableShows, onclause=TableHistory.sonarrSeriesId == TableShows.sonarrSeriesId) \
             .join(TableEpisodes, onclause=TableHistory.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId) \
-            .join(external_subtitles_sq,
-                  onclause=TableHistory.sonarrEpisodeId == external_subtitles_sq.c.sonarrEpisodeId, isouter=True) \
             .join(blacklisted_subtitles, onclause=TableHistory.subs_id == blacklisted_subtitles.c.subs_id,
                   isouter=True) \
             .where(reduce(operator.and_, query_conditions)) \
             .order_by(TableHistory.timestamp.desc())
         if length > 0:
             stmt = stmt.limit(length).offset(start)
-        episode_history = [{
-            'id': x.id,
-            'seriesTitle': x.seriesTitle,
-            'monitored': x.monitored,
-            'episode_number': x.episode_number,
-            'episodeTitle': x.episodeTitle,
-            'timestamp': x.timestamp,
-            'subs_id': x.subs_id,
-            'description': x.description,
-            'sonarrSeriesId': x.sonarrSeriesId,
-            'path': x.path,
-            'language': x.language,
-            'profileId': x.profileId,
-            'score': x.score,
-            'score_out_of': x.score_out_of,
-            'tags': x.tags,
-            'action': x.action,
-            'video_path': x.video_path,
-            'subtitles_path': x.subtitles_path,
-            'sonarrEpisodeId': x.sonarrEpisodeId,
-            'provider': x.provider,
-            'matches': x.matched,
-            'dont_matches': x.not_matched,
-            'external_subtitles': x.external_subtitles,
-            'blacklisted': bool(x.blacklisted),
-        } for x in database.execute(stmt).all()]
+        episode_rows = database.execute(stmt).all()
 
-        upgradable_episodes_not_perfect = get_upgradable_episode_subtitles(history_id_list=[x['id'] for x in
-                                                                                            episode_history])
+        upgradable_episodes_not_perfect = get_upgradable_episode_subtitles(history_id_list=[x.id for x in
+                                                                                            episode_rows])
 
-        for item in episode_history:
-            # is this language still desired or should we simply skip this subtitles from upgrade logic?
-            still_desired = _language_still_desired(item['language'], item['profileId'])
+        formatter = load_formatter()
+        desired_languages = load_history_languages(
+            ((x.id, x.language, x.profileId) for x in episode_rows), upgradable_episodes_not_perfect)
 
-            item.update(postprocess(item))
+        episode_history: list[HistoryResponse] = []
+        for x in episode_rows:
+            record: HistoryRow = {
+                'id': x.id,
+                'seriesTitle': x.seriesTitle,
+                'monitored': x.monitored,
+                'episode_number': x.episode_number,
+                'episodeTitle': x.episodeTitle,
+                'timestamp': x.timestamp,
+                'subs_id': x.subs_id,
+                'description': x.description,
+                'sonarrSeriesId': x.sonarrSeriesId,
+                'path': x.path,
+                'language': x.language,
+                'profileId': x.profileId,
+                'score': x.score,
+                'score_out_of': x.score_out_of,
+                'tags': x.tags,
+                'action': x.action,
+                'video_path': x.video_path,
+                'subtitles_path': x.subtitles_path,
+                'sonarrEpisodeId': x.sonarrEpisodeId,
+                'provider': x.provider,
+                'matched': x.matched,
+                'not_matched': x.not_matched,
+                'external_subtitles': x.external_subtitles,
+                'blacklisted': bool(x.blacklisted),
+            }
+            item = formatter.episode_history(
+                record, can_upgrade=x.id in upgradable_episodes_not_perfect
+                and (x.language, x.profileId) in desired_languages)
 
-            # Mark upgradable and get original_id
-            item.update({'original_id': upgradable_episodes_not_perfect.get(item['id'])})
-            item.update({'upgradable': item['id'] in upgradable_episodes_not_perfect.keys()})
-
-            # Mark not upgradable if video/subtitles file doesn't exist anymore or if language isn't desired anymore
-            if item['upgradable']:
-                if (item['subtitles_path'] != item['external_subtitles'] or item['video_path'] != item['path'] or
-                        not still_desired):
-                    item.update({"upgradable": False})
-
-            del item['path']
-            del item['video_path']
-            del item['external_subtitles']
-            del item['profileId']
-
-            if item['score']:
-                item['score'] = f"{round((int(item['score']) * 100 / item['score_out_of']), 2)}%"
-
-            # Make timestamp pretty
-            if item['timestamp']:
-                item["parsed_timestamp"] = item['timestamp'].strftime('%x %X')
-                item['timestamp'] = pretty.date(item["timestamp"])
-
-            # Parse matches and dont_matches
-            if item['matches']:
-                item.update({'matches': ast.literal_eval(item['matches'])})
-            else:
-                item.update({'matches': []})
-
-            if item['dont_matches']:
-                item.update({'dont_matches': ast.literal_eval(item['dont_matches'])})
-            else:
-                item.update({'dont_matches': []})
+            episode_history.append(item)
 
         count = database.execute(
             select(func.count())
@@ -189,4 +163,4 @@ class EpisodesHistory(Resource):
             .where(TableEpisodes.title.is_not(None))) \
             .scalar()
 
-        return marshal({'data': episode_history, 'total': count}, self.get_response_model)
+        return {'data': episode_history, 'total': count}

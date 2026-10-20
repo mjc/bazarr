@@ -8,16 +8,16 @@ import subliminal
 
 from subzero.language import Language
 from subliminal_patch.core import save_subtitles
-from subliminal_patch.core_persistent import list_all_subtitles, download_subtitles
+from subliminal_patch.core_persistent import list_all_subtitles
 from subliminal_patch.score import compute_score, DEFAULT_SCORES
 
 from languages.get_languages import alpha3_from_alpha2, alpha2_from_alpha3
 from app.config import settings, get_array_from
-from constants import HI_EXCLUDED
+from app.language_profiles import Profile
 from utilities.helper import get_target_folder, force_unicode
 from utilities.path_mappings import path_mappings
-from app.database import (database, get_profiles_list, select, TableEpisodes, TableShows, get_audio_profile_languages,
-                          get_profile_id, TableMovies)
+from app.database import (database, get_profile, select, TableEpisodes, TableShows, get_audio_profile_languages,
+                          TableMovies)
 from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications, send_notifications_movie
 from sonarr.history import history_log
@@ -45,17 +45,25 @@ def _build_release_info(subtitle):
 
 
 from .language_utils import format_episode_part, resolve_audio_language
+from .content import validate_subtitle
+
+
+def manual_search(path, profile_id: int | None, providers, sceneName, title, media_type):
+    profile = get_profile(profile_id)
+    if profile is None:
+        return 'Language profile not found or invalid'
+    return _manual_search(path, profile.profile_id, providers, sceneName, title, media_type, profile)
 
 
 @update_pools
-def manual_search(path, profile_id, providers, sceneName, title, media_type):
+def _manual_search(path, profile_id: int, providers, sceneName, title, media_type, profile: Profile):
     logging.debug(f'BAZARR Manually searching subtitles for this file: {path}')
 
     final_subtitles = []
 
     pool = _get_pool(media_type, profile_id)
 
-    language_set, original_format, hi_excluded_keys = _get_language_obj(profile_id=profile_id)
+    language_set, original_format, hi_excluded_keys = _get_language_obj(profile)
     also_forced = any([x.forced for x in language_set])
     forced_required = all([x.forced for x in language_set])
     normal = not also_forced and not forced_required and all([not x.hi for x in language_set])
@@ -162,9 +170,18 @@ def manual_search(path, profile_id, providers, sceneName, title, media_type):
     return final_subtitles
 
 
-@update_pools
 def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provider, sceneName, title, media_type,
-                             use_original_format, profile_id, job_id=None):
+                             use_original_format, profile_id: int | None, job_id=None):
+    profile = get_profile(profile_id)
+    if profile is None:
+        return 'Language profile not found or invalid'
+    return _manual_download_subtitle(path, audio_language, hi, forced, subtitle, provider, sceneName, title,
+                                     media_type, use_original_format, profile.profile_id, job_id, profile)
+
+
+@update_pools
+def _manual_download_subtitle(path, audio_language, hi, forced, subtitle, provider, sceneName, title, media_type,
+                              use_original_format, profile_id: int, job_id, profile: Profile):
     logging.debug(f'BAZARR Manually downloading Subtitles for this file: {path}')
 
     if settings.general.utf8_encode:
@@ -179,11 +196,10 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
 
     # check if trying to download HI for an excluded language
     if hi == 'True' and subtitle.hearing_impaired:
-        profile = get_profiles_list(profile_id=profile_id)
         lang_alpha2 = alpha2_from_alpha3(subtitle.language.alpha3)
-        for item in profile['items']:
-            if item['language'] == lang_alpha2 and item['forced'] == ('True' if subtitle.language.forced else 'False'):
-                if item['hi'] == HI_EXCLUDED:
+        for item in profile.items:
+            if item.language == lang_alpha2 and item.forced == bool(subtitle.language.forced):
+                if item.hi == 'excluded':
                     logging.error(f"BAZARR Cannot download hearing-impaired subtitle for {lang_alpha2}: this language is set to exclude HI subtitles")
                     return 'Cannot download a hearing-impaired subtitle: this language is set to exclude HI subtitles.'
                 break
@@ -204,7 +220,9 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
     if video:
         try:
             if provider:
-                download_subtitles([subtitle], _get_pool(media_type, profile_id))
+                if not _get_pool(media_type, profile_id).download_subtitle(subtitle):
+                    logging.error('BAZARR Error downloading Subtitles for this file %s', path)
+                    return 'Error downloading Subtitles'
                 logging.debug(f'BAZARR Subtitles file downloaded for this file: {path}')
             else:
                 logging.info("BAZARR All providers are throttled")
@@ -213,7 +231,7 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
             logging.exception(f'BAZARR Error downloading Subtitles for this file {path}')
             return 'Error downloading Subtitles'
         else:
-            if not subtitle.is_valid():
+            if not validate_subtitle(subtitle):
                 logging.error(f"BAZARR Downloaded subtitles isn't valid for this file: {path}")
                 return "Downloaded subtitles isn't valid. Check log."
             try:
@@ -267,7 +285,8 @@ def episode_manually_download_specific_subtitle(sonarr_series_id, sonarr_episode
             TableEpisodes.season,
             TableEpisodes.episode,
             TableEpisodes.title.label('episodeTitle'),
-            TableShows.title)
+            TableShows.title,
+            TableShows.profileId)
         .select_from(TableEpisodes)
         .join(TableShows)
         .where(TableEpisodes.sonarrEpisodeId == sonarr_episode_id)) \
@@ -290,7 +309,7 @@ def episode_manually_download_specific_subtitle(sonarr_series_id, sonarr_episode
     try:
         result = manual_download_subtitle(episodePath, audio_language, hi, forced, subtitle, selected_provider,
                                           sceneName, title, 'series', use_original_format,
-                                          profile_id=get_profile_id(episode_id=sonarr_episode_id), job_id=job_id)
+                                          profile_id=episodeInfo.profileId, job_id=job_id)
     except OSError:
         return 'Unable to save subtitles file', 500
     else:
@@ -318,7 +337,8 @@ def movie_manually_download_specific_subtitle(radarr_id, hi, forced, use_origina
                TableMovies.year,
                TableMovies.path,
                TableMovies.sceneName,
-               TableMovies.audio_language)
+               TableMovies.audio_language,
+               TableMovies.profileId)
         .where(TableMovies.radarrId == radarr_id)) \
         .first()
 
@@ -336,7 +356,7 @@ def movie_manually_download_specific_subtitle(radarr_id, hi, forced, use_origina
     try:
         result = manual_download_subtitle(moviePath, audio_language, hi, forced, subtitle, selected_provider,
                                           sceneName, title, 'movie', use_original_format,
-                                          profile_id=get_profile_id(movie_id=radarr_id), job_id=job_id)
+                                          profile_id=movieInfo.profileId, job_id=job_id)
     except OSError:
         return 'Unable to save subtitles file', 500
     else:
@@ -353,52 +373,17 @@ def movie_manually_download_specific_subtitle(radarr_id, hi, forced, use_origina
                                                                f"({movieInfo.year})")
 
 
-def _get_language_obj(profile_id):
-    language_set = set()
-    hi_excluded_keys = set()
-
-    try:
-        normalized_profile_id = int(profile_id)
-    except (TypeError, ValueError):
-        return language_set, False, hi_excluded_keys
-
-    profile = get_profiles_list(profile_id=normalized_profile_id)
-    if not isinstance(profile, dict):
-        return language_set, False, hi_excluded_keys
-
-    language_items = profile.get('items')
-    if not isinstance(language_items, list):
-        language_items = []
-    original_format = profile.get('originalFormat', False)
-
-    for language in language_items:
-        if not isinstance(language, dict):
+def _get_language_obj(profile: Profile) -> tuple[set[Language], bool, set[tuple[str, bool]]]:
+    languages: set[Language] = set()
+    excluded: set[tuple[str, bool]] = set()
+    for item in profile.items:
+        alpha3 = alpha3_from_alpha2(item.language)
+        if alpha3 is None:
             continue
-
-        forced = language.get('forced')
-        hi = language.get('hi')
-        language_code = language.get('language')
-        if not isinstance(language_code, str) or not language_code.strip():
-            continue
-
-        lang = alpha3_from_alpha2(language_code)
-        if not lang:
-            continue
-
-        try:
-            lang_obj = _get_lang_obj(lang)
-        except (AttributeError, TypeError, ValueError):
-            continue
-
-        forced = forced is True or forced == "True"
-        if forced:
-            lang_obj = Language.rebuild(lang_obj, forced=True)
-
-        if hi is True or hi == "True":
-            lang_obj = Language.rebuild(lang_obj, hi=True)
-        elif hi == HI_EXCLUDED:
-            hi_excluded_keys.add((lang, forced))
-
-        language_set.add(lang_obj)
-
-    return language_set, original_format, hi_excluded_keys
+        language = _get_lang_obj(alpha3)
+        if item.forced or item.hi == 'required':
+            language = Language.rebuild(language, forced=item.forced, hi=item.hi == 'required')
+        if item.hi == 'excluded':
+            excluded.add((alpha3, item.forced))
+        languages.add(language)
+    return languages, profile.original_format, excluded

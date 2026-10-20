@@ -1,3 +1,4 @@
+from tests.helpers.profile_records import profile_record
 # coding=utf-8
 
 from unittest import mock
@@ -27,8 +28,8 @@ def _hi_modes_searched(items, languages):
         return {}
 
     with mock.patch('subtitles.download.settings', settings), \
-         mock.patch('subtitles.download.get_profiles_list',
-                    return_value={'originalFormat': False, 'items': items}), \
+         mock.patch('subtitles.download.get_profile',
+                    return_value=profile_record({'originalFormat': False, 'items': items})), \
          mock.patch('subtitles.download._get_pool') as pool, \
          mock.patch('subtitles.download._get_language_obj', return_value=languages), \
          mock.patch('subtitles.download._set_forced_providers'), \

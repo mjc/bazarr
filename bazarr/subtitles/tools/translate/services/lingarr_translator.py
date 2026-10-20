@@ -1,209 +1,125 @@
-# coding=utf-8
-
 import logging
 import os
+from collections.abc import Iterable
+from typing_extensions import TypedDict
+
 import pysubs2
 import requests
-
+from deep_translator.exceptions import RequestError, TooManyRequests
 from retry.api import retry
-from deep_translator.exceptions import TooManyRequests, RequestError
 
-from app.config import settings
 from app.jobs_queue import jobs_queue
-from languages.get_languages import language_from_alpha2, language_from_alpha3
-from radarr.history import history_log_movie
-from sonarr.history import history_log
-
-from ..core.translator_utils import add_translator_info, create_process_result, get_title
+from utilities.json_types import JsonValue
+from ..core.translation_request import EpisodeMedia, LingarrConfig, TranslationRequest
+from ..core.translator_utils import get_title
 
 logger = logging.getLogger(__name__)
+_LANGUAGE_CODES = {'zh': 'zh-CN', 'zt': 'zh-TW', 'pb': 'pt-BR'}
+
+
+class TranslationLine(TypedDict, closed=True):
+    position: int
+    line: str
+
+
+class TranslationPayload(TypedDict, closed=True):
+    arrMediaId: int
+    title: str
+    sourceLanguage: str
+    targetLanguage: str
+    mediaType: str
+    lines: list[TranslationLine]
+    sourceSubtitlePath: str
+    translatedSubtitlePath: str
+
+
+def parse_translation_batch(payload: JsonValue) -> dict[int, str] | None:
+    if not isinstance(payload, list):
+        return None
+    translations: dict[int, str] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            return None
+        position = item.get('position')
+        text = item.get('line')
+        if not isinstance(position, int) or isinstance(position, bool) or not isinstance(text, str):
+            return None
+        translations[position] = text
+    return translations
 
 
 class LingarrTranslatorService:
-    def __init__(self, source_srt_file, dest_srt_file, lang_obj, to_lang, from_lang, media_type,
-                 video_path, orig_to_lang, forced, hi, sonarr_series_id, sonarr_episode_id,
-                 radarr_id):
-        self.source_srt_file = source_srt_file
-        self.dest_srt_file = dest_srt_file
-        self.lang_obj = lang_obj
-        self.to_lang = to_lang
-        self.from_lang = from_lang
-        self.media_type = media_type
-        self.video_path = video_path
-        self.orig_to_lang = orig_to_lang
-        self.forced = forced
-        self.hi = hi
-        self.sonarr_series_id = sonarr_series_id
-        self.sonarr_episode_id = sonarr_episode_id
-        self.radarr_id = radarr_id
-        self.language_code_convert_dict = {
-            'zh': 'zh-CN',
-            'zt': 'zh-TW',
-            'pb': 'pt-BR',
-        }
+    def __init__(self, request: TranslationRequest, config: LingarrConfig) -> None:
+        self.request = request
+        self.config = config
 
-    def translate(self, job_id=None):
+    def translate(self, job_id: int | None = None) -> str:
         try:
-            jobs_queue.update_job_progress(job_id=job_id, progress_max=1, progress_message=self.source_srt_file)
-
-            subs = pysubs2.load(self.source_srt_file, encoding='utf-8')
-            lines_list = [x.plaintext for x in subs]
-            lines_list_len = len(lines_list)
-
-            if lines_list_len == 0:
-                logger.debug(f'No lines to translate in subtitle file {self.source_srt_file}')
-                return self.dest_srt_file
-
-            logger.debug(f'Starting translation for {self.source_srt_file}')
-            translated_lines = self._translate_content(lines_list, job_id=job_id)
-
-            if translated_lines is None:
-                logger.error(f'Translation failed for {self.source_srt_file}')
-                jobs_queue.update_job_progress(job_id=job_id,
-                                               progress_message=f'Translation failed for {self.source_srt_file}')
-                raise RuntimeError(f'Translation failed for {self.source_srt_file}')
-
-            logger.debug(f'BAZARR saving Lingarr translated subtitles to {self.dest_srt_file}')
-            translation_map = {}
-            for item in translated_lines:
-                if isinstance(item, dict) and 'position' in item and 'line' in item:
-                    translation_map[item['position']] = item['line']
-
-            for i, line in enumerate(subs):
-                if i in translation_map and translation_map[i]:
-                    line.text = translation_map[i]
-
-            try:
-                subs.save(self.dest_srt_file)
-                add_translator_info(self.dest_srt_file, f"# Subtitles translated with Lingarr # ")
-            except OSError:
-                logger.error(f'BAZARR is unable to save translated subtitles to {self.dest_srt_file}')
-                jobs_queue.update_job_progress(job_id=job_id,
-                                               progress_message=f'Translation failed: Unable to save translated '
-                                                                f'subtitles to {self.dest_srt_file}')
-                raise OSError
-
-            message = (f"{language_from_alpha2(self.from_lang)} subtitles translated to "
-                       f"{language_from_alpha3(self.to_lang)} using Lingarr.")
-            result = create_process_result(message, self.video_path, self.orig_to_lang, self.forced, self.hi,
-                                           self.dest_srt_file, self.media_type)
-
-            if self.media_type == 'episode':
-                history_log(action=6,
-                            sonarr_series_id=self.sonarr_series_id,
-                            sonarr_episode_id=self.sonarr_episode_id,
-                            result=result)
-            else:
-                history_log_movie(action=6,
-                                  radarr_id=self.radarr_id,
-                                  result=result)
-
+            jobs_queue.update_job_progress(job_id=job_id, progress_max=1,
+                                           progress_message=self.request.source_srt_file)
+            subs = pysubs2.load(self.request.source_srt_file, encoding='utf-8')
+            if subs:
+                translations = self._translate_content(event.plaintext for event in subs)
+                for position, event in enumerate(subs):
+                    translated = translations.get(position)
+                    if translated:
+                        event.text = translated
+            subs.save(self.request.dest_srt_file)
             jobs_queue.update_job_progress(job_id=job_id, progress_value='max')
-
-            return self.dest_srt_file
-
-        except Exception as e:
-            logger.error(f'BAZARR encountered an error during Lingarr translation for {self.source_srt_file}: {str(e)}')
-            jobs_queue.update_job_progress(job_id=job_id, progress_message=f'Lingarr translation failed: {str(e)}')
+            return self.request.dest_srt_file
+        except (OSError, RequestError, TooManyRequests, requests.exceptions.RequestException) as error:
+            logger.error('Lingarr translation failed for %s: %s', self.request.source_srt_file, error)
+            jobs_queue.update_job_progress(job_id=job_id, progress_message=f'Lingarr translation failed: {error}')
             raise
+
+    def _build_payload(self, lines: Iterable[str]) -> TranslationPayload:
+        media = self.request.media
+        if isinstance(media, EpisodeMedia):
+            title = get_title('episode', sonarr_series_id=media.series_id, sonarr_episode_id=media.episode_id)
+            api_type, media_id = 'Episode', media.series_id
+        else:
+            title = get_title('movie', radarr_id=media.movie_id)
+            api_type, media_id = 'Movie', media.movie_id
+        basename = os.path.basename(self.request.source_srt_file) or 'subtitle.srt'
+        display_title = f'{title} · {basename}' if title.strip() else basename
+        payload: TranslationPayload = {
+            'arrMediaId': media_id,
+            'title': display_title,
+            'sourceLanguage': _LANGUAGE_CODES.get(self.request.from_lang, self.request.from_lang),
+            'targetLanguage': _LANGUAGE_CODES.get(self.request.target.language.code2, self.request.target.language.code2),
+            'mediaType': api_type,
+            'lines': [{'position': position, 'line': text} for position, text in enumerate(lines) if text.strip()],
+            'sourceSubtitlePath': self.request.source_srt_file,
+            'translatedSubtitlePath': self.request.dest_srt_file,
+        }
+        return payload
+
+    def _translate_content(self, lines: Iterable[str]) -> dict[int, str]:
+        payload = self._build_payload(lines)
+        response = self._post_content(payload)
+        if response.status_code != 200:
+            raise RequestError(f'Lingarr API error: {response.status_code}')
+        try:
+            decoded: JsonValue = response.json()
+        except ValueError as error:
+            raise RequestError('Lingarr returned invalid JSON') from error
+        translations = parse_translation_batch(decoded)
+        if translations is None:
+            raise RequestError('Lingarr returned invalid translation data')
+        return translations
 
     @retry(exceptions=(TooManyRequests, RequestError, requests.exceptions.RequestException), tries=3, delay=1,
            backoff=2, jitter=(0, 1))
-    def _translate_content(self, lines_list, job_id):
-        try:
-            source_lang = self.language_code_convert_dict.get(self.from_lang, self.from_lang)
-            target_lang = self.language_code_convert_dict.get(self.orig_to_lang, self.orig_to_lang)
-
-            lines_payload = []
-            for i, line in enumerate(lines_list):
-                if not line.strip():
-                    continue
-                lines_payload.append({
-                    "position": i,
-                    "line": line
-                })
-
-            title = get_title(
-                media_type=self.media_type,
-                radarr_id=self.radarr_id,
-                sonarr_series_id=self.sonarr_series_id,
-                sonarr_episode_id=self.sonarr_episode_id
-            )
-            # Lingarr content API has no subtitle path field; put basename in title
-            # so the Translations UI is not blank when title lookup fails or is empty.
-            src_base = os.path.basename(self.source_srt_file or '') or 'subtitle.srt'
-            display_title = f'{title} · {src_base}' if (title or '').strip() else src_base
-
-            if self.media_type == 'episode':
-                api_media_type = "Episode"
-                arr_media_id = self.sonarr_series_id or 0
-            else:
-                api_media_type = "Movie"
-                arr_media_id = self.radarr_id or 0
-
-            payload = {
-                "arrMediaId": arr_media_id,
-                "title": display_title,
-                "sourceLanguage": source_lang,
-                "targetLanguage": target_lang,
-                "mediaType": api_media_type,
-                "lines": lines_payload,
-                # Optional; ignored by older Lingarr, used when content API accepts paths
-                "sourceSubtitlePath": self.source_srt_file,
-                "translatedSubtitlePath": self.dest_srt_file,
-            }
-
-            logger.debug(f'BAZARR is sending {len(lines_payload)} lines to Lingarr for {self.source_srt_file} with full '
-                         f'media context')
-
-            headers = {"Content-Type": "application/json"}
-            if settings.translator.lingarr_token:
-                headers["X-Api-Key"] = settings.translator.lingarr_token
-
-            response = requests.post(
-                f"{settings.translator.lingarr_url}/api/translate/content",
-                json=payload,
-                headers=headers,
-                timeout=1920  # increase timeout to 32 minutes to give time to Lingarr timeout (30 minutes) to occur
-                # and get reported to Bazarr instead of silently failing.
-            )
-
-            if response.status_code == 200:
-                translated_batch = response.json()
-                # Validate response
-                if isinstance(translated_batch, list):
-                    for item in translated_batch:
-                        if not isinstance(item, dict) or 'position' not in item or 'line' not in item:
-                            logger.error(f'Invalid response format from Lingarr API for {self.source_srt_file}: {item}')
-                            return None
-                    return translated_batch
-                else:
-                    logger.error(f'Unexpected response format from Lingarr API: {translated_batch}')
-                    return None
-            elif response.status_code == 401:
-                raise RequestError("Authentication failed: Invalid or missing API key")
-            elif response.status_code == 429:
-                raise TooManyRequests("Rate limit exceeded")
-            elif response.status_code >= 500:
-                raise RequestError(f"Server error: {response.status_code}")
-            else:
-                logger.debug(f'Lingarr API error for {self.source_srt_file}: {response.status_code} - {response.text}')
-                return None
-
-        except requests.exceptions.Timeout:
-            logger.error(f'Lingarr API request timed out for {self.source_srt_file}')
-            raise RequestError("Request timed out")
-        except requests.exceptions.ConnectionError:
-            logger.error(f'Lingarr API connection error for {self.source_srt_file}')
-            raise RequestError("Connection error")
-        except requests.exceptions.RequestException as e:
-            logger.error(f'Lingarr API request failed for {self.source_srt_file}: {str(e)}')
-            raise
-        except (TooManyRequests, RequestError) as e:
-            logger.error(f'Lingarr API error after retries for {self.source_srt_file}: {str(e)}')
-            jobs_queue.update_job_progress(job_id=job_id, progress_message=f'Lingarr API error: {str(e)}')
-            raise
-        except Exception as e:
-            logger.error(f'Unexpected error in Lingarr translation for {self.source_srt_file}: {str(e)}')
-            jobs_queue.update_job_progress(job_id=job_id, progress_message=f'Translation error: {str(e)}')
-            raise
+    def _post_content(self, payload: TranslationPayload) -> requests.Response:
+        headers = {'Content-Type': 'application/json'}
+        if self.config.token:
+            headers['X-Api-Key'] = self.config.token
+        response = requests.post(f'{self.config.url}/api/translate/content', json=payload, headers=headers,
+                                 timeout=1920)
+        if response.status_code == 401:
+            raise RequestError('Authentication failed: Invalid or missing API key')
+        if response.status_code == 429:
+            raise TooManyRequests('Rate limit exceeded')
+        if response.status_code >= 500:
+            raise RequestError(f'Server error: {response.status_code}')
+        return response

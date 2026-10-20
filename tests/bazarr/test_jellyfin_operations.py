@@ -278,3 +278,90 @@ def test_refresh_falls_back_to_library_update_on_error(fake, settings):
         jellyfin_refresh_item(imdb_id="tt123", is_movie=False)
 
     assert fake.refresh_item_modes == [("lib-shows", "Default", "Default")]
+
+
+@pytest.fixture
+def http_client(settings):
+    from bazarr.jellyfin.client import JellyfinClient
+    client = JellyfinClient('http://jellyfin:8096', 'test-key')
+    settings.jellyfin.movie_library_ids = ['lib-movies']
+    settings.jellyfin.series_library_ids = ['lib-shows']
+    settings.jellyfin.get.return_value = 'immediate'
+    with patch('bazarr.jellyfin.operations.get_jellyfin_client', return_value=client):
+        yield client
+
+
+@pytest.mark.parametrize('first', [None, {}, {'Id': 42}, {'Id': 'broken', 'Name': []},
+                                  {'Id': 'broken', 'ProviderIds': {'Imdb': []}},
+                                  {'Id': 'unrelated', 'ProviderIds': None},
+                                  {'Id': 'unrelated', 'Name': None, 'ProviderIds': {'Imdb': None}},
+                                  {'Id': 'title-only', 'Name': 'Matching movie', 'ProviderIds': None}])
+def test_bad_or_nullable_sibling_does_not_hide_later_id_match(http_client, first):
+    match = make_movie(id='match', imdb_id='tt123')
+    with patch.object(http_client, 'get') as request, patch.object(http_client, 'refresh_item') as refresh:
+        request.return_value.json.return_value = {'Items': [first, match]}
+        jellyfin_refresh_item(imdb_id='tt123', title='Matching movie', year=2020)
+    refresh.assert_called_once_with('match')
+    request.assert_called_once_with('/Items', params={
+        'parentId': 'lib-movies', 'recursive': 'true', 'includeItemTypes': 'Movie',
+        'fields': 'Path,ProviderIds', 'years': '2020'})
+
+
+@pytest.mark.parametrize('immediate', [True, False])
+@pytest.mark.parametrize('movie', [True, False])
+def test_null_path_refreshes_known_item(http_client, settings, immediate, movie):
+    settings.jellyfin.get.return_value = 'immediate' if immediate else 'async'
+    item = {'Id': 'match', 'Path': None, 'Name': None, 'ProviderIds': {'Imdb': 'tt123'}}
+    with patch.object(http_client, 'get') as request, patch.object(http_client, 'refresh_item') as refresh:
+        request.return_value.json.side_effect = [{'Items': [item]}, {'Items': [make_episode(id='episode')]}]
+        jellyfin_refresh_item(imdb_id='tt123', is_movie=movie, season=1, episode=1)
+    refresh.assert_called_once_with('episode' if not movie and immediate else 'match')
+
+
+@pytest.mark.parametrize('bad_episode', [None, {}, {'Id': None, 'IndexNumber': 1},
+                                        {'Id': 'boolean', 'IndexNumber': True},
+                                        {'Id': 'unknown', 'IndexNumber': None}])
+def test_malformed_episode_sibling_does_not_hide_valid_episode(http_client, bad_episode):
+    with patch.object(http_client, 'get') as request, patch.object(http_client, 'refresh_item') as refresh:
+        request.return_value.json.side_effect = [
+            {'Items': [make_series(id='series', imdb_id='tt123')]},
+            {'Items': [bad_episode, make_episode(id='episode', index=1)]}]
+        jellyfin_refresh_item(imdb_id='tt123', is_movie=False, season=1, episode=1)
+    refresh.assert_called_once_with('episode')
+
+
+def test_library_listing_skips_bad_siblings_at_client_boundary(http_client):
+    movie_library = {'Name': 'Movies', 'ItemId': 'movies', 'CollectionType': 'movies'}
+    with patch.object(http_client, 'get') as request:
+        request.return_value.json.return_value = [None, {'Name': None, 'CollectionType': 'movies'},
+                                                 {'Name': 'Broken', 'CollectionType': []}, movie_library]
+        assert jellyfin_get_libraries() == [{'id': 'movies', 'name': 'Movies', 'type': 'movies'}]
+
+
+def test_invalid_library_envelope_does_not_stop_next_library(http_client, settings):
+    settings.jellyfin.movie_library_ids = ['first', 'second']
+    with patch.object(http_client, 'get') as request, patch.object(http_client, 'refresh_item') as refresh:
+        request.return_value.json.side_effect = [None, {'Items': [make_movie(id='match', imdb_id='tt123')]}]
+        jellyfin_refresh_item(imdb_id='tt123')
+    refresh.assert_called_once_with('match')
+    assert [call.kwargs['params']['parentId'] for call in request.call_args_list] == ['first', 'second']
+
+
+def test_title_fallback_keeps_configured_library_precedence(http_client, settings):
+    settings.jellyfin.movie_library_ids = ['first', 'second']
+    with patch.object(http_client, 'get') as request, patch.object(http_client, 'refresh_item') as refresh:
+        request.return_value.json.side_effect = [
+            {'Items': [{'Id': 'title', 'Name': 'A MOVIE', 'ProviderIds': None}]},
+            {'Items': [make_movie(id='id-match', imdb_id='tt123')]}]
+        jellyfin_refresh_item(imdb_id='tt123', title='A movie')
+    refresh.assert_called_once_with('title')
+    assert request.call_count == 1
+
+
+def test_scalar_configured_library_is_normalized_once(http_client, settings):
+    settings.jellyfin.movie_library_ids = 'movie-library'
+    with patch.object(http_client, 'get') as request, patch.object(http_client, 'refresh_item') as refresh:
+        request.return_value.json.return_value = {'Items': [make_movie(id='match', imdb_id='tt123')]}
+        jellyfin_refresh_item(imdb_id='tt123')
+    refresh.assert_called_once_with('match')
+    assert request.call_args.kwargs['params']['parentId'] == 'movie-library'

@@ -1,12 +1,12 @@
 from bazarr.app import notifier
+from types import SimpleNamespace
 
 
 class DummyRecord:
     def __init__(self, payload):
-        self._payload = payload
-
-    def to_dict(self):
-        return self._payload
+        self.__table__ = SimpleNamespace(columns=[SimpleNamespace(name=key) for key in payload])
+        for key, value in payload.items():
+            setattr(self, key, value)
 
 
 def test_build_media_variables_empty_on_missing_inputs():

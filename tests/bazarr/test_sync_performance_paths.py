@@ -4,6 +4,17 @@ import datetime
 from types import SimpleNamespace
 
 import pytest
+from tests.helpers.arr_fixtures import (
+    episode_record, movie_payload, radarr_connection, series_payload, series_record, sonarr_connection, stub_arr_api,
+)
+
+
+@pytest.fixture(autouse=True)
+def configured_sonarr_connection(monkeypatch):
+    from sonarr.sync import series
+    monkeypatch.setattr(series, 'get_sonarr_connection', lambda *args, **kwargs: sonarr_connection())
+    from radarr.sync import movies
+    monkeypatch.setattr(movies, 'get_radarr_connection', lambda *args, **kwargs: radarr_connection())
 
 
 class _Result:
@@ -17,17 +28,11 @@ class _Result:
     def all(self):
         return self._all_value
 
+    def mappings(self):
+        return self
 
-class _Column:
-    def __init__(self, name):
-        self.name = name
-
-
-def _model(**values):
-    return SimpleNamespace(
-        __table__=SimpleNamespace(columns=[_Column(name) for name in values]),
-        **values,
-    )
+    def __iter__(self):
+        return iter(self._all_value)
 
 
 def test_update_one_series_fetches_and_inserts_for_standalone_call(monkeypatch):
@@ -52,10 +57,10 @@ def test_update_one_series_fetches_and_inserts_for_standalone_call(monkeypatch):
             sonarr=SimpleNamespace(apikey="sonarr-key"),
         ),
     )
-    monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(series_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(series_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
-    monkeypatch.setattr(series_sync, "get_series_from_sonarr_api", lambda **kwargs: [{"id": 123}])
+    stub_arr_api(monkeypatch, series_sync, "get_series_from_sonarr_api", lambda **kwargs: [series_payload()])
     monkeypatch.setattr(
         series_sync,
         "seriesParser",
@@ -93,21 +98,21 @@ def test_update_series_runs_one_explicit_episode_sync(monkeypatch):
         series_sync,
         "settings",
         SimpleNamespace(
-            general=SimpleNamespace(debug=False),
+            general=SimpleNamespace(debug=False, serie_default_enabled=False, parse_embedded_audio_track=False, serie_tag_enabled=False),
             sonarr=SimpleNamespace(apikey="sonarr-key", sync_only_monitored_series=False),
         ),
     )
-    monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda: None)
-    monkeypatch.setattr(series_sync, "get_series_from_sonarr_api", lambda **kwargs: [{"id": 123, "title": "Series"}])
-    monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda **kwargs: None)
+    stub_arr_api(monkeypatch, series_sync, "get_series_from_sonarr_api", lambda **kwargs: [series_payload()])
+    monkeypatch.setattr(series_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(series_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
         "update_one_series",
         lambda *args, **kwargs: update_calls.append((args, kwargs)),
     )
-    monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id: episode_sync_calls.append(series_id))
+    monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id, **kwargs: episode_sync_calls.append(series_id))
     monkeypatch.setattr(
         series_sync,
         "jobs_queue",
@@ -152,22 +157,22 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
         series_sync,
         "settings",
         SimpleNamespace(
-            general=SimpleNamespace(debug=False),
+            general=SimpleNamespace(debug=False, serie_default_enabled=False, parse_embedded_audio_track=False, serie_tag_enabled=False),
             sonarr=SimpleNamespace(
                 apikey="sonarr-key",
                 sync_only_monitored_series=False,
             ),
         ),
     )
-    monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda: None)
+    monkeypatch.setattr(series_sync, "check_sonarr_rootfolder", lambda **kwargs: None)
     # The API helper swallows ConnectionError/Timeout errors and returns None.
-    monkeypatch.setattr(
+    stub_arr_api(monkeypatch,
         series_sync,
         "get_series_from_sonarr_api",
         lambda **kwargs: None,
     )
-    monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(series_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(series_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
@@ -177,7 +182,7 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
     monkeypatch.setattr(
         series_sync,
         "sync_episodes",
-        lambda series_id: episode_sync_calls.append(series_id),
+        lambda series_id, **kwargs: episode_sync_calls.append(series_id),
     )
     monkeypatch.setattr(
         series_sync,
@@ -203,14 +208,14 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
 def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatch):
     from sonarr.sync import series as series_sync
 
-    existing_series = _model(sonarrSeriesId=123, path="/series/path")
+    existing_series = {"sonarrSeriesId": 123, "path": "/series/path"}
     execute_calls = []
     episode_sync_calls = []
 
     class _Database:
         def execute(self, statement):
             execute_calls.append(statement)
-            return _Result(first_value=(existing_series,))
+            return _Result(first_value=existing_series)
 
     monkeypatch.setattr(series_sync, "database", _Database())
     monkeypatch.setattr(
@@ -221,20 +226,20 @@ def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatc
             sonarr=SimpleNamespace(apikey="sonarr-key"),
         ),
     )
-    monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(series_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(series_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(series_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
         "seriesParser",
         lambda *args, **kwargs: {"sonarrSeriesId": 123, "path": "/series/path"},
     )
-    monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id: episode_sync_calls.append(series_id))
+    monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id, **kwargs: episode_sync_calls.append(series_id))
 
     series_sync.update_one_series(
         123,
         action="updated",
-        series_data=[{"id": 123}],
+        series_data=[series_record(series_payload())],
         sync_episodes_after_update=True,
     )
 
@@ -254,7 +259,7 @@ def test_episode_parser_uses_reported_size_before_filesystem_stat(monkeypatch):
     monkeypatch.setattr(parser, "audio_language_from_name", lambda name: name)
 
     parsed = parser.episodeParser(
-        {
+        episode_record({
             "hasFile": True,
             "seriesId": 123,
             "id": 456,
@@ -270,7 +275,7 @@ def test_episode_parser_uses_reported_size_before_filesystem_stat(monkeypatch):
                 "mediaInfo": {},
                 "quality": {"quality": {"name": "HDTV-1080p"}},
             },
-        },
+        }),
         parse_embedded_audio_track=False,
     )
 
@@ -283,8 +288,8 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     from radarr.sync import movies as movies_sync
 
     movie_rows = [
-        (_model(radarrId=1, title="Movie 1", path="/movies/one.mkv"),),
-        (_model(radarrId=2, title="Old Movie 2", path="/movies/two.mkv"),),
+        {"radarrId": 1, "title": "Movie 1", "path": "/movies/one.mkv", "movie_file_id": 101, "monitored": "True", "audio_language": None},
+        {"radarrId": 2, "title": "Old Movie 2", "path": "/movies/two.mkv", "movie_file_id": 102, "monitored": "True", "audio_language": None},
     ]
     updated_movies = []
 
@@ -302,9 +307,9 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
 
     def _movie_parser(movie, **kwargs):
         return {
-            "radarrId": movie["id"],
-            "title": movie["title"],
-            "path": movie["movieFile"]["path"],
+            "radarrId": movie.id,
+            "title": movie.title,
+            "path": movie.movieFile.path,
         }
 
     monkeypatch.setattr(movies_sync, "database", _Database())
@@ -312,16 +317,16 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
         movies_sync,
         "settings",
         SimpleNamespace(
-            general=SimpleNamespace(movie_default_enabled=False, debug=False),
+            general=SimpleNamespace(movie_default_enabled=False, debug=False, parse_embedded_audio_track=False),
             radarr=SimpleNamespace(apikey="radarr-key", sync_only_monitored_movies=False),
         ),
     )
-    monkeypatch.setattr(movies_sync, "check_radarr_rootfolder", lambda: None)
-    monkeypatch.setattr(movies_sync, "get_profile_list", lambda: [])
-    monkeypatch.setattr(movies_sync, "get_tags", lambda: {})
+    monkeypatch.setattr(movies_sync, "check_radarr_rootfolder", lambda **kwargs: None)
+    monkeypatch.setattr(movies_sync, "get_profile_list", lambda **kwargs: [])
+    monkeypatch.setattr(movies_sync, "get_tags", lambda **kwargs: [])
     monkeypatch.setattr(movies_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(movies_sync, "movieParser", _movie_parser)
-    monkeypatch.setattr(movies_sync, "update_movie", lambda movie: updated_movies.append(movie))
+    monkeypatch.setattr(movies_sync, "update_movie", lambda change, **kwargs: updated_movies.append(change.values) or "updated")
     monkeypatch.setattr(movies_sync, "event_stream", lambda **kwargs: None)
     monkeypatch.setattr(
         movies_sync,
@@ -333,24 +338,12 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
             get_job=lambda *args, **kwargs: _MockJob(),
         ),
     )
-    monkeypatch.setattr(
+    stub_arr_api(monkeypatch,
         movies_sync,
         "get_movies_from_radarr_api",
-        lambda apikey_radarr: [
-            {
-                "id": 1,
-                "title": "Movie 1",
-                "hasFile": True,
-                "monitored": True,
-                "movieFile": {"id": 101, "path": "/movies/one.mkv", "size": MINIMUM_VIDEO_SIZE + 1},
-            },
-            {
-                "id": 2,
-                "title": "New Movie 2",
-                "hasFile": True,
-                "monitored": True,
-                "movieFile": {"id": 102, "path": "/movies/two.mkv", "size": MINIMUM_VIDEO_SIZE + 1},
-            },
+        lambda apikey_radarr, **kwargs: [
+            movie_payload(1, 'Movie 1', '/movies/one.mkv', file_id=101, size=MINIMUM_VIDEO_SIZE + 1),
+            movie_payload(2, 'New Movie 2', '/movies/two.mkv', file_id=102, size=MINIMUM_VIDEO_SIZE + 1),
         ],
     )
 

@@ -3,13 +3,14 @@
 import os
 import sys
 import logging
+from typing import TypedDict
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 
 from app.database import (TableShows, TableEpisodes, TableMovies, database, select, get_subtitles,
                           is_indexed_subtitle_path)
 from utilities.path_mappings import path_mappings
-from utilities.video_analyzer import subtitles_sync_references
+from utilities.video_analyzer import SyncReferences, subtitles_sync_references
 from subtitles.tools.translate.main import translate_subtitles_file, extract_and_translate_embedded
 from subtitles.tools.translate.core.translator_utils import resolve_translation_source
 from subtitles.tools.mods import subtitles_apply_mods
@@ -27,6 +28,10 @@ from jellyfin.operations import jellyfin_refresh_item
 from ..utils import authenticate
 
 api_ns_subtitles = Namespace('Subtitles', description='Apply mods/tools on external subtitles')
+
+
+class SubtitlesResponse(TypedDict):
+    data: SyncReferences
 
 
 @api_ns_subtitles.route('subtitles')
@@ -68,18 +73,18 @@ class Subtitles(Resource):
     @api_ns_subtitles.response(200, 'Success')
     @api_ns_subtitles.response(401, 'Not Authenticated')
     @api_ns_subtitles.expect(get_request_parser)
-    def get(self):
+    def get(self) -> SubtitlesResponse:
         """Return available audio and embedded subtitles tracks with external subtitles. Used for manual subsync
         modal"""
         args = self.get_request_parser.parse_args()
-        subtitlesPath = args.get('subtitlesPath')
+        subtitlesPath: str = args['subtitlesPath']
         episodeId = args.get('sonarrEpisodeId', None)
         movieId = args.get('radarrMovieId', None)
 
         result = subtitles_sync_references(subtitles_path=subtitlesPath, sonarr_episode_id=episodeId,
                                            radarr_movie_id=movieId)
 
-        return marshal(result, self.get_response_model, envelope='data')
+        return {'data': result}
 
     patch_request_parser = reqparse.RequestParser()
     patch_request_parser.add_argument('action', type=str, required=True,
@@ -210,6 +215,10 @@ class Subtitles(Resource):
             except OSError:
                 return 'Unable to edit subtitles file. Check logs.', 409
         elif action == 'translate':
+            if not language:
+                return 'Target language is required for translation', 400
+            if media_type is None or media_type not in ('episode', 'movie'):
+                return 'Invalid media type for translation', 400
             dest_language = language
 
             subtitles = get_subtitles(sonarr_episode_id=id if media_type == "episode" else None,
@@ -239,7 +248,7 @@ class Subtitles(Resource):
                     return 'Image based embedded subtitles cannot be extracted', 415
                 except (EmbeddedSubtitlesExtractionError, OSError):
                     return 'Unable to take action on subtitles file. Check logs.', 409
-            else:
+            elif subtitles_path:
                 try:
                     translate_subtitles_file(video_path=video_path, source_srt_file=subtitles_path,
                                              from_lang=from_language, to_lang=dest_language, forced=forced, hi=hi,
@@ -252,6 +261,8 @@ class Subtitles(Resource):
 
                 except OSError:
                     return 'Unable to edit subtitles file. Check logs.', 409
+            else:
+                return 'Translation source is required', 400
         elif action == 'extract':
             if not subtitles_id:
                 return 'Subtitles ID is required for extraction', 400
@@ -261,7 +272,9 @@ class Subtitles(Resource):
                 return 'Image based embedded subtitles cannot be extracted', 415
             except (EmbeddedSubtitlesExtractionError, OSError):
                 return 'Unable to take action on subtitles file. Check logs.', 409
-        else:
+        elif subtitles_path:
+            if not isinstance(language, str) or not isinstance(action, str):
+                return 'Language and action are required for subtitle modifications', 400
             try:
                 if os.path.splitext(subtitles_path)[1] != '.srt':
                     logging.debug(f"BAZARR can't apply mods on unsupported subtitles file (not srt): {subtitles_path}")

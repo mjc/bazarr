@@ -11,6 +11,7 @@ import pytest
 
 import api.system.settings as settings_api
 from app.database import TableLanguagesProfiles, select
+from app import database as app_database
 
 
 def _item(item_id, language, **overrides):
@@ -65,6 +66,8 @@ def saved(memory_session, monkeypatch):
     """Route the endpoint to an in-memory database and record whether settings were written."""
     calls = {"save_settings": 0}
     monkeypatch.setattr(settings_api, "database", memory_session)
+    monkeypatch.setattr(app_database, "database", memory_session)
+    app_database.invalidate_profiles()
     monkeypatch.setattr(settings_api, "event_stream", lambda *args, **kwargs: None)
     monkeypatch.setattr(settings_api, "list_missing_subtitles", lambda *args, **kwargs: None)
     monkeypatch.setattr(settings_api, "list_missing_subtitles_movies", lambda *args, **kwargs: None)
@@ -72,7 +75,8 @@ def saved(memory_session, monkeypatch):
     def record_save(*args, **kwargs):
         calls["save_settings"] += 1
     monkeypatch.setattr(settings_api, "save_settings", record_save)
-    return memory_session, calls
+    yield memory_session, calls
+    app_database.invalidate_profiles()
 
 
 def _post_profiles(client, api_key, profiles, **extra_form):
@@ -128,3 +132,89 @@ def test_basic_profile_without_type_is_still_saved_as_basic(saved, api_client, a
     row = session.execute(select(TableLanguagesProfiles).where(TableLanguagesProfiles.profileId == 3)).scalar_one()
     assert row.profileType == "basic"
     assert json.loads(row.items) == [_item(1, "en")]
+
+
+@pytest.mark.parametrize('raw_items,raw_contains', [('invalid JSON', None), ('[null]', "['WEB']"),
+                                                     ('[]', 'invalid text list')])
+@pytest.mark.parametrize('profile_type', ['basic', 'enhanced'])
+def test_invalid_profile_roundtrip_preserves_raw_fields(saved, api_client, api_key, raw_items, raw_contains,
+                                                       profile_type):
+    session, calls = saved
+    session.add(TableLanguagesProfiles(profileId=1, name='Needs repair', items=raw_items,
+                                       mustContain=raw_contains, mustNotContain="['x265']",
+                                       profileType=profile_type))
+    session.add(TableLanguagesProfiles(profileId=2, name='Other profile', items='[]'))
+    session.commit()
+    app_database.invalidate_profiles()
+    listed = api_client.get('/api/system/languages/profiles', headers={'X-API-KEY': api_key})
+    profiles = listed.get_json()
+    assert profiles[0]['profileId'] == 1
+    assert profiles[0]['items'] == []
+    assert profiles[0]['profileSource'] == {'items': raw_items, 'mustContain': raw_contains,
+                                            'mustNotContain': "['x265']"}
+    if profile_type == 'enhanced':
+        profiles[0]['items'] = {'groups': profiles[0].pop('groups')}
+    profiles[1]['name'] = 'Changed name'
+    response = _post_profiles(api_client, api_key, profiles)
+    assert response.status_code == 204
+    row = session.execute(select(TableLanguagesProfiles).where(TableLanguagesProfiles.profileId == 1)).scalar_one()
+    assert row.items == raw_items
+    assert row.mustContain == raw_contains
+    assert row.mustNotContain == "['x265']"
+    other = session.execute(select(TableLanguagesProfiles).where(TableLanguagesProfiles.profileId == 2)).scalar_one()
+    assert other.name == 'Changed name'
+
+
+def test_stale_invalid_profile_roundtrip_is_rejected_before_settings_write(saved, api_client, api_key):
+    session, calls = saved
+    row = TableLanguagesProfiles(profileId=1, name='Needs repair', items='old broken data')
+    session.add(row)
+    session.commit()
+    app_database.invalidate_profiles()
+    profiles = app_database.list_profiles()
+    row.items = 'new broken data'
+    session.commit()
+    app_database.invalidate_profiles()
+    response = _post_profiles(api_client, api_key, profiles, **{'languages-enabled': ['en']})
+    assert response.status_code == 400
+    assert calls['save_settings'] == 0
+    assert row.items == 'new broken data'
+
+
+def test_invalid_profile_can_be_repaired_by_replacing_its_items(saved, api_client, api_key):
+    session, calls = saved
+    session.add(TableLanguagesProfiles(profileId=1, name='Needs repair', items='broken data'))
+    session.commit()
+    app_database.invalidate_profiles()
+    corrected = {'profileId': 1, 'name': 'Repaired', 'profileType': 'basic', 'cutoff': None,
+                 'items': [_item(1, 'en')], 'mustContain': [], 'mustNotContain': [], 'originalFormat': False}
+    response = _post_profiles(api_client, api_key, [corrected])
+    assert response.status_code == 204
+    assert app_database.get_profile(1).desired_languages == {'en'}
+
+
+def test_invalid_basic_profile_is_rejected_before_any_write(saved, api_client, api_key):
+    session, calls = saved
+    profile = {'profileId': 9, 'name': 'Invalid basic', 'items': [None]}
+    response = _post_profiles(api_client, api_key, [profile], **{'languages-enabled': ['en']})
+    assert response.status_code == 400
+    assert calls['save_settings'] == 0
+    assert session.execute(select(TableLanguagesProfiles)).all() == []
+
+
+@pytest.mark.parametrize('enhanced', [False, True])
+def test_saved_boolean_flags_have_the_frontend_string_wire_contract(saved, api_client, api_key, enhanced):
+    items = [{'id': 1, 'language': 'en', 'hi': True, 'forced': False, 'audio_only_include': True}]
+    payload = {'profileId': 9, 'name': 'Flags', 'cutoff': None, 'profileType': 'enhanced' if enhanced else 'basic',
+               'items': {'groups': [{'id': 1, 'operator': 'AND', 'items': items}]} if enhanced else items,
+               'mustContain': [], 'mustNotContain': [], 'originalFormat': None}
+    assert _post_profiles(api_client, api_key, [payload]).status_code == 204
+    listed = api_client.get('/api/system/languages/profiles', headers={'X-API-KEY': api_key}).get_json()[0]
+    assert listed['items'] == [{'id': 1, 'language': 'en', 'hi': 'True', 'forced': 'False',
+                               'audio_only_include': 'True', 'audio_exclude': 'False'}]
+    assert listed['originalFormat'] is None
+    if enhanced:
+        assert listed['groups'][0]['items'] == listed['items']
+        listed['items'] = {'groups': listed.pop('groups')}
+    assert _post_profiles(api_client, api_key, [listed]).status_code == 204
+    assert app_database.get_profile(9).items[0].hi == 'required'

@@ -3,8 +3,9 @@
 import io
 import re
 
-from flask_restx import Resource, Namespace, fields, marshal
+from flask_restx import Resource, Namespace, fields
 
+from api.response_types import LogEntry, LogsResponse
 from app.config import settings
 from app.logger import empty_log
 
@@ -31,23 +32,23 @@ class SystemLogs(Resource):
             last_log["exception"] += "\n".join(multi_line_record)
         else:
             # multiline record is first entry in log
-            last_log = dict()
-            last_log["type"] = "ERROR"
-            last_log["message"] = "See exception"
-            last_log["exception"] = "\n".join(multi_line_record)
-            logs.append(last_log)
+            orphan_log: LogEntry = {'timestamp': None, 'type': 'ERROR', 'message': 'See exception',
+                                    'exception': '\n'.join(multi_line_record)}
+            logs.append(orphan_log)
 
     @authenticate
     @api_ns_system_logs.expect(None)
     @api_ns_system_logs.response(200, 'Success')
     @api_ns_system_logs.response(401, 'Not Authenticated')
-    def get(self):
+    def get(self) -> LogsResponse:
         """List log entries"""
-        logs = []
+        logs: list[LogEntry] = []
         include = str(settings.log.include_filter)
         exclude = str(settings.log.exclude_filter)
         ignore_case = settings.log.ignore_case
         regex = settings.log.use_regex
+        include_compiled: re.Pattern[str] | None = None
+        exclude_compiled: re.Pattern[str] | None = None
         if regex:
             # pre-compile regular expressions for better performance
             if ignore_case:
@@ -113,10 +114,8 @@ class SystemLogs(Resource):
                     raw_message = line.split('|')
                     raw_message_len = len(raw_message)
                     if raw_message_len > 3:
-                        log = dict()
-                        log["timestamp"] = raw_message[0]
-                        log["type"] = raw_message[1].rstrip()
-                        log["message"] = raw_message[3]
+                        log: LogEntry = {'timestamp': raw_message[0], 'type': raw_message[1].rstrip(),
+                                         'message': raw_message[3], 'exception': None}
                         if raw_message_len > 4 and raw_message[4] != '\n':
                             log['exception'] = raw_message[4].strip('\'').replace('  ', '\u2003\u2003')
                         else:
@@ -131,7 +130,7 @@ class SystemLogs(Resource):
                 self.handle_record(logs, multi_line_record)
 
             logs.reverse()
-        return marshal(logs, self.get_response_model, envelope='data')
+        return {'data': logs}
 
     @authenticate
     @api_ns_system_logs.expect(None)

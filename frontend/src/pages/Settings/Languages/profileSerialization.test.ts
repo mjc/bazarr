@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { camelCaseKeys } from "@/utilities/case";
 import {
   serializeProfiles,
   serializeProfileSubmission,
@@ -147,6 +148,52 @@ describe("serializeProfileSubmission", () => {
 });
 
 describe("serializeProfiles", () => {
+  it.each<Language.ProfileType>(["basic", "enhanced"])(
+    "preserves a corrupt %s profile when another profile is saved",
+    (profileType) => {
+      const profileSource = {
+        items: ' {damaged_json: "Keep_Me"}\n',
+        mustContain: "['WEB_DL']",
+        mustNotContain: null,
+      };
+      const response: Language.RawProfile & {
+        profileSource: typeof profileSource;
+        profileError: string;
+      } = {
+        profileId: 4,
+        name: "Needs repair",
+        profileType,
+        items: [],
+        ...(profileType === "enhanced" ? { groups: [] } : {}),
+        cutoff: null,
+        mustContain: [],
+        mustNotContain: [],
+        originalFormat: null,
+        tag: undefined,
+        profileSource,
+        profileError: "Invalid language profile",
+      };
+
+      // The API converts keys before the settings page serializes every profile.
+      const loaded = camelCaseKeys(response);
+      const payload = serializeProfiles([
+        loaded,
+        { ...basicProfile, name: "Changed name" },
+      ]);
+
+      expect(JSON.parse(payload)).toEqual([
+        {
+          ...response,
+          items: profileType === "enhanced" ? { groups: [] } : [],
+          groups: undefined,
+          tag: undefined,
+        },
+        serializeProfileSubmission({ ...basicProfile, name: "Changed name" }),
+      ]);
+      expect(loaded.profileSource).toEqual(profileSource);
+    },
+  );
+
   it("serializes every profile in order without mixing representations", () => {
     const payload = serializeProfiles([basicProfile, enhancedProfile]);
     const parsed = JSON.parse(payload) as Record<string, unknown>[];

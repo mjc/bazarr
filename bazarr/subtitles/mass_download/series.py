@@ -14,7 +14,7 @@ from sonarr.history import history_log
 from app.notifier import send_notifications
 from app.get_providers import get_providers
 from app.database import (get_exclusion_clause, get_audio_profile_languages, TableShows, TableEpisodes,
-                          TableMissingSubtitles, database, select, get_profile_id, get_subtitles)
+                          TableMissingSubtitles, database, select, get_subtitles)
 from app.jobs_queue import jobs_queue, JobCanceled
 from app.event_handler import event_stream
 from app.config import settings
@@ -226,7 +226,8 @@ def episode_download_specific_subtitles(sonarr_series_id, sonarr_episode_id, lan
                TableEpisodes.season,
                TableEpisodes.episode,
                TableEpisodes.title.label("episodeTitle"),
-               TableShows.title)
+               TableShows.title,
+               TableShows.profileId)
         .select_from(TableEpisodes)
         .join(TableShows)
         .where(TableEpisodes.sonarrEpisodeId == sonarr_episode_id)) \
@@ -262,7 +263,7 @@ def episode_download_specific_subtitles(sonarr_series_id, sonarr_episode_id, lan
 
     try:
         result = list(generate_subtitles(episodePath, [(language, hi, forced)], audio_language, sceneName,
-                                         title, 'series', profile_id=get_profile_id(episode_id=sonarr_episode_id),
+                                         title, 'series', profile_id=episodeInfo.profileId,
                                          job_id=job_id))
         if isinstance(result, list) and len(result):
             result = result[0]

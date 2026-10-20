@@ -1,3 +1,5 @@
+from languages.registry import LanguageRegistry
+from tests.helpers.profile_records import profile_record
 """Exercise the runtime ORM and autocommit engine, rather than table proxies."""
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
@@ -21,6 +23,9 @@ import sonarr.sync.series as sonarr
 import subtitles.indexer.movies as movie_indexer
 import subtitles.indexer.series as episode_indexer
 import subtitles.wanted_state as state
+from tests.helpers.arr_fixtures import (
+    movie_payload, radarr_connection, series_payload, sonarr_connection, stub_arr_api,
+)
 
 
 SqlValue: TypeAlias = str | int | float | bytes | None
@@ -34,9 +39,9 @@ def runtime_database(monkeypatch, tmp_path):
     with Session(engine) as session:
         for module in [db, state, movie_indexer, episode_indexer, radarr, sonarr]:
             monkeypatch.setattr(module, 'database', session)
-        monkeypatch.setattr(get_languages, 'languages_dict', [
+        monkeypatch.setattr(get_languages, '_language_registry', LanguageRegistry([
             {'code2': 'en', 'code3': 'eng', 'code3b': None, 'name': 'English'},
-        ])
+        ]))
         yield engine, session
     engine.dispose()
 
@@ -62,14 +67,13 @@ def seed_media(session: Session, media_type: str, missing: str | None = '[]') ->
 
 def configure_indexer(monkeypatch, media_type):
     module = movie_indexer if media_type == 'movie' else episode_indexer
-    monkeypatch.setattr(module, 'get_profiles_list', lambda **kwargs: {
+    monkeypatch.setattr(module, 'get_profile', lambda *args, **kwargs: profile_record({
         'items': [{'language': 'en', 'forced': 'False', 'hi': 'False'}],
-    })
-    monkeypatch.setattr(module, 'get_profile_cutoff', lambda **kwargs: None)
-    monkeypatch.setattr(module, 'get_subtitles', lambda **kwargs: [])
+    }))
+    monkeypatch.setattr(module, 'get_subtitles', lambda *args, **kwargs: [])
     monkeypatch.setattr(module.settings.general, 'use_embedded_subs', False)
     events = []
-    monkeypatch.setattr(module, 'event_stream', lambda **kwargs: events.append(kwargs))
+    monkeypatch.setattr(module, 'event_stream', lambda *args, **kwargs: events.append(kwargs))
     recalculate = (
         lambda: module.list_missing_subtitles_movies(no=7)
         if media_type == 'movie' else module.list_missing_subtitles(epno=7)
@@ -78,18 +82,33 @@ def configure_indexer(monkeypatch, media_type):
 
 
 @pytest.mark.parametrize('media_type', ['movie', 'series'])
-def test_bulk_subtitles_match_single_media_with_embedded_ids(runtime_database, media_type):
+@pytest.mark.parametrize('embedded_language', ['en', 'und'])
+@pytest.mark.parametrize('unknown_first', [False, True])
+def test_bulk_subtitles_match_single_media_with_embedded_ids(
+    runtime_database: tuple[Engine, Session], media_type: str, embedded_language: str, unknown_first: bool,
+) -> None:
     _, session = runtime_database
     seed_media(session, media_type)
     table = db.TableMoviesSubtitles if media_type == 'movie' else db.TableEpisodesSubtitles
     values = {'radarrId': 7} if media_type == 'movie' else {'sonarrEpisodeId': 7, 'sonarrSeriesId': 7}
-    session.execute(insert(table), [
-        dict(values, id=71, language='en', forced=False, hi=False, embedded_track_id=0, path=None, size=0),
-        dict(values, id=72, language='en', forced=True, hi=False, embedded_track_id=None, path='/movie.en.srt', size=123),
-    ])
+    embedded_id, external_id = (71, 72) if unknown_first else (72, 71)
+    rows = [
+        dict(values, id=embedded_id, language=embedded_language, forced=False, hi=True, embedded_track_id=0, path=None, size=0),
+        dict(values, id=external_id, language='en', forced=True, hi=False, embedded_track_id=None, path='/movie.en.srt', size=123),
+    ]
+    if unknown_first:
+        rows.reverse()
+    session.execute(insert(table), rows)
     single = db.get_subtitles(**({'radarr_id': 7} if media_type == 'movie' else {'sonarr_episode_id': 7}))
     assert db.get_subtitles_map(media_type, [7, 8])[7] == single
-    assert {subtitle['id'] for subtitle in single} == {71, 72}
+    media_ids = select(db.TableMovies.radarrId) if media_type == 'movie' else select(db.TableEpisodes.sonarrEpisodeId)
+    assert db.get_subtitles_for_query(media_type, media_ids)[7] == single
+    assert [subtitle['id'] for subtitle in single] == [embedded_id, external_id]
+    assert single[0] == {
+        'id': embedded_id, 'path': None, 'name': 'English' if embedded_language == 'en' else None,
+        'code2': embedded_language, 'code3': 'eng' if embedded_language == 'en' else None,
+        'forced': False, 'hi': True, 'file_size': 0, 'embedded_track_id': 0,
+    }
 
 
 @pytest.mark.skipif(not hasattr(sqlite3.Connection, 'setlimit'), reason='requires SQLite connection limits')
@@ -317,22 +336,27 @@ def test_unchanged_missing_state_notifies_rescan_without_rewriting(runtime_datab
 def configure_sync(monkeypatch, module, payload):
     movie_sync = module is radarr
     service = 'radarr' if movie_sync else 'sonarr'
-    monkeypatch.setattr(module, f'check_{service}_rootfolder', lambda: None)
-    monkeypatch.setattr(module, 'get_movies_from_radarr_api' if movie_sync else 'get_series_from_sonarr_api',
-                        lambda **kwargs: payload)
+    monkeypatch.setattr(module, f'check_{service}_rootfolder', lambda **kwargs: None)
+    monkeypatch.setattr(module, f'get_{service}_connection', lambda *args, **kwargs: radarr_connection() if movie_sync else sonarr_connection())
+    stub_arr_api(monkeypatch, module, 'get_movies_from_radarr_api' if movie_sync else 'get_series_from_sonarr_api',
+                        lambda *args, **kwargs: payload)
     for name in ['get_profile_list', 'get_tags', 'get_language_profiles']:
-        monkeypatch.setattr(module, name, lambda: [])
-    monkeypatch.setattr(module, 'event_stream', lambda **kwargs: None)
-    monkeypatch.setattr(module.jobs_queue, 'update_job_progress', lambda **kwargs: None)
-    monkeypatch.setattr(module.jobs_queue, 'update_job_name', lambda **kwargs: None)
+        monkeypatch.setattr(module, name, lambda **kwargs: [])
+    monkeypatch.setattr(module, 'event_stream', lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.jobs_queue, 'update_job_progress', lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.jobs_queue, 'update_job_name', lambda *args, **kwargs: None)
     job = SimpleNamespace(cancel_event=Event())
-    monkeypatch.setattr(module.jobs_queue, 'get_job', lambda **kwargs: job)
+    monkeypatch.setattr(module.jobs_queue, 'get_job', lambda *args, **kwargs: job)
     if movie_sync:
+        monkeypatch.setattr(module.settings.general, 'parse_embedded_audio_track', False)
         monkeypatch.setattr(module.settings.general, 'movie_default_enabled', False)
         monkeypatch.setattr(module.settings.radarr, 'apikey', 'test')
         monkeypatch.setattr(module.settings.radarr, 'sync_only_monitored_movies', False)
     else:
         monkeypatch.setattr(module.settings.sonarr, 'sync_only_monitored_series', False)
+        monkeypatch.setattr(module.settings.general, 'serie_default_enabled', False)
+        monkeypatch.setattr(module.settings.general, 'parse_embedded_audio_track', False)
+        monkeypatch.setattr(module.settings.general, 'serie_tag_enabled', False)
 
 
 @pytest.mark.parametrize('movie_file', [None, {}, {'id': 1}, {'path': '/movie.mkv'},
@@ -362,18 +386,17 @@ def test_unidentified_entries_disable_deletion_sweep(runtime_database, monkeypat
 def test_incomplete_sync_still_processes_identifiable_entries(runtime_database, monkeypatch, media_type):
     _, session = runtime_database
     table, id_column = seed_media(session, media_type)
-    good = {'id': 8, 'title': 'New media', 'hasFile': True,
-            'movieFile': {'id': 8, 'path': '/new.mkv', 'size': MINIMUM_VIDEO_SIZE + 1}}
+    good = movie_payload(8, 'New media', '/new.mkv', file_id=8, size=MINIMUM_VIDEO_SIZE + 1) if media_type == 'movie' else series_payload(8, 'New media')
     module = radarr if media_type == 'movie' else sonarr
     configure_sync(monkeypatch, module, [None, good])
     processed = []
     if media_type == 'movie':
-        monkeypatch.setattr(radarr, 'movieParser', lambda movie, **kwargs: {'radarrId': movie['id'], 'title': movie['title']})
+        monkeypatch.setattr(radarr, 'movieParser', lambda movie, **kwargs: {'radarrId': movie.id, 'title': movie.title})
         monkeypatch.setattr(radarr, 'add_movie', lambda movie: processed.append(movie['radarrId']))
         radarr.update_movies(job_id='test')
     else:
         monkeypatch.setattr(sonarr, 'update_one_series', lambda series_id, **kwargs: processed.append(series_id))
-        monkeypatch.setattr(sonarr, 'sync_episodes', lambda **kwargs: None)
+        monkeypatch.setattr(sonarr, 'sync_episodes', lambda *args, **kwargs: None)
         sonarr.update_series(job_id='test')
     assert processed == [8]
     assert session.execute(select(getattr(table, id_column))).scalars().all() == [7]
@@ -480,7 +503,7 @@ def test_series_deletion_failure_preserves_media_and_search_state(
 ) -> None:
     engine, session = series_deletion_state
     events = []
-    monkeypatch.setattr(sonarr, 'event_stream', lambda **kwargs: events.append(kwargs))
+    monkeypatch.setattr(sonarr, 'event_stream', lambda *args, **kwargs: events.append(kwargs))
 
     def fail_delete(connection, cursor, statement, parameters, context, executemany):
         if statement.startswith(f'DELETE FROM {failed_table}'):

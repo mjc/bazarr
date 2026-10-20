@@ -8,7 +8,7 @@ from subliminal_patch import core, search_external_subtitles
 from sqlalchemy import not_, tuple_
 
 from languages.custom_lang import CustomLanguage
-from app.database import get_profiles_list, get_profile_cutoff, TableEpisodes, TableShows, TableEpisodesSubtitles, \
+from app.database import get_profile, TableEpisodes, TableShows, TableEpisodesSubtitles, \
     get_audio_profile_languages, database, update, select, get_subtitles, insert, delete
 from languages.get_languages import alpha2_from_alpha3, get_language_set
 from app.config import settings
@@ -16,10 +16,10 @@ from utilities.helper import get_subtitle_destination_folder
 from utilities.path_mappings import path_mappings
 from utilities.video_analyzer import embedded_subs_reader
 from app.event_handler import event_stream
-from subtitles.indexer.utils import guess_external_subtitles, get_external_subtitles_path
+from subtitles.indexer.utils import guess_external_subtitles
+from utilities.subtitle_paths import find_external_subtitle
 from subtitles.pool import get_language_equals
-from subtitles.indexer.profile_requirements import calculate_missing_subtitles, \
-    calculate_enhanced_missing_subtitles
+from subtitles.indexer.profile_requirements import calculate_missing_subtitles
 from subtitles.wanted_state import store_missing_subtitles
 from app.jobs_queue import jobs_queue, JobCanceled
 
@@ -185,14 +185,11 @@ def store_subtitles(sonarr_episode_id, use_cache=True):
                         logging.debug(f'{language.alpha3} is an unsupported language code.')
                     continue
 
-                subtitle_path = get_external_subtitles_path(mapped_path, subtitle)
-
-                # We get custom language external subtitles
-                try:
-                    subtitle_size = os.stat(subtitle_path).st_size
-                except FileNotFoundError:
-                    logging.debug(f"BAZARR skipping missing subtitle file: {subtitle_path}")
+                external = find_external_subtitle(mapped_path, subtitle)
+                if external is None:
+                    logging.debug('BAZARR skipping missing subtitle file: %s', subtitle)
                     continue
+                subtitle_path, subtitle_size = external.path, external.size
 
                 custom = CustomLanguage.found_external(subtitle, subtitle_path)
                 if custom is not None:
@@ -268,39 +265,16 @@ def list_missing_subtitles(
     # Get language equals configuration
     lang_equals = core._LanguageEquals(get_language_equals())
 
-    matches_audio = lambda language: any(x['code2'] == language['language'] for x in get_audio_profile_languages(
-                                episode_subtitles.audio_language))
-
     for episode_subtitles in episodes_subtitles:
-        missing_subtitles_text = '[]'
-        if episode_subtitles.profileId:
-            audio_language_codes = {
-                x['code2']
-                for x in get_audio_profile_languages(episode_subtitles.audio_language)
-            }
-            matches_audio = lambda language: language['language'] in audio_language_codes
-
-            # get desired subtitles
-            desired_subtitles_temp = get_profiles_list(profile_id=episode_subtitles.profileId)
-            profile_items = desired_subtitles_temp.get('items', []) if isinstance(desired_subtitles_temp, dict) else []
-            if not isinstance(profile_items, (list, tuple)):
-                profile_items = []
-
-            # get existing subtitles
-            actual_subtitles_temp = get_subtitles(sonarr_episode_id=episode_subtitles.sonarrEpisodeId) or []
-            if not use_embedded_subs:
-                actual_subtitles_temp = [x for x in actual_subtitles_temp if isinstance(x, dict) and x.get('path')]
-
-            profile_groups = desired_subtitles_temp.get('groups') if isinstance(desired_subtitles_temp, dict) else None
-            if profile_groups is not None:
-                missing_subtitles_list = calculate_enhanced_missing_subtitles(
-                    profile_groups, desired_subtitles_temp.get('cutoff'), actual_subtitles_temp, matches_audio,
-                    lang_equals)
-            else:
-                missing_subtitles_list = calculate_missing_subtitles(
-                    profile_items, get_profile_cutoff(profile_id=episode_subtitles.profileId), actual_subtitles_temp,
-                    matches_audio, lang_equals)
-            missing_subtitles_text = str(missing_subtitles_list)
+        missing_subtitles = []
+        profile = get_profile(episode_subtitles.profileId)
+        if profile is not None:
+            missing_subtitles = calculate_missing_subtitles(
+                profile, get_subtitles(sonarr_episode_id=episode_subtitles.sonarrEpisodeId) or [],
+                {language['code2'] for language in get_audio_profile_languages(episode_subtitles.audio_language)},
+                lang_equals, use_embedded_subs=use_embedded_subs,
+            )
+        missing_subtitles_text = str(missing_subtitles)
 
         store_missing_subtitles(
             TableEpisodes.__table__, 'sonarrEpisodeId', 'series', episode_subtitles.sonarrEpisodeId,

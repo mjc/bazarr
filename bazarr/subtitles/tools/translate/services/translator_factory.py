@@ -1,22 +1,22 @@
-# coding=utf-8
+from typing import Protocol
+
+from ..core.translation_request import TranslationRequest, TranslatorConfig
+
+
+class Translator(Protocol):
+    def translate(self, job_id: int | None) -> str | None: ...
 
 class TranslatorFactory:
 
     @classmethod
-    def create_translator(cls, translator_type, **kwargs):
-        if translator_type == 'google_translate':
+    def create_translator(cls, request: TranslationRequest, config: TranslatorConfig) -> Translator:
+        if config.name == 'google_translate':
             from .google_translator import GoogleTranslatorService
-            return GoogleTranslatorService(**kwargs)
+            return GoogleTranslatorService(request)
 
-        elif translator_type == 'gemini':
+        if config.name == 'gemini':
             from .gemini_translator import GeminiTranslatorService
-            return GeminiTranslatorService(**kwargs)
+            return GeminiTranslatorService(request, config)
 
-        elif translator_type == 'lingarr':
-            from .lingarr_translator import LingarrTranslatorService
-            return LingarrTranslatorService(**kwargs)
-
-        else:
-            raise ValueError(
-                f"Unknown translator type: '{translator_type}'"
-            )
+        from .lingarr_translator import LingarrTranslatorService
+        return LingarrTranslatorService(request, config)

@@ -2,6 +2,11 @@
 
 import logging
 import unicodedata
+from collections.abc import Iterator
+from typing import TypeVar, overload
+
+
+_T = TypeVar('_T')
 
 
 logger = logging.getLogger(__name__)
@@ -20,7 +25,7 @@ _STRING_ESCAPES = {
 }
 
 
-def _decode_repr_string(value):
+def _decode_repr_string(value: str) -> str:
     """
     Decode the body of a Python string literal by interpreting its backslash
     escape sequences.
@@ -95,10 +100,9 @@ def _decode_repr_string(value):
     return "".join(decoded)
 
 
-def _parse_repr_list(value):
+def _iter_repr_list(value: str) -> Iterator[str | None]:
     """
-    Parse a string containing the ``repr`` of a Python list whose elements are
-    either ``None`` or string literals, and reconstruct the original list.
+    Yield the strings and None values from a serialized Python list.
 
     The input is expected to look like the output of ``repr`` applied to a list
     of optional strings, e.g. a bracketed, comma-separated sequence of ``None``
@@ -114,9 +118,7 @@ def _parse_repr_list(value):
     :param value: Text representation of a list, as produced by ``repr``,
         containing only ``None`` values and quoted string literals.
     :type value: str
-    :return: The reconstructed list, where each element is either ``None`` or
-        the decoded string value of the corresponding literal.
-    :rtype: list[str | None]
+    :yields: None or the decoded string value of each literal.
     :raises ValueError: If the input is not enclosed in square brackets, if an
         element is neither ``None`` nor a quoted string, if a string literal is
         unterminated or ends with an incomplete escape sequence, if elements are
@@ -124,14 +126,13 @@ def _parse_repr_list(value):
     """
     value = value.strip()
     if value == '[]':
-        return []
+        return
     if not value.startswith('[') or not value.endswith(']'):
         raise ValueError
 
-    values = []
     body = value[1:-1].strip()
     if not body:
-        return values
+        return
 
     index = 0
     while index < len(body):
@@ -141,28 +142,29 @@ def _parse_repr_list(value):
         if body.startswith('None', index) and (
             index + 4 == len(body) or body[index + 4] == ',' or body[index + 4].isspace()
         ):
-            values.append(None)
+            yield None
             index += 4
         elif index < len(body) and body[index] in ("'", '"'):
             quote = body[index]
             index += 1
-            chars = []
+            start = index
+            escaped = False
             while index < len(body):
                 char = body[index]
                 if char == "\\":
                     if index + 1 >= len(body):
                         raise ValueError
-                    chars.extend((char, body[index + 1]))
+                    escaped = True
                     index += 2
                     continue
                 if char == quote:
+                    token = body[start:index]
                     index += 1
                     break
-                chars.append(char)
                 index += 1
             else:
                 raise ValueError
-            values.append(_decode_repr_string("".join(chars)))
+            yield _decode_repr_string(token) if escaped else token
         else:
             raise ValueError
 
@@ -176,10 +178,20 @@ def _parse_repr_list(value):
         if index == len(body):
             raise ValueError
 
-    return values
+
+def parse_text_tuple(value: str) -> tuple[str | None, ...]:
+    return tuple(_iter_repr_list(value))
 
 
-def parse_text_list(value):
+@overload
+def parse_text_list(value: str) -> list[str | None]: ...
+
+
+@overload
+def parse_text_list(value: list[_T] | tuple[_T, ...]) -> list[_T]: ...
+
+
+def parse_text_list(value: str | list[_T] | tuple[_T, ...]) -> list[str | None] | list[_T]:
     """
     Normalize a value into a list.
 
@@ -205,12 +217,16 @@ def parse_text_list(value):
     if not isinstance(value, str):
         raise ValueError
 
-    parsed = _parse_repr_list(value)
+    return list(_iter_repr_list(value))
 
-    if not isinstance(parsed, list):
-        raise ValueError
 
-    return parsed
+def parse_string_list(value: str) -> list[str]:
+    values: list[str] = []
+    for entry in _iter_repr_list(value):
+        if entry is None:
+            raise ValueError('Expected strings in text list')
+        values.append(entry)
+    return values
 
 
 def parse_text_list_or_default(value, default=None):

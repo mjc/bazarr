@@ -34,6 +34,9 @@ class PathMappings:
     @overload
     def path_replace(self, path: None) -> None: ...
 
+    @overload
+    def path_replace(self, path: str | None) -> str | None: ...
+
     def path_replace(self, path: str | None) -> str | None:
         """
         Replace a path prefix according to the configured path mapping series.
@@ -117,6 +120,9 @@ class PathMappings:
 
     @overload
     def path_replace_movie(self, path: None) -> None: ...
+
+    @overload
+    def path_replace_movie(self, path: str | None) -> str | None: ...
 
     def path_replace_movie(self, path: str | None) -> str | None:
         """

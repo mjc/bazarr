@@ -41,7 +41,7 @@ def arr(request):
 
 @pytest.mark.parametrize("arr", CASES, indirect=True)
 def test_notify_posts_rescan_command_with_integer_id(arr):
-    with mock.patch.object(arr.module.requests, "post") as post:
+    with mock.patch.object(arr.module.requests.Session, "post") as post:
         arr.notify("42")
 
     post.assert_called_once()
@@ -52,7 +52,7 @@ def test_notify_posts_rescan_command_with_integer_id(arr):
 
 @pytest.mark.parametrize("arr", CASES, indirect=True)
 def test_notify_logs_and_swallows_request_errors(arr, caplog):
-    with mock.patch.object(arr.module.requests, "post", side_effect=requests.exceptions.ConnectionError("down")):
+    with mock.patch.object(arr.module.requests.Session, "post", side_effect=requests.exceptions.ConnectionError("down")):
         arr.notify(1)
 
     assert f"BAZARR cannot notify {arr.name.capitalize()}" in caplog.text
@@ -60,7 +60,7 @@ def test_notify_logs_and_swallows_request_errors(arr, caplog):
 
 @pytest.mark.parametrize("arr", CASES, indirect=True)
 def test_notify_rejects_non_numeric_id_without_raising(arr, caplog):
-    with mock.patch.object(arr.module.requests, "post") as post:
+    with mock.patch.object(arr.module.requests.Session, "post") as post:
         arr.notify("not-a-number")
 
     post.assert_not_called()

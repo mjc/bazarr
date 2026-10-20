@@ -1,8 +1,6 @@
 # coding=utf-8
 
-import pretty
-
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 
 from app.database import TableMovies, TableBlacklistMovie, database, select, TableMoviesSubtitles
 from subtitles.tools.delete import delete_subtitles
@@ -12,7 +10,9 @@ from subtitles.mass_download import movies_download_subtitles
 from app.event_handler import event_stream
 from api.swaggerui import subtitles_language_model
 
-from ..utils import authenticate, postprocess
+from ..utils import authenticate
+from api.response_types import BlacklistPageResponse
+from api.response_data import load_formatter
 
 api_ns_movies_blacklist = Namespace('Movies Blacklist', description='List, add or remove subtitles to or from '
                                                                     'movies blacklist')
@@ -39,7 +39,7 @@ class MoviesBlacklist(Resource):
     @authenticate
     @api_ns_movies_blacklist.response(401, 'Not Authenticated')
     @api_ns_movies_blacklist.expect(get_request_parser)
-    def get(self):
+    def get(self) -> BlacklistPageResponse:
         """List blacklisted movies subtitles"""
         args = self.get_request_parser.parse_args()
         start = args.get('start')
@@ -57,15 +57,15 @@ class MoviesBlacklist(Resource):
         if length > 0:
             stmt = stmt.limit(length).offset(start)
 
-        return marshal([postprocess({
+        formatter = load_formatter()
+        return {'data': [formatter.movie_blacklist({
             'title': x.title,
             'radarrId': x.radarrId,
             'provider': x.provider,
             'subs_id': x.subs_id,
             'language': x.language,
-            'timestamp': pretty.date(x.timestamp),
-            'parsed_timestamp': x.timestamp.strftime('%x %X'),
-        }) for x in database.execute(stmt).all()], self.get_response_model, envelope='data')
+            'timestamp': x.timestamp,
+        }) for x in database.execute(stmt).all()]}
 
     post_request_parser = reqparse.RequestParser()
     post_request_parser.add_argument('radarrid', type=int, required=True, help='Radarr ID')

@@ -8,7 +8,24 @@ bad fixture data, it fails immediately.
 import json
 import os
 
-from jsonschema import validate, RefResolver
+from jsonschema import Draft7Validator, RefResolver, validators
+
+
+def _nullable_validation(keyword):
+    validate_keyword = Draft7Validator.VALIDATORS[keyword]
+
+    def validate_nullable(validator, expected, instance, schema):
+        if instance is None and schema.get('nullable') is True:
+            return
+        yield from validate_keyword(validator, expected, instance, schema)
+
+    return validate_nullable
+
+
+# OpenAPI 3.0 uses nullable alongside type rather than JSON Schema's null type.
+OpenAPIValidator = validators.extend(Draft7Validator, {
+    keyword: _nullable_validation(keyword) for keyword in ('type', 'enum', 'allOf')
+})
 
 # Spec downloaded from https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json
 
@@ -36,7 +53,7 @@ def validate_response(data, path, method="get", status="200"):
     spec, resolver = _load_spec()
     content = spec["paths"][path][method]["responses"][status]["content"]
     schema = list(content.values())[0]["schema"]
-    validate(instance=data, schema=schema, resolver=resolver)
+    OpenAPIValidator(schema, resolver=resolver).validate(data)
 
 
 def _validate_params(params, path, method="get"):
@@ -74,7 +91,7 @@ def _validate_request_body(data, path, method="post"):
     body_content = op.get("requestBody", {}).get("content", {})
     if body_content:
         schema = list(body_content.values())[0]["schema"]
-        validate(instance=data, schema=schema, resolver=resolver)
+        OpenAPIValidator(schema, resolver=resolver).validate(data)
 
 
 def _validate_fields(fields_str):

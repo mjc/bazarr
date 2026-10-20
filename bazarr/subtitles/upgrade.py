@@ -4,14 +4,16 @@
 import logging
 import operator
 
+from collections.abc import Collection, Iterator
 from datetime import datetime, timedelta
 from functools import reduce
-from sqlalchemy import and_, or_
+from itertools import islice
+from sqlalchemy import Select, and_, or_
 
 from app.config import settings
-from constants import HI_EXCLUDED
+from app.language_profiles import Profile
 from app.database import (get_exclusion_clause, get_audio_profile_languages, TableShows, TableEpisodes, TableMovies,
-     TableHistory, TableHistoryMovie, database, select, func, get_profiles_list, TableEpisodesSubtitles,
+     TableHistory, TableHistoryMovie, database, select, func, load_profile_catalog, TableEpisodesSubtitles,
      TableMoviesSubtitles)
 from app.jobs_queue import jobs_queue, JobCanceled
 from app.get_providers import get_providers
@@ -40,7 +42,15 @@ def upgrade_subtitles(wait_for_completion=False):
     logging.info('BAZARR Finished searching for Subtitles to upgrade. Check History for more information.')
 
 
-def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
+def _upgrade_id_batches(history_ids: Collection[int]) -> Iterator[list[int]]:
+    # A deterministic order across batches keeps processing independent of the
+    # timestamp order in the candidate mapping and bounds SQLite parameters.
+    ordered_ids = iter(sorted(history_ids))
+    while batch := list(islice(ordered_ids, 500)):
+        yield batch
+
+
+def upgrade_episodes_subtitles(job_id: int | None = None, wait_for_completion: bool = False) -> None:
     if not job_id:
         jobs_queue.add_job_from_function("Trying to upgrade episodes subtitles", is_progress=True,
                                          wait_for_completion=wait_for_completion, is_cancellable=True)
@@ -48,6 +58,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
     else:
         job = jobs_queue.get_job(job_id=job_id)
 
+    profiles = load_profile_catalog()
     episodes_to_upgrade = get_upgradable_episode_subtitles()
     episodes_data = [{
         'id': x.id,
@@ -64,10 +75,10 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
         'sonarrEpisodeId': x.sonarrEpisodeId,
         'sonarrSeriesId': x.sonarrSeriesId,
         'subtitles_path': x.subtitles_path,
-        'path': x.path,
         'profileId': x.profileId,
-        'external_subtitles': x.external_subtitles,
-    } for x in database.execute(
+        'original_id': episodes_to_upgrade[x.id],
+    } for history_ids in _upgrade_id_batches(episodes_to_upgrade)
+    for x in database.execute(
         select(TableHistory.id,
                TableShows.title.label('seriesTitle'),
                TableEpisodes.season,
@@ -82,31 +93,19 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
                TableHistory.sonarrEpisodeId,
                TableHistory.sonarrSeriesId,
                TableHistory.subtitles_path,
-               TableEpisodes.path,
-               TableShows.profileId,
-               TableEpisodesSubtitles.path.label('external_subtitles'))
+               TableShows.profileId)
         .select_from(TableHistory)
         .join(TableShows, onclause=TableHistory.sonarrSeriesId == TableShows.sonarrSeriesId)
         .join(TableEpisodes, onclause=TableHistory.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId)
-        .join(TableEpisodesSubtitles, onclause=TableHistory.sonarrEpisodeId == TableEpisodesSubtitles.sonarrEpisodeId, isouter=True)
-        .where(TableEpisodesSubtitles.path.is_not(None)))
-    .all() if _language_still_desired(x.language, x.profileId) and x.video_path == x.path]
-
-    for item in episodes_data:
-        # do not consider subtitles that do not exist on disk anymore
-        if item['subtitles_path'] != item['external_subtitles']:
-            continue
-
-        # Mark upgradable and get original_id
-        item.update({'original_id': episodes_to_upgrade.get(item['id'])})
-        item.update({'upgradable': item['id'] in episodes_to_upgrade.keys()})
-
-        # cleanup the unused attributes
-        del item['path']
-        del item['external_subtitles']
-
-    # Make sure to keep only upgradable episode subtitles
-    episodes_data = [x for x in episodes_data if 'upgradable' in x and x['upgradable']]
+        .where(TableHistory.id.in_(history_ids),
+               TableHistory.video_path == TableEpisodes.path,
+               select(TableEpisodesSubtitles.id).where(
+                   TableEpisodesSubtitles.sonarrEpisodeId == TableHistory.sonarrEpisodeId,
+                   TableEpisodesSubtitles.path == TableHistory.subtitles_path).exists())
+        .order_by(TableHistory.id))
+    if (profile := profiles.get(x.profileId)) is not None
+    and x.language in profile.upgrade_languages]
+    del episodes_to_upgrade, profiles
 
     count_episode_to_upgrade = len(episodes_data)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_episode_to_upgrade)
@@ -117,6 +116,10 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
     for i, episode in enumerate(episodes_data, start=1):
         if job.cancel_event.is_set():
             raise JobCanceled
+
+        profile = load_profile_catalog().get(episode['profileId'])
+        if profile is None or episode['language'] not in profile.upgrade_languages:
+            continue
 
         providers_list = get_providers()
 
@@ -133,7 +136,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
         language, is_forced, is_hi = parse_language_string(episode['language'])
         if not language:
             continue
-        if is_hi and not _is_hi_required(language, episode['profileId']):
+        if is_hi == 'True' and language not in profile.hi_required_languages:
             is_hi = 'False'
 
         audio_language = resolve_audio_language(get_audio_profile_languages(episode['audio_language']), fallback=None)
@@ -153,7 +156,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
                                          is_upgrade=True,
                                          previous_subtitles_to_delete=path_mappings.path_replace(
                                              episode['subtitles_path']),
-                                         job_id=job_id))
+                                         job_id=job_id, profile=profile))
 
         if result:
             if isinstance(result, list) and len(result):
@@ -167,7 +170,7 @@ def upgrade_episodes_subtitles(job_id=None, wait_for_completion=False):
     jobs_queue.update_job_name(job_id=job_id, new_job_name='Tried to upgrade episodes subtitles')
 
 
-def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
+def upgrade_movies_subtitles(job_id: int | None = None, wait_for_completion: bool = False) -> None:
     if not job_id:
         jobs_queue.add_job_from_function("Trying to upgrade movies subtitles", is_progress=True,
                                          wait_for_completion=wait_for_completion, is_cancellable=True)
@@ -175,6 +178,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
     else:
         job = jobs_queue.get_job(job_id=job_id)
 
+    profiles = load_profile_catalog()
     movies_to_upgrade = get_upgradable_movies_subtitles()
     movies_data = [{
         'id': x.id,
@@ -186,11 +190,11 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
         'score': x.score,
         'score_out_of': x.score_out_of,
         'radarrId': x.radarrId,
-        'path': x.path,
         'profileId': x.profileId,
         'subtitles_path': x.subtitles_path,
-        'external_subtitles': x.external_subtitles,
-    } for x in database.execute(
+        'original_id': movies_to_upgrade[x.id],
+    } for history_ids in _upgrade_id_batches(movies_to_upgrade)
+    for x in database.execute(
         select(TableHistoryMovie.id,
                TableMovies.title,
                TableHistoryMovie.language,
@@ -201,30 +205,18 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
                TableHistoryMovie.score_out_of,
                TableHistoryMovie.radarrId,
                TableHistoryMovie.subtitles_path,
-               TableMovies.path,
-               TableMovies.profileId,
-               TableMoviesSubtitles.path.label('external_subtitles'))
+               TableMovies.profileId)
         .select_from(TableHistoryMovie)
         .join(TableMovies, onclause=TableHistoryMovie.radarrId == TableMovies.radarrId)
-        .join(TableMoviesSubtitles, onclause=TableHistoryMovie.radarrId == TableMoviesSubtitles.radarrId, isouter=True)
-        .where(TableMoviesSubtitles.path.is_not(None)))
-    .all() if _language_still_desired(x.language, x.profileId) and x.video_path == x.path]
-
-    for item in movies_data:
-        # do not consider subtitles that do not exist on disk anymore
-        if item['subtitles_path'] != item['external_subtitles']:
-            continue
-
-        # Mark upgradable and get original_id
-        item.update({'original_id': movies_to_upgrade.get(item['id'])})
-        item.update({'upgradable': item['id'] in movies_to_upgrade.keys()})
-
-        # cleanup the unused attributes
-        del item['path']
-        del item['external_subtitles']
-
-    # Make sure to keep only upgradable movie subtitles
-    movies_data = [x for x in movies_data if 'upgradable' in x and x['upgradable']]
+        .where(TableHistoryMovie.id.in_(history_ids),
+               TableHistoryMovie.video_path == TableMovies.path,
+               select(TableMoviesSubtitles.id).where(
+                   TableMoviesSubtitles.radarrId == TableHistoryMovie.radarrId,
+                   TableMoviesSubtitles.path == TableHistoryMovie.subtitles_path).exists())
+        .order_by(TableHistoryMovie.id))
+    if (profile := profiles.get(x.profileId)) is not None
+    and x.language in profile.upgrade_languages]
+    del movies_to_upgrade, profiles
 
     count_movie_to_upgrade = len(movies_data)
     jobs_queue.update_job_progress(job_id=job_id, progress_max=count_movie_to_upgrade)
@@ -235,6 +227,10 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
     for i, movie in enumerate(movies_data, start=1):
         if job.cancel_event.is_set():
             raise JobCanceled
+
+        profile = load_profile_catalog().get(movie['profileId'])
+        if profile is None or movie['language'] not in profile.upgrade_languages:
+            continue
 
         providers_list = get_providers()
 
@@ -247,7 +243,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
         language, is_forced, is_hi = parse_language_string(movie['language'])
         if not language:
             continue
-        if is_hi and not _is_hi_required(language, movie['profileId']):
+        if is_hi == 'True' and language not in profile.hi_required_languages:
             is_hi = 'False'
 
         audio_language = resolve_audio_language(get_audio_profile_languages(movie['audio_language']), fallback=None)
@@ -267,7 +263,7 @@ def upgrade_movies_subtitles(job_id=None, wait_for_completion=False):
                                          is_upgrade=True,
                                          previous_subtitles_to_delete=path_mappings.path_replace_movie(
                                              movie['subtitles_path']),
-                                         job_id=job_id))
+                                         job_id=job_id, profile=profile))
         if result:
             if isinstance(result, list) and len(result):
                 result = result[0]
@@ -322,7 +318,27 @@ def _upgrade_minimum_score(score, minimum_score, score_out_of):
         return None
 
 
-def get_upgradable_episode_subtitles(history_id_list=None):
+def _load_upgradable_ids(
+    candidates: Select[tuple[int, int | None, datetime]], history_id_list: Collection[int] | None,
+) -> dict[int, int | None]:
+    rows = candidates.cte('upgrade_candidates')
+    # Upgrades outside the requested page still exclude their original events.
+    upgraded_ids = select(rows.c.upgradedFromId).where(rows.c.upgradedFromId.is_not(None))
+    statement = select(rows.c.id, rows.c.upgradedFromId).where(rows.c.id.not_in(upgraded_ids))
+    remaining_ids: set[int] | None = None
+    if history_id_list:
+        if len(history_id_list) <= 500:
+            statement = statement.where(rows.c.id.in_(history_id_list))
+        else:
+            # Unlimited history pages can exceed SQLite's bound-parameter limit.
+            # Stream the two ID columns and keep only requested IDs in that case.
+            remaining_ids = set(history_id_list)
+    statement = statement.order_by(rows.c.timestamp.desc())
+    return {history_id: parent_id or None for history_id, parent_id in database.execute(statement)
+            if remaining_ids is None or history_id in remaining_ids}
+
+
+def get_upgradable_episode_subtitles(history_id_list: Collection[int] | None = None) -> dict[int, int | None]:
     if not settings.general.upgrade_subs:
         # return an empty set of rows
         logging.debug("Subtitles upgrade is disabled so we wont go further.")
@@ -360,51 +376,24 @@ def get_upgradable_episode_subtitles(history_id_list=None):
                                       or_(and_(TableHistory.score.is_(None), TableHistory.action == 6),
                                       (TableHistory.score < TableHistory.score_out_of - 3))]
     upgradable_episodes_conditions += get_exclusion_clause('series')
-    subtitles_to_upgrade = database.execute(
+    candidates = (
         select(TableHistory.id,
-               TableHistory.video_path,
-               TableHistory.language,
-               TableHistory.upgradedFromId)
+               TableHistory.upgradedFromId,
+               TableHistory.timestamp)
         .select_from(TableHistory)
         .join(TableShows, onclause=TableHistory.sonarrSeriesId == TableShows.sonarrSeriesId)
         .join(TableEpisodes, onclause=TableHistory.sonarrEpisodeId == TableEpisodes.sonarrEpisodeId)
         .join(max_id_timestamp, onclause=and_(TableHistory.video_path == max_id_timestamp.c.video_path,
                                               TableHistory.language == max_id_timestamp.c.language,
                                               max_id_timestamp.c.timestamp == TableHistory.timestamp))
-        .where(reduce(operator.and_, upgradable_episodes_conditions))
-        .order_by(TableHistory.timestamp.desc())) \
-        .all()
-    logging.debug(f"{len(subtitles_to_upgrade)} subtitles are candidates and we've selected the latest timestamp for "
-                  f"each of them.")
-
-    upgradable_episode_subtitles = {}
-    for subtitle_to_upgrade in subtitles_to_upgrade:
-        # exclude subtitles that are not in history_id_list if provided
-        if history_id_list and subtitle_to_upgrade.id not in history_id_list:
-            continue
-
-        # exclude subtitles with ID that as been "upgraded from" and shouldn't be considered
-        if any(x.upgradedFromId == subtitle_to_upgrade.id for x in subtitles_to_upgrade):
-            logging.debug(f"TableHistory ID {subtitle_to_upgrade.id} is the original subtitles event and has already "
-                          f"been upgraded so we'll skip it.")
-            continue
-
-        # check if we have the original subtitles ID in database
-        if subtitle_to_upgrade.upgradedFromId:
-            upgradable_episode_subtitles.update({subtitle_to_upgrade.id: subtitle_to_upgrade.upgradedFromId})
-            logging.debug(f"The original subtitles ID for TableHistory ID {subtitle_to_upgrade.id} stored in DB is: "
-                          f"{subtitle_to_upgrade.upgradedFromId}")
-            continue
-        else:
-            upgradable_episode_subtitles.update({subtitle_to_upgrade.id: None})
-            logging.debug(f"It seems to be the first time we've seen this TableHistory ID {subtitle_to_upgrade.id}.")
-            continue
+        .where(reduce(operator.and_, upgradable_episodes_conditions)))
+    upgradable_episode_subtitles = _load_upgradable_ids(candidates, history_id_list)
 
     logging.debug(f"We've found {len(upgradable_episode_subtitles)} episode subtitles IDs to be upgradable")
     return upgradable_episode_subtitles
 
 
-def get_upgradable_movies_subtitles(history_id_list=None):
+def get_upgradable_movies_subtitles(history_id_list: Collection[int] | None = None) -> dict[int, int | None]:
     if not settings.general.upgrade_subs:
         # return an empty set of rows
         logging.debug("Subtitles upgrade is disabled so we won't go further.")
@@ -442,104 +431,17 @@ def get_upgradable_movies_subtitles(history_id_list=None):
                                     or_(and_(TableHistoryMovie.score.is_(None), TableHistoryMovie.action == 6),
                                     (TableHistoryMovie.score < TableHistoryMovie.score_out_of - 3))]
     upgradable_movies_conditions += get_exclusion_clause('movie')
-    subtitles_to_upgrade = database.execute(
+    candidates = (
         select(TableHistoryMovie.id,
-               TableHistoryMovie.video_path,
-               TableHistoryMovie.language,
-               TableHistoryMovie.upgradedFromId)
+               TableHistoryMovie.upgradedFromId,
+               TableHistoryMovie.timestamp)
         .select_from(TableHistoryMovie)
         .join(TableMovies, onclause=TableHistoryMovie.radarrId == TableMovies.radarrId)
         .join(max_id_timestamp, onclause=and_(TableHistoryMovie.video_path == max_id_timestamp.c.video_path,
                                               TableHistoryMovie.language == max_id_timestamp.c.language,
                                               max_id_timestamp.c.timestamp == TableHistoryMovie.timestamp))
-        .where(reduce(operator.and_, upgradable_movies_conditions))
-        .order_by(TableHistoryMovie.timestamp.desc())) \
-        .all()
-    logging.debug(f"{len(subtitles_to_upgrade)} subtitles are candidates and we've selected the latest timestamp for "
-                  f"each of them.")
-
-    upgradable_movie_subtitles = {}
-    for subtitle_to_upgrade in subtitles_to_upgrade:
-        # exclude subtitles that are not in history_id_list if provided
-        if history_id_list and subtitle_to_upgrade.id not in history_id_list:
-            continue
-
-        # exclude subtitles with ID that as been "upgraded from" and shouldn't be considered
-        if any(x.upgradedFromId == subtitle_to_upgrade.id for x in subtitles_to_upgrade):
-            logging.debug(f"TableHistoryMovie ID {subtitle_to_upgrade.id} is the original subtitles event and has "
-                          f"already been upgraded so we'll skip it.")
-            continue
-
-        # check if we have the original subtitles ID in database
-        if subtitle_to_upgrade.upgradedFromId:
-            upgradable_movie_subtitles.update({subtitle_to_upgrade.id: subtitle_to_upgrade.upgradedFromId})
-            logging.debug(f"The original subtitles ID for TableHistoryMovie ID {subtitle_to_upgrade.id} stored in DB "
-                          f"is: {subtitle_to_upgrade.upgradedFromId}")
-            continue
-        else:
-            upgradable_movie_subtitles.update({subtitle_to_upgrade.id: None})
-            logging.debug(f"It seems to be the first time we've seen this TableHistoryMovie ID "
-                          f"{subtitle_to_upgrade.id}.")
-            continue
+        .where(reduce(operator.and_, upgradable_movies_conditions)))
+    upgradable_movie_subtitles = _load_upgradable_ids(candidates, history_id_list)
 
     logging.debug(f"We've found {len(upgradable_movie_subtitles)} movie subtitles IDs to be upgradable")
     return upgradable_movie_subtitles
-
-
-def _language_still_desired(language, profile_id):
-    if not profile_id:
-        return False
-
-    profile = get_profiles_list(profile_id)
-    if not isinstance(profile, dict):
-        return False
-
-    if language in _language_from_items(profile.get('items', [])):
-        return True
-    else:
-        return False
-
-
-def _language_from_items(items):
-    results = []
-    if not isinstance(items, list):
-        return results
-
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-
-        language = item.get('language')
-        if not isinstance(language, str) or not language.strip():
-            continue
-
-        if str(item.get('forced')) == 'True':
-            results.append(f'{language}:forced')
-        elif str(item.get('hi')) == 'True':
-            results.append(f'{language}:hi')
-        elif item.get('hi') == HI_EXCLUDED:
-            results.append(language)
-        else:
-            results.append(language)
-            results.append(f'{language}:hi')
-    return results
-
-
-def _is_hi_required(language, profile_id):
-    profile = get_profiles_list(profile_id=profile_id)
-    if not isinstance(language, str):
-        return False
-    if not isinstance(profile, dict):
-        return False
-
-    items = profile.get('items')
-    if not isinstance(items, list):
-        return False
-
-    base_language = language.split(':')[0]
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if base_language == item.get('language') and str(item.get('hi')) == 'True':
-            return True
-    return False

@@ -5,6 +5,8 @@ import json
 import os
 import logging
 
+from api.response_types import ReleaseInfo, ReleasesResponse
+from flask_restx.inputs import boolean
 from flask_restx import Resource, Namespace, fields, marshal
 
 from app.config import settings
@@ -29,7 +31,7 @@ class SystemReleases(Resource):
     @api_ns_system_releases.expect(None)
     @api_ns_system_releases.response(200, 'Success')
     @api_ns_system_releases.response(401, 'Not Authenticated')
-    def get(self):
+    def get(self) -> ReleasesResponse:
         """Get Bazarr releases"""
         filtered_releases = []
         try:
@@ -50,14 +52,19 @@ class SystemReleases(Resource):
 
             for i, release in enumerate(filtered_releases):
                 body = release['body'].replace('- ', '').split('\n')[1:]
-                filtered_releases[i] = {"body": body,
-                                        "name": release['name'],
-                                        "date": release['date'][:10],
-                                        "prerelease": release['prerelease'],
-                                        "current": release['name'].lstrip('v') == current_version}
+                prerelease = release['prerelease']
+                formatted: ReleaseInfo = {'body': body, 'name': release['name'],
+                                         'date': str(release['date'][:10]),
+                                         'prerelease': boolean(prerelease) if prerelease is not None else None,
+                                         'current': release['name'].lstrip('v') == current_version}
+                filtered_releases[i] = formatted
+            return {'data': filtered_releases}
 
         except Exception:
             logging.exception(
                 f'BAZARR cannot parse releases caching file: '
                 f'{os.path.join(args.config_dir, "config", "releases.txt")}')
-        return marshal(filtered_releases, self.get_response_model, envelope='data')
+        fallback = marshal(filtered_releases, self.get_response_model)
+        # The cache is a list even if a record could not be formatted above.
+        assert isinstance(fallback, list)
+        return {'data': fallback}

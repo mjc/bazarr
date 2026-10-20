@@ -2,14 +2,15 @@
 
 import operator
 
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Resource, Namespace, reqparse, fields
 from functools import reduce
 
-from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableMissingSubtitles, database, select, func, get_subtitles_map
+from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableMissingSubtitles, database, select, func
 from api.swaggerui import subtitles_language_model
-from subtitles.wanted_state import get_missing_languages_map
 
-from ..utils import authenticate, postprocess
+from ..utils import authenticate
+from api.response_data import load_formatter, load_missing_languages
+from api.response_types import WantedPageResponse
 
 api_ns_episodes_wanted = Namespace('Episodes Wanted', description='List episodes wanted subtitles')
 
@@ -44,7 +45,7 @@ class EpisodesWanted(Resource):
     @authenticate
     @api_ns_episodes_wanted.response(401, 'Not Authenticated')
     @api_ns_episodes_wanted.expect(get_request_parser)
-    def get(self):
+    def get(self) -> WantedPageResponse:
         """List episodes wanted subtitles"""
         args = self.get_request_parser.parse_args()
         episodeid = args.get('episodeid[]')
@@ -80,20 +81,21 @@ class EpisodesWanted(Resource):
             stmt = stmt.order_by(TableEpisodes.sonarrEpisodeId.desc()).limit(length).offset(start)
 
         episodes = database.execute(stmt).all()
-        missing_languages = get_missing_languages_map('series', [x.sonarrEpisodeId for x in episodes])
-        subtitles_map = get_subtitles_map('series', [x.sonarrEpisodeId for x in episodes])
+        media_ids = stmt.with_only_columns(TableEpisodes.sonarrEpisodeId, maintain_column_froms=True)
+        missing_languages = load_missing_languages('series', media_ids) if episodes else {}
+        formatter = load_formatter()
 
-        results = [postprocess({
+        results = [formatter.wanted({
             'seriesTitle': x.seriesTitle,
             'episode_number': x.episode_number,
             'episodeTitle': x.episodeTitle,
-            'missing_subtitles': missing_languages[x.sonarrEpisodeId],
+            'missing_subtitles': missing_languages.get(x.sonarrEpisodeId, ()),
             'sonarrSeriesId': x.sonarrSeriesId,
             'sonarrEpisodeId': x.sonarrEpisodeId,
             'sceneName': x.sceneName,
             'tags': x.tags,
             'seriesType': x.seriesType,
-        }, subtitles=subtitles_map.get(x.sonarrEpisodeId, [])) for x in episodes]
+        }) for x in episodes]
 
         count = database.execute(
             select(func.count())
@@ -102,4 +104,4 @@ class EpisodesWanted(Resource):
             .where(wanted_condition)) \
             .scalar()
 
-        return marshal({'data': results, 'total': count}, self.get_response_model)
+        return {'data': results, 'total': count}
