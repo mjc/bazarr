@@ -133,7 +133,7 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
         else:
             audio_profiles = get_profile_list()
             tagsDict = get_tags()
-            if tagsDict is None:
+            if audio_profiles is None or tagsDict is None:
                 return
             language_profiles = get_language_profiles()
             lookups = ArrSyncLookups(tagsDict, language_profiles, audio_profiles)
@@ -270,7 +270,7 @@ def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_
 
     audio_profiles = get_profile_list()
     tagsDict = get_tags()
-    if tagsDict is None:
+    if audio_profiles is None or tagsDict is None:
         return
     language_profiles = get_language_profiles()
     lookups = ArrSyncLookups(tagsDict, language_profiles, audio_profiles)

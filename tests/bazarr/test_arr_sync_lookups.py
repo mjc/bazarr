@@ -50,13 +50,6 @@ def test_audio_profiles_preserve_duplicates_and_id_equality() -> None:
     assert lookups.audio_languages(1) == ['English', 'French', 'Spanish']
 
 
-def test_unavailable_audio_profiles_fail_only_when_needed() -> None:
-    lookups = ArrSyncLookups([], [], None)
-    assert lookups.tags([]) == []
-    with pytest.raises(TypeError):
-        lookups.audio_languages(1)
-
-
 def test_catalogue_is_consumed_once() -> None:
     seen: list[int] = []
 
