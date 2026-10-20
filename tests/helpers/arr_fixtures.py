@@ -51,7 +51,7 @@ def stub_arr_api(monkeypatch: pytest.MonkeyPatch, module: ModuleType, name: str,
 
     @wraps(fetch)
     def response(*args: Params.args, **kwargs: Params.kwargs) -> (
-        list[ArrFixtureRecord | None] | None
+        Sequence[ArrFixtureRecord | None] | None
     ):
         single = len(args) > 1 or any(kwargs.get(key) is not None for key in (
             'radarr_id', 'sonarr_series_id', 'episode_id', 'episode_file_id'))

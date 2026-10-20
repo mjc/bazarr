@@ -29,7 +29,7 @@ def test_profile_boundary_filters_invalid_rows_before_indexing(kind: str, legacy
     language: JsonValue = 'English' if legacy or kind == 'sonarr' else {'name': 'English'}
     key = 'name' if kind == 'sonarr' and not legacy else 'language'
     rows: list[JsonValue] = [{key: language, 'id': identifier} for identifier in (1, 1.0, True, '1')]
-    rows += [{key: language, 'id': [1]}, {key: 123, 'id': 2}, {key: language}, None]
+    rows.extend([{key: language, 'id': [1]}, {key: 123, 'id': 2}, {key: language}, None])
     response = make_response(json.dumps(rows).encode())
     monkeypatch.setattr(module.requests, 'get', lambda *args, **kwargs: response)
 
