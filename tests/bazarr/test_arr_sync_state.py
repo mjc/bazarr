@@ -18,6 +18,7 @@ from tests.bazarr.test_sync_lookups import configure_episodes, configure_movies
 from tests.bazarr.test_sync_lookups import sql_reads as sql_reads
 from tests.helpers.arr_fixtures import series_payload, series_record
 from utilities.arr_sync_state import EPISODE_STATE, MOVIE_STATE, SERIES_STATE, values_match
+from utilities.arr_files import FileSizes
 from utilities.arr_sync_lookups import ArrSyncLookups
 from utilities.arr_types import WriteOutcome
 
@@ -224,9 +225,10 @@ def test_movie_catalogue_keeps_duplicate_updates_and_unknown_id_safety(
     memory_session: Session, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     record = configure_movies(monkeypatch, memory_session, 1)[0]
-    assert movies._retained_movie_ids([record], file_sizes={}) == {1}
-    assert movies._retained_movie_ids([record, record], file_sizes={}) is None
-    assert movies._retained_movie_ids([record, IncompleteMovie(None, None, None)], file_sizes={}) is None
+    sizes = FileSizes(lambda path: path)
+    assert movies._retained_movie_ids([record], file_sizes=sizes) == {1}
+    assert movies._retained_movie_ids([record, record], file_sizes=sizes) is None
+    assert movies._retained_movie_ids([record, IncompleteMovie(None, None, None)], file_sizes=sizes) is None
 
 
 def test_movie_selection_preserves_progress_for_complete_records_without_files(

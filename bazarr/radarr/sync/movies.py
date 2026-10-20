@@ -18,7 +18,7 @@ from app.database import TableMovies, TableLanguagesProfiles, TableMissingSubtit
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue, JobCanceled
 from app.notifier import send_notifications_movie
-from utilities.arr_files import is_usable_file
+from utilities.arr_files import FileSizes, is_usable_file
 from radarr.rootfolder import check_radarr_rootfolder
 from subtitles.indexer.movies import store_subtitles_movie
 from utilities.arr_sync_lookups import ArrSyncLookups, default_profile_id
@@ -59,18 +59,17 @@ def _classify_movie(movie: Movie | IncompleteMovie) -> MovieSelection:
             return 'preserve'
 
 
-def _retains_movie(selection: MovieSelection, *, file_sizes: dict[str, int]) -> bool:
+def _retains_movie(selection: MovieSelection, *, file_sizes: FileSizes) -> bool:
     match selection:
         case 'remove':
             return False
         case 'preserve':
             return True
         case (_, file) | (FileState() as file):
-            return is_usable_file(file.path, file.size,
-                                  path_replace=path_mappings.path_replace_movie, file_sizes=file_sizes)
+            return is_usable_file(file.path, file_sizes.resolve(file.path, file.size))
 
 
-def _retained_movie_ids(movies: list[Movie | IncompleteMovie], *, file_sizes: dict[str, int]) -> set[int] | None:
+def _retained_movie_ids(movies: list[Movie | IncompleteMovie], *, file_sizes: FileSizes) -> set[int] | None:
     identifiers: set[int] = set()
     retained_ids: set[int] = set()
     for movie in movies:
@@ -197,7 +196,7 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                 row['radarrId']: row
                 for row in database.execute(MOVIE_STATE).mappings()
             }
-            file_sizes: dict[str, int] = {}
+            file_sizes = FileSizes(path_mappings.path_replace_movie)
             retained_ids = _retained_movie_ids(movies, file_sizes=file_sizes)
 
             # Remove movies from DB that either no longer exist in Radarr or exist and Radarr says do not have a movie file
@@ -312,7 +311,7 @@ def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_
         movie: MovieValues | None = None
         for movie_data in records:
             selection = _classify_movie(movie_data)
-            if _retains_movie(selection, file_sizes={}):
+            if _retains_movie(selection, file_sizes=FileSizes(path_mappings.path_replace_movie)):
                 match selection:
                     case (record, file):
                         if action == 'updated':
