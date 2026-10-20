@@ -1,5 +1,7 @@
 # coding=utf-8
 
+from typing import overload
+
 import requests
 import logging
 import semver
@@ -86,7 +88,17 @@ def get_tags() -> list[ArrTag] | None:
             return [tag for tag in tags if tag is not None] if tags is not None else None
 
 
-def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None) -> list[Series | None] | None:
+@overload
+def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int) -> list[Series] | None: ...
+
+
+@overload
+def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: None = None) -> list[Series | None] | None: ...
+
+
+def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None) -> (
+    list[Series] | list[Series | None] | None
+):
     url_sonarr_api_series = (f"{url_api_sonarr()}series/{sonarr_series_id if sonarr_series_id else ''}?"
                              f"apikey={apikey_sonarr}")
     try:
@@ -114,8 +126,9 @@ def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None 
             if r.status_code != 200:
                 return None
             result = SERIES_DECODER.decode_response(r, single=sonarr_series_id is not None)
-            if sonarr_series_id is not None and result and (result[0] is None or result[0].id != sonarr_series_id):
-                return None
+            if sonarr_series_id is not None:
+                if result is None or len(result) != 1 or result[0] is None or result[0].id != sonarr_series_id:
+                    return None
             return result
 
 

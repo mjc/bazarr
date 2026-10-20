@@ -183,7 +183,6 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
     if (not isinstance(series_data, list) or len(series_data) != 1
             or not isinstance(series_data[0], Series) or series_data[0].id != int(series_id)):
         return
-
     if action == 'updated' and existing_series:
         # Update existing series in DB
         series = seriesParser(series_data[0], action='update', lookups=lookups,
