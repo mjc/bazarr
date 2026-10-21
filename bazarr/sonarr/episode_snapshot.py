@@ -1,8 +1,8 @@
 # coding=utf-8
 
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import datetime
 from dataclasses import dataclass
-from collections.abc import Sequence
 from typing import Annotated, TypeAlias, TypedDict
 from typing_extensions import NotRequired
 
@@ -73,6 +73,12 @@ class EpisodeValues(TypedDict):
     tvdbId: int | None
     created_at_timestamp: NotRequired[datetime]
     updated_at_timestamp: NotRequired[datetime]
+
+
+def episodes_with_files(episodes: Iterable[Episode]) -> Iterator[tuple[Episode, EpisodeFile]]:
+    for episode in episodes:
+        if (file := episode.episodeFile) is not None:
+            yield episode, file
 
 
 def complete_episode_snapshot(episodes: list[Episode], episode_files: Sequence[EpisodeFile] = (),

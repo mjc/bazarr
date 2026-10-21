@@ -2,19 +2,23 @@
 
 import logging
 import gc
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from itertools import islice
 
 from sonarr.series_snapshot import Series
 
+from sqlalchemy import bindparam
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.engine import RowMapping
 from datetime import datetime
 
 from app.config import settings
 from sonarr.rootfolder import check_sonarr_rootfolder
-from app.database import TableShows, TableLanguagesProfiles, database, insert, update, select, text_boolean
+from app.database import TableShows, TableLanguagesProfiles, database, insert, update, select
 from utilities.arr_sync_lookups import ArrSyncLookups, default_profile_id
 from utilities.arr_types import KEEP_PROFILE
 from utilities.arr_sync_state import SERIES_STATE, values_match
+from utilities.helper import bool_map
 from utilities.path_mappings import path_mappings
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue, JobCanceled
@@ -26,9 +30,10 @@ from .utils import get_profile_list, get_tags, get_series_from_sonarr_api
 from subtitles.wanted_state import delete_series_and_wanted_search_state
 
 FEATURE_PREFIX = "SYNC_SERIES "
+SERIES_SYNC_BATCH_SIZE = 100
 
 
-def trace(message):
+def trace(message: str) -> None:
     if settings.general.debug:
         logging.debug(FEATURE_PREFIX + message)
 
@@ -38,12 +43,6 @@ def get_language_profiles() -> Sequence[tuple[int, str, str | None]]:
         select(TableLanguagesProfiles.profileId, TableLanguagesProfiles.name, TableLanguagesProfiles.tag)).tuples().all()
 
 
-def get_series_monitored_table() -> dict[int, bool]:
-    return {identifier: monitored for identifier, monitored in database.execute(
-        select(TableShows.sonarrSeriesId, text_boolean(TableShows.monitored))).tuples()
-        if identifier is not None and monitored is not None}
-
-
 def update_series(job_id: int | None = None, wait_for_completion: bool = False) -> None:
     if not job_id:
         jobs_queue.add_job_from_function("Syncing series with Sonarr", is_progress=True,
@@ -51,6 +50,8 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
         return
     else:
         job = jobs_queue.get_job(job_id=job_id)
+        if job is None:
+            return
 
     # Update root folders and update their health status
     check_sonarr_rootfolder()
@@ -62,28 +63,19 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
         logging.exception(f"BAZARR Error trying to get series from Sonarr: {e}")
         return
     else:
-        if not isinstance(series, list):
+        if series is None:
             logging.debug('BAZARR Sonarr series sync returned an invalid payload. Skipping sync.')
             jobs_queue.update_job_name(job_id=job_id, new_job_name="Synced series with Sonarr")
             gc.collect()
             return
 
         # Get current shows in DB
-        current_shows_db = [x.sonarrSeriesId for x in
-                            database.execute(
-                                select(TableShows.sonarrSeriesId))
-                            .all()]
-
-        current_shows_sonarr: set[int] = set()
-        complete_series_list = True
-
+        stored_series: dict[int, RowMapping] = {row['sonarrSeriesId']: row for row in database.execute(
+            select(TableShows.sonarrSeriesId, TableShows.monitored)).mappings()}
+        monitoring_loaded = True if settings.sonarr.sync_only_monitored_series else False
         series_count = len(series)
         skipped_count = 0
-
-        series_monitored = None
-        if settings.sonarr.sync_only_monitored_series:
-            # Get current series monitored status in DB
-            series_monitored = get_series_monitored_table()
+        identifiers: set[int] = set()
 
         audio_profiles = get_profile_list()
         tagsDict = get_tags()
@@ -95,49 +87,55 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
         trace(f"Starting sync for {series_count} shows")
 
         jobs_queue.update_job_progress(job_id=job_id, progress_max=series_count)
-        for i, show in enumerate(series, start=1):
-            if job.cancel_event.is_set():
-                raise JobCanceled
+        if series_count and job.cancel_event.is_set():
+            raise JobCanceled
 
-            if not isinstance(show, Series) or show.id <= 0 or show.id in current_shows_sonarr:
-                complete_series_list = False
-                skipped_count += 1
-                continue
-            show_id = show.id
-            jobs_queue.update_job_progress(job_id=job_id, progress_value=i, progress_message=show.title)
+        def identified_series() -> Iterator[tuple[int, Series]]:
+            for position, show in enumerate(series, start=1):
+                if show is None or show.id in identifiers:
+                    continue
+                identifiers.add(show.id)
+                yield position, show
 
-            if (settings.sonarr.sync_only_monitored_series and not show.monitored
-                    and series_monitored is not None and series_monitored.get(show.id) is False):
-                trace(f"{i}: (Skipped Unmonitored) {show.title}")
-                current_shows_sonarr.add(show_id)
-                skipped_count += 1
-                continue
+        stored_query = SERIES_STATE.where(TableShows.sonarrSeriesId.in_(bindparam('series_ids', expanding=True)))
+        records = identified_series()
+        while batch := list(islice(records, SERIES_SYNC_BATCH_SIZE)):
+            stored_batch = {row['sonarrSeriesId']: row for row in database.execute(
+                stored_query, {'series_ids': [show.id for _, show in batch]}).mappings()}
+            for position, show in batch:
+                if job.cancel_event.is_set():
+                    raise JobCanceled
 
-            trace(f"{i}: (Processing) {show.title}")
+                show_id = show.id
+                jobs_queue.update_job_progress(job_id=job_id, progress_value=position, progress_message=show.title)
+                initial = stored_series.get(show_id)
+                initial_monitored: str | None = initial['monitored'] if initial is not None else None
+                if (monitoring_loaded and settings.sonarr.sync_only_monitored_series and not show.monitored
+                        and bool_map.get(initial_monitored or '') is False):
+                    trace(f"{position}: (Skipped Unmonitored) {show.title}")
+                    skipped_count += 1
+                    continue
 
-            # Keep series present in Sonarr.
-            current_shows_sonarr.add(show_id)
-
-            # Update series in DB
-            update_one_series(show_id, action='updated', sync_episodes_after_update=False,
-                              series_data=[show], lookups=lookups)
-
-            # Update episodes in DB
-            sync_episodes(series_id=show_id)
+                trace(f"{position}: (Processing) {show.title}")
+                # Pop metadata so the processed row is released before the episode sync.
+                # The initial row also preserves UPDATE semantics if the show was deleted meanwhile.
+                _sync_series(show, lookups, stored_batch.pop(show_id, initial))
+                sync_episodes(series_id=show_id)
 
         # Calculate series to remove from DB
+        invalid_count = series_count - len(identifiers)
         removed_series = (
-            list(set(current_shows_db) - current_shows_sonarr) if complete_series_list else []
+            () if invalid_count else stored_series.keys() - identifiers
         )
-        if not complete_series_list:
+        if invalid_count:
             logging.warning('BAZARR Skipping series deletion because Sonarr returned unidentified series.')
 
-        for series in removed_series:
+        for series_id in removed_series:
             # Remove series from DB
-            update_one_series(series, action='deleted')
+            update_one_series(series_id, action='deleted')
 
         if settings.sonarr.sync_only_monitored_series:
-            trace(f"skipped {skipped_count} unmonitored series out of {series_count}")
+            trace(f"skipped {skipped_count + invalid_count} unmonitored series out of {series_count}")
 
         logging.debug('BAZARR All series synced from Sonarr into database.')
 
@@ -146,8 +144,8 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
     gc.collect()
 
 
-def update_one_series(series_id: int, action: str, is_signalr: bool = False, sync_episodes_after_update: bool = True,
-                      series_data: list[Series | None] | None = None, *, lookups: ArrSyncLookups | None = None) -> None:
+def update_one_series(series_id: int, action: str, is_signalr: bool = False,
+                      sync_episodes_after_update: bool = True) -> None:
     logging.debug(f'BAZARR syncing this specific series from Sonarr: {series_id}')
 
     # Check if there's a row in database for this series ID
@@ -163,78 +161,59 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
         event_stream(type='series', action='delete', payload=int(series_id))
         return
 
-    serie_default_profile = (default_profile_id(settings.general.serie_default_profile)
-                             if settings.general.serie_default_enabled is True else None)
-
-    if lookups is None:
-        audio_profiles = get_profile_list()
-        tagsDict = get_tags()
-        if audio_profiles is None or tagsDict is None:
-            return
-        language_profiles = get_language_profiles()
-        lookups = ArrSyncLookups(tagsDict, language_profiles, audio_profiles)
-
-    if series_data is None:
-        try:
-            # Get series data from sonarr api
-            series_data = get_series_from_sonarr_api(apikey_sonarr=settings.sonarr.apikey, sonarr_series_id=int(series_id))
-        except Exception:
-            logging.exception(f'BAZARR cannot get series with ID {series_id} from Sonarr API.')
-            return
-
-    if (not isinstance(series_data, list) or len(series_data) != 1
-            or not isinstance(series_data[0], Series) or series_data[0].id != series_id):
-        return
-
     if action != 'updated':
         return
-    show = series_data[0]
-    tags = lookups.tags(show.tags)
+    audio_profiles = get_profile_list()
+    tagsDict = get_tags()
+    if audio_profiles is None or tagsDict is None:
+        return
+    lookups = ArrSyncLookups(tagsDict, get_language_profiles(), audio_profiles)
+    try:
+        records = get_series_from_sonarr_api(apikey_sonarr=settings.sonarr.apikey, sonarr_series_id=series_id)
+        if not records:
+            return
+    except Exception:
+        logging.exception(f'BAZARR cannot get series with ID {series_id} from Sonarr API.')
+        return
+    for series_data in records:
+        _sync_series(series_data, lookups, existing_series,
+                     refresh_episodes=sync_episodes_after_update and not is_signalr)
+
+
+def _sync_series(series_data: Series, lookups: ArrSyncLookups, existing_series: RowMapping | None,
+                 *, refresh_episodes: bool = False) -> None:
+    serie_default_profile = (default_profile_id(settings.general.serie_default_profile)
+                             if settings.general.serie_default_enabled is True else None)
+    tags = lookups.tags(series_data.tags)
     general = settings.general
-    audio_language = ('[]' if general.parse_embedded_audio_track else
-                      lookups.audio_language_values.get(show.languageProfileId, '[]'))
     tag_enabled = general.serie_tag_enabled
     series = map_series(
-        show, audio_language=audio_language, tags=tags,
+        series_data, tags=tags,
+        audio_language=('[]' if general.parse_embedded_audio_track else
+                        lookups.audio_language_values.get(series_data.languageProfileId, '[]')),
         profile_id=lookups.profile_id(
             tags, KEEP_PROFILE if existing_series else serie_default_profile,
             enabled=tag_enabled, remove_tags=general.remove_profile_tags if tag_enabled else ()))
 
-    if existing_series:
-        # Update existing series in DB
-        if values_match(existing_series, series):
-            if sync_episodes_after_update and not is_signalr:
-                sync_episodes(series_id=series['sonarrSeriesId'])
-            return
-
-        try:
+    if existing_series and values_match(existing_series, series):
+        if refresh_episodes:
+            sync_episodes(series_id=series['sonarrSeriesId'])
+        return
+    try:
+        if existing_series:
             series['updated_at_timestamp'] = datetime.now()
             database.execute(
                 update(TableShows)
                 .values(series)
                 .where(TableShows.sonarrSeriesId == series['sonarrSeriesId']))
-        except IntegrityError as e:
-            logging.error(f"BAZARR cannot update series {series['path']} because of {e}")
         else:
-            if sync_episodes_after_update and not is_signalr:
-                # Sonarr emit two SignalR events when episodes must be refreshed.
-                # The one that gets there doesn't include the episodeChanged flag.
-                # The episodes are synced only when this function is called from the
-                # frontend sync button in the episodes' page.
-                sync_episodes(series_id=series['sonarrSeriesId'])
-            event_stream(type='series', action='update', payload=series['sonarrSeriesId'])
-            logging.debug(
-                f'BAZARR updated this series into the database:{path_mappings.path_replace(series["path"])}')
-    else:
-        # Insert new series in DB
-        try:
             series['created_at_timestamp'] = datetime.now()
-            database.execute(
-                insert(TableShows)
-                .values(series))
-        except IntegrityError as e:
-            logging.error(f"BAZARR cannot insert series {series['path']} because of {e}")
-        else:
-            event_stream(type='series', action='update', payload=series['sonarrSeriesId'])
-            logging.debug(
-                f'BAZARR inserted this series into the database:{path_mappings.path_replace(series["path"])}')
+            database.execute(insert(TableShows).values(series))
+    except IntegrityError as e:
+        logging.error(f"BAZARR cannot {'update' if existing_series else 'insert'} series {series['path']} because of {e}")
+        return
+    if existing_series and refresh_episodes:
+        # A manual refresh syncs episodes; SignalR schedules them separately.
+        sync_episodes(series_id=series['sonarrSeriesId'])
+    event_stream(type='series', action='update', payload=series['sonarrSeriesId'])
+    logging.debug(f'BAZARR synced this series into the database:{path_mappings.path_replace(series["path"])}')

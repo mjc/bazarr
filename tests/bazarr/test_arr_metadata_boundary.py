@@ -15,6 +15,7 @@ from radarr.sync import movies, utils as radarr
 from sonarr.info import get_sonarr_info
 from sonarr.series_snapshot import Series
 from sonarr.sync import series, utils as sonarr
+from sqlalchemy.engine import RowMapping
 from tests.bazarr.test_arr_typed_decoding import make_response
 from tests.bazarr.test_sync_lookups import configure_movies
 from tests.helpers.arr_fixtures import series_payload, series_record
@@ -111,10 +112,11 @@ def test_series_monitored_state_is_normalized_before_filtering(stored: str | Non
     monkeypatch.setattr(series, 'get_profile_list', Mock(return_value=[]))
     monkeypatch.setattr(series, 'get_language_profiles', Mock(return_value=[]))
 
-    def record_update(identifier: int, **_kwargs: str | bool | Series | ArrSyncLookups) -> None:
-        updated.append(identifier)
+    def record_update(show: Series, lookups: ArrSyncLookups, stored: RowMapping | None,
+                      *, refresh_episodes: bool = False) -> None:
+        updated.append(show.id)
 
-    monkeypatch.setattr(series, 'update_one_series', record_update)
+    monkeypatch.setattr(series, '_sync_series', record_update)
     monkeypatch.setattr(series, 'sync_episodes', Mock(return_value=None))
     monkeypatch.setattr('app.config.settings.sonarr.sync_only_monitored_series', True)
     monkeypatch.setattr(series, 'jobs_queue', SimpleNamespace(

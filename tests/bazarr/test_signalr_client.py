@@ -332,11 +332,10 @@ def dispatch(sr_settings, stream, monkeypatch):
     monkeypatch.setattr(sr, "database", database)
     calls = SimpleNamespace(
         sync_episodes=mock.MagicMock(), update_one_series=mock.MagicMock(),
-        sync_one_episode=mock.MagicMock(), update_one_movie=mock.MagicMock(), database=database,
+        update_one_movie=mock.MagicMock(), database=database,
     )
     monkeypatch.setattr(sr, "sync_episodes", calls.sync_episodes)
     monkeypatch.setattr(sr, "update_one_series", calls.update_one_series)
-    monkeypatch.setattr(sr, "sync_one_episode", calls.sync_one_episode)
     monkeypatch.setattr(sr, "update_one_movie", calls.update_one_movie)
     return calls
 
@@ -362,8 +361,17 @@ def test_dispatch_episode_with_embedded_series_syncs_episode(dispatch):
         "id": 9, "title": "Pilot", "seasonNumber": 1, "episodeNumber": 2,
         "series": {"title": "Show", "year": 2020}}}})
 
-    dispatch.sync_one_episode.assert_called_once_with(episode_id=9, defer_search=False, is_signalr=True)
+    dispatch.sync_episodes.assert_called_once_with(episode_ids=[9], defer_search=False, is_signalr=True)
     dispatch.database.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('identifier', [None, True, 0, -1, '9', 9.5])
+def test_dispatch_episode_rejects_invalid_episode_identity(dispatch, identifier):
+    sr.dispatcher({"name": "episode", "body": {"action": "updated", "resource": {
+        "id": identifier, "title": "Pilot", "seasonNumber": 1, "episodeNumber": 2,
+        "series": {"title": "Show", "year": 2020}}}})
+
+    dispatch.sync_episodes.assert_not_called()
 
 
 def test_dispatch_episode_without_embedded_series_looks_up_series(dispatch):
@@ -373,7 +381,7 @@ def test_dispatch_episode_without_embedded_series_looks_up_series(dispatch):
         "id": 9, "title": "Pilot", "seasonNumber": 1, "episodeNumber": 2, "seriesId": 5}}})
 
     dispatch.database.execute.assert_called_once()
-    dispatch.sync_one_episode.assert_called_once_with(episode_id=9, defer_search=False, is_signalr=True)
+    dispatch.sync_episodes.assert_called_once_with(episode_ids=[9], defer_search=False, is_signalr=True)
 
 
 def test_dispatch_movie_added_updates_movie(dispatch):

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import Enum, auto
 import re
-from typing import Annotated, TypeAlias
+from typing import Annotated, Literal, TypeAlias
 from typing_extensions import TypedDict
 
 from pydantic import BeforeValidator, Field, StrictInt, StrictStr, TypeAdapter
@@ -31,6 +31,7 @@ ProfileAssignment: TypeAlias = int | None | _KeepProfile
 
 ProfileId: TypeAlias = int | float | str | bool
 AudioProfile: TypeAlias = tuple[ProfileId, str]
+WriteOutcome: TypeAlias = Literal['failed', 'updated', 'reindexed']
 
 
 @dataclass(slots=True)

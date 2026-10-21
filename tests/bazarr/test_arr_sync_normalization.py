@@ -2,13 +2,15 @@ import json
 from unittest.mock import Mock
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from app.database import TableShows
 from radarr.movie_snapshot import IncompleteMovie, Movie
 from radarr.sync import audio as movie_audio, utils as radarr
 from radarr.sync.parser import map_movie
 from sonarr.series_snapshot import Series
-from sonarr.sync import utils as sonarr
-from sonarr.sync.parser import map_series
+from sonarr.sync import series as series_sync, utils as sonarr
 from tests.bazarr.test_arr_typed_decoding import make_response
 from tests.helpers.arr_fixtures import movie_payload, series_payload
 from utilities.arr_sync_lookups import ArrSyncLookups
@@ -67,7 +69,7 @@ def test_movie_response_normalizes_version_fields_before_mapping(
 @pytest.mark.parametrize('legacy', [False, True])
 @pytest.mark.parametrize('single', [False, True])
 def test_series_response_selects_audio_profile_once_at_the_boundary(
-    legacy: bool, single: bool, monkeypatch: pytest.MonkeyPatch,
+    legacy: bool, single: bool, monkeypatch: pytest.MonkeyPatch, memory_session: Session,
 ) -> None:
     payload = series_payload(series_id=1)
     payload['qualityProfileId'] = 7
@@ -83,9 +85,12 @@ def test_series_response_selects_audio_profile_once_at_the_boundary(
     assert isinstance(show, Series)
     assert show.languageProfileId == (7 if legacy else 8)
     lookups = ArrSyncLookups([], [], [(7, 'English'), (8, 'French')])
-    audio = lookups.audio_language_values.get(show.languageProfileId, '[]')
-    assert audio is lookups.audio_language_values.get(show.languageProfileId, '[]')
-    assert map_series(show, audio_language=audio, tags=[])['audio_language'] == (
+    monkeypatch.setattr(series_sync, 'database', memory_session)
+    monkeypatch.setattr(series_sync, 'event_stream', Mock())
+    for setting in ('serie_default_enabled', 'serie_tag_enabled', 'parse_embedded_audio_track'):
+        monkeypatch.setattr(series_sync.settings.general, setting, False)
+    series_sync._sync_series(show, lookups, None)
+    assert memory_session.execute(select(TableShows.audio_language)).scalar_one() == (
         "['English']" if legacy else "['French']")
     if not single:
         assert records[1] is None

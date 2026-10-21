@@ -7,14 +7,27 @@ from sqlalchemy.orm import Session
 
 from app.database import TableEpisodes, TableFailedSubtitleAttempts, TableMissingSubtitles
 from sonarr.sync import episodes
+from sonarr.episode_snapshot import Episode
 from subtitles import wanted_state
 from tests.bazarr.test_sync_lookups import configure_episodes, sql_reads
 
 
 @pytest.mark.parametrize('count', [1, 20, 205])
-def test_sync_loads_due_episodes_once(count: int, memory_session: Session,
+@pytest.mark.parametrize('selected', [False, True])
+def test_sync_loads_due_episodes_once(count: int, selected: bool, memory_session: Session,
                                     monkeypatch: pytest.MonkeyPatch, sql_reads: list[str]) -> None:
-    configure_episodes(monkeypatch, memory_session, count)
+    records = configure_episodes(monkeypatch, memory_session, count)
+    if selected:
+        by_id = {record.id: record for record in records}
+        for record in records:
+            assert record.episodeFile is not None
+            record.episodeFile.id += 1
+
+        def fetch(*, apikey_sonarr: str, episode_id: int) -> list[Episode]:
+            return [by_id[episode_id]]
+
+        monkeypatch.setattr(episodes, 'get_episodes_from_sonarr_api', fetch)
+        monkeypatch.setattr(episodes, 'store_subtitles', lambda identifier: None)
     monkeypatch.setattr(wanted_state, 'database', memory_session)
     monkeypatch.setattr(wanted_state, 'get_adaptive_search_policy', lambda: None)
     monkeypatch.setattr(episodes, 'get_exclusion_clause', lambda kind: [])
@@ -27,7 +40,10 @@ def test_sync_loads_due_episodes_once(count: int, memory_session: Session,
     memory_session.flush()
     sql_reads.clear()
 
-    episodes.sync_episodes(7)
+    if selected:
+        episodes.sync_episodes(episode_ids=[record.id for record in records])
+    else:
+        episodes.sync_episodes(7)
 
     assert len(sql_reads) == 4
     assert queued == list(range(1, count + 1))
@@ -51,11 +67,13 @@ def test_due_episode_lookup_preserves_exclusions_and_retry_windows(memory_sessio
     memory_session.flush()
 
     assert episodes._get_due_missing_episode_ids(series_id=7) == {1}
-    assert episodes._is_there_missing_subtitles(episode_id=1)
-    assert not episodes._is_there_missing_subtitles(episode_id=2)
-    assert not episodes._is_there_missing_subtitles(episode_id=3)
-    assert not episodes._is_there_missing_subtitles()
-    assert not episodes._is_there_missing_subtitles(series_id=7, episode_id=1)
+    assert episodes._get_due_missing_episode_ids(episode_ids={1, 2, 3}) == {1}
+    assert episodes._get_due_missing_episode_ids(episode_ids=set()) == set()
+    assert episodes._get_due_missing_episode_ids(episode_ids=[1]) == {1}
+    assert not episodes._get_due_missing_episode_ids(episode_ids=[2])
+    assert not episodes._get_due_missing_episode_ids(episode_ids=[3])
+    assert not episodes._get_due_missing_episode_ids()
+    assert not episodes._get_due_missing_episode_ids(series_id=7, episode_ids=[1])
 
 
 def test_sync_checks_missing_state_after_indexing(memory_session: Session,
