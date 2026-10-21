@@ -81,6 +81,7 @@ def movieParser(movie: Movie, file: MovieFile, action: str, lookups: ArrSyncLook
         tag_profile = lookups.matching_profile(tags)
         if tag_profile:
             parsed['profileId'] = tag_profile
-        if set(tags) & set(general_settings.remove_profile_tags):
+        remove_profile_tags = general_settings.remove_profile_tags
+        if remove_profile_tags and not set(remove_profile_tags).isdisjoint(tags):
             parsed['profileId'] = None
     return parsed
