@@ -213,7 +213,7 @@ def test_radarr_movie_sync_handles_malformed_movie_file_fields(monkeypatch, sync
     monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(os.path, 'getsize', Mock(return_value=0))
-    monkeypatch.setattr(radarr_movies, "trace", traces.append)
+    monkeypatch.setattr(radarr_movies.logging, "debug", lambda message, *args: traces.append(message % args))
     stub_arr_api(
         monkeypatch, radarr_movies,
         "get_movies_from_radarr_api",
@@ -238,7 +238,7 @@ def test_radarr_movie_sync_handles_malformed_movie_file_fields(monkeypatch, sync
 
     assert progress[0]["progress_max"] == 2
     assert names == ["Synced movies with Radarr"]
-    assert "Skipped 2 file missing movies out of 2" in traces
+    assert "SYNC_MOVIES Skipped 2 file missing movies out of 2" in traces
 
 
 def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monkeypatch, sync_job):
@@ -255,7 +255,7 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
     monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(os.path, 'getsize', Mock(return_value=0))
-    monkeypatch.setattr(radarr_movies, "trace", traces.append)
+    monkeypatch.setattr(radarr_movies.logging, "debug", lambda message, *args: traces.append(message % args))
     stub_arr_api(
         monkeypatch, radarr_movies,
         "get_movies_from_radarr_api",
@@ -296,7 +296,7 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
 
     assert progress[0]["progress_max"] == 2
     assert names == ["Synced movies with Radarr"]
-    assert "Skipped 2 file missing movies out of 2" in traces
+    assert "SYNC_MOVIES Skipped 2 file missing movies out of 2" in traces
 
 
 def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch, sync_job):
@@ -314,7 +314,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
     monkeypatch.setattr(radarr_movies, "get_tags", lambda: [])
     monkeypatch.setattr(radarr_movies, "get_language_profiles", lambda: [])
     monkeypatch.setattr(os.path, 'getsize', Mock(return_value=0))
-    monkeypatch.setattr(radarr_movies, "trace", traces.append)
+    monkeypatch.setattr(radarr_movies.logging, "debug", lambda message, *args: traces.append(message % args))
     stub_arr_api(
         monkeypatch, radarr_movies,
         "get_movies_from_radarr_api",
@@ -353,7 +353,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
 
     assert progress[0]["progress_max"] == 4
     assert parsed_movies == ["Good Movie", "added:Good Movie"]
-    assert "Skipped 1 file missing movies out of 4" in traces
+    assert "SYNC_MOVIES Skipped 1 file missing movies out of 4" in traces
     assert names == ["Synced movies with Radarr"]
 
 

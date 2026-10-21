@@ -28,13 +28,7 @@ from .utils import get_profile_list, get_tags, get_series_from_sonarr_api
 
 from subtitles.wanted_state import delete_series_and_wanted_search_state
 
-FEATURE_PREFIX = "SYNC_SERIES "
 SERIES_SYNC_BATCH_SIZE = 100
-
-
-def trace(message: str) -> None:
-    if settings.general.debug:
-        logging.debug(FEATURE_PREFIX + message)
 
 
 def get_language_profiles() -> Sequence[tuple[int, str, str | None]]:
@@ -83,7 +77,7 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
         language_profiles = get_language_profiles()
         lookups = ArrSyncLookups(tagsDict, language_profiles, audio_profiles)
 
-        trace(f"Starting sync for {series_count} shows")
+        logging.debug('SYNC_SERIES Starting sync for %s shows', series_count)
 
         jobs_queue.update_job_progress(job_id=job_id, progress_max=series_count)
         if series_count and job.cancel_event.is_set():
@@ -117,11 +111,11 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
                 initial_monitored: str | None = initial['monitored'] if initial is not None else None
                 if (monitoring_loaded and settings.sonarr.sync_only_monitored_series and not show.monitored
                         and bool_map.get(initial_monitored or '') is False):
-                    trace(f"{position}: (Skipped Unmonitored) {show.title}")
+                    logging.debug('SYNC_SERIES %s: (Skipped Unmonitored) %s', position, show.title)
                     skipped_count += 1
                     continue
 
-                trace(f"{position}: (Processing) {show.title}")
+                logging.debug('SYNC_SERIES %s: (Processing) %s', position, show.title)
                 # Pop metadata so the processed row is released before the episode sync.
                 # The initial row also preserves UPDATE semantics if the show was deleted meanwhile.
                 _sync_series(show, lookups, stored_batch.pop(show_id, initial))
@@ -141,7 +135,7 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
             update_one_series(series_id, action='deleted')
 
         if settings.sonarr.sync_only_monitored_series:
-            trace(f"skipped {skipped_count + invalid_count} unmonitored series out of {series_count}")
+            logging.debug('SYNC_SERIES skipped %s unmonitored series out of %s', skipped_count + invalid_count, series_count)
 
         logging.debug('BAZARR All series synced from Sonarr into database.')
 
@@ -152,7 +146,7 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
 
 def update_one_series(series_id: int, action: str, is_signalr: bool = False,
                       sync_episodes_after_update: bool = True) -> None:
-    logging.debug(f'BAZARR syncing this specific series from Sonarr: {series_id}')
+    logging.debug('BAZARR syncing this specific series from Sonarr: %s', series_id)
 
     # Check if there's a row in database for this series ID
     existing_series = database.execute(
@@ -222,4 +216,4 @@ def _sync_series(series_data: Series, lookups: ArrSyncLookups, existing_series: 
         # A manual refresh syncs episodes; SignalR schedules them separately.
         sync_episodes(series_id=series['sonarrSeriesId'])
     event_stream(type='series', action='update', payload=series['sonarrSeriesId'])
-    logging.debug(f'BAZARR synced this series into the database:{path_mappings.path_replace(series["path"])}')
+    logging.debug('BAZARR synced this series into the database:%s', path_mappings.path_replace(series['path']))

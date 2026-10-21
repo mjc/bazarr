@@ -137,12 +137,12 @@ def test_series_counts_invalid_duplicate_and_unmonitored_records(
     traced = Mock()
     synced = Mock()
     monkeypatch.setattr(series, 'update_one_series', removed)
-    monkeypatch.setattr(series, 'trace', traced)
+    monkeypatch.setattr(series.logging, 'debug', traced)
     monkeypatch.setattr(series, 'sync_episodes', synced)
 
     series.update_series(job_id=1)
 
-    traced.assert_any_call('skipped 3 unmonitored series out of 4')
+    traced.assert_any_call('SYNC_SERIES skipped %s unmonitored series out of %s', 3, 4)
     synced.assert_called_once_with(series_id=first.id)
     removed.assert_not_called()
 
