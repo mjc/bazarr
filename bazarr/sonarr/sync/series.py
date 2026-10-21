@@ -2,8 +2,7 @@
 
 import logging
 import gc
-from collections.abc import Iterator, Sequence
-from itertools import islice
+from collections.abc import Sequence
 
 from sonarr.series_snapshot import Series
 
@@ -90,19 +89,25 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
         if series_count and job.cancel_event.is_set():
             raise JobCanceled
 
-        def identified_series() -> Iterator[tuple[int, Series]]:
-            for position, show in enumerate(series, start=1):
-                if show is None or show.id in identifiers:
-                    continue
-                identifiers.add(show.id)
-                yield position, show
+        series.reverse()
 
         stored_query = SERIES_STATE.where(TableShows.sonarrSeriesId.in_(bindparam('series_ids', expanding=True)))
-        records = identified_series()
-        while batch := list(islice(records, SERIES_SYNC_BATCH_SIZE)):
+        while series:
+            batch: list[tuple[int, Series]] = []
+            while series and len(batch) < SERIES_SYNC_BATCH_SIZE:
+                position = series_count - len(series) + 1
+                show = series.pop()
+                if show is not None and show.id not in identifiers:
+                    identifiers.add(show.id)
+                    batch.append((position, show))
+                del show
+            if not batch:
+                break
             stored_batch = {row['sonarrSeriesId']: row for row in database.execute(
                 stored_query, {'series_ids': [show.id for _, show in batch]}).mappings()}
-            for position, show in batch:
+            batch.reverse()
+            while batch:
+                position, show = batch.pop()
                 if job.cancel_event.is_set():
                     raise JobCanceled
 
@@ -120,6 +125,7 @@ def update_series(job_id: int | None = None, wait_for_completion: bool = False) 
                 # Pop metadata so the processed row is released before the episode sync.
                 # The initial row also preserves UPDATE semantics if the show was deleted meanwhile.
                 _sync_series(show, lookups, stored_batch.pop(show_id, initial))
+                del show
                 sync_episodes(series_id=show_id)
 
         # Calculate series to remove from DB

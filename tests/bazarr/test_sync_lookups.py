@@ -73,7 +73,7 @@ def configure_movies(monkeypatch: pytest.MonkeyPatch, session: Session, count: i
         record.title = f'Changed {identifier}'
         records.append(record)
     session.commit()
-    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: records)
+    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: records.copy())
     return records
 
 

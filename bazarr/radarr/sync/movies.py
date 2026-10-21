@@ -227,7 +227,9 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
             if movies_count and job.cancel_event.is_set():
                 raise JobCanceled
 
-            for i, record in enumerate(movies, start=1):
+            movies.reverse()
+            for i in range(1, movies_count + 1):
+                record = movies.pop()
                 title = record.title if isinstance(record, Movie) else None
                 if title is not None:
                     if job.cancel_event.is_set():
@@ -248,12 +250,14 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                         values = _movie_values(
                             movie, file, lookups,
                             profile_id=movie_default_profile if previous is None else KEEP_PROFILE)
+                        movie_id = movie.id
+                        del movie, file, record, selection
                         if previous is None:
                             _ = add_movie(values)
                             movies_added += 1
                         elif not values_match(previous, values) and update_movie(previous, values) != 'failed':
                             _ = values.setdefault('profileId', previous.get('profileId'))
-                            stored_movies[movie.id] = values
+                            stored_movies[movie_id] = values
                             movies_updated += 1
                         continue
                 if record.id is not None:

@@ -111,6 +111,7 @@ def sync_episodes(series_id: int | None = None, defer_search: bool = False, is_s
                 continue
             if response:
                 episodes.extend(response)
+            del response
     if not episodes:
         return
 
@@ -155,6 +156,8 @@ def sync_episodes(series_id: int | None = None, defer_search: bool = False, is_s
     if sync_monitored and settings.general.debug:
         series_title = database.execute(select(TableShows.title).where(TableShows.sonarrSeriesId == series_id)).scalar()
         trace(f"Skipped {skipped_count} unmonitored episodes out of {len(episodes)} for {series_title}")
+    del episodes, audio_languages, file_sizes
+    record = file = None
     episodes_to_delete = list(scope - current_episodes)
     if episodes_to_delete:
         try:

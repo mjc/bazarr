@@ -64,7 +64,7 @@ def configure_series(monkeypatch: pytest.MonkeyPatch, memory_session: Session, c
     memory_session.commit()
     monkeypatch.setattr(series, 'database', memory_session)
     monkeypatch.setattr(series, 'check_sonarr_rootfolder', Mock())
-    monkeypatch.setattr(series, 'get_series_from_sonarr_api', Mock(return_value=records))
+    monkeypatch.setattr(series, 'get_series_from_sonarr_api', Mock(side_effect=lambda **kwargs: records.copy()))
     monkeypatch.setattr(series, 'get_tags', Mock(return_value=[]))
     monkeypatch.setattr(series, 'get_profile_list', Mock(return_value=[]))
     monkeypatch.setattr(series, 'get_language_profiles', Mock(return_value=[]))
@@ -236,7 +236,7 @@ def test_movie_selection_preserves_progress_for_complete_records_without_files(
     absent.hasFile = False
     unknown.movieFile = None
     records = [IncompleteMovie(None, None, None), absent, unknown, ready]
-    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', Mock(return_value=records))
+    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', Mock(side_effect=lambda **kwargs: records.copy()))
     progress = Mock()
     monkeypatch.setattr(movies.jobs_queue, 'update_job_progress', progress)
 
