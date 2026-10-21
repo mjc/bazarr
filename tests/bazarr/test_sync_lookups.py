@@ -10,7 +10,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.engine.interfaces import DBAPICursor, ExecutionContext
 from sqlalchemy.orm import Session
 
-from app.database import TableEpisodes, TableMovies, TableShows
+from app.database import TableEpisodes, TableLanguagesProfiles, TableMovies, TableShows
 from radarr.movie_snapshot import Movie
 from radarr.sync import movies, parser as movie_parser
 from radarr.sync.utils import MOVIE_DECODER
@@ -98,6 +98,31 @@ def configure_episodes(monkeypatch: pytest.MonkeyPatch, session: Session, count:
     session.commit()
     monkeypatch.setattr(episodes, 'get_episodes_from_sonarr_api', lambda **kwargs: records)
     return records
+
+
+@pytest.mark.parametrize('profile_id', [0, 7])
+@pytest.mark.parametrize('configured_as_text', [False, True])
+@pytest.mark.parametrize('profile_exists', [False, True])
+def test_movie_default_profile_must_exist_after_normalization(
+    profile_id: int, configured_as_text: bool, profile_exists: bool,
+    memory_session: Session, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_movies(monkeypatch, memory_session, 0)
+    record = MOVIE_DECODER.complete_from_value(movie_payload())
+    assert isinstance(record, Movie)
+    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: [record])
+    monkeypatch.setattr(movies, 'store_subtitles_movie', lambda identifier: None)
+    monkeypatch.setattr(movies.settings.general, 'movie_default_enabled', True)
+    monkeypatch.setattr(movies.settings.general, 'movie_default_profile',
+                        str(profile_id) if configured_as_text else profile_id)
+    if profile_exists:
+        memory_session.add(TableLanguagesProfiles(profileId=profile_id, name='Default', items='[]'))
+        memory_session.commit()
+
+    movies.update_movies(job_id=1)
+
+    stored = memory_session.execute(select(TableMovies.profileId).where(TableMovies.radarrId == record.id)).scalar_one()
+    assert stored == (profile_id if profile_exists else None)
 
 
 @pytest.mark.parametrize('count', [1, 20, 205])

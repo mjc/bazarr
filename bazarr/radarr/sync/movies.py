@@ -115,7 +115,7 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                              if settings.general.movie_default_enabled is True else None)
 
     # Prevent trying to insert a movie with a non-existing languages profileId
-    if (movie_default_profile and not database.execute(
+    if (movie_default_profile is not None and not database.execute(
             select(TableLanguagesProfiles)
             .where(TableLanguagesProfiles.profileId == movie_default_profile))
             .first()):
