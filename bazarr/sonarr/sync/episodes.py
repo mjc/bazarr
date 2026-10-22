@@ -32,14 +32,6 @@ from .parser import map_episode
 from .utils import get_episodes_from_sonarr_api
 
 
-FEATURE_PREFIX = "SYNC_EPISODES "
-
-
-def trace(message: str) -> None:
-    if settings.general.debug:
-        logging.debug(FEATURE_PREFIX + message)
-
-
 def _add_episode(episode: EpisodeValues) -> bool:
     try:
         episode['created_at_timestamp'] = datetime.now()
@@ -77,11 +69,10 @@ def _update_episode(episode: EpisodeValues, previous: RowMapping | None,
         logging.error(f"BAZARR cannot update episode {episode['path']} because of {e}")
         return 'failed'
     if file_changed:
-        logging.debug(f'BAZARR updating subtitles for episode {path_mappings.path_replace(episode["path"])}')
+        logging.debug('BAZARR updating subtitles for episode %s', path_mappings.path_replace(episode['path']))
         store_subtitles(episode['sonarrEpisodeId'])
     else:
-        logging.debug(f'BAZARR skipping subtitle update for episode {path_mappings.path_replace(episode["path"])} '
-                      f'as path and episode_file_id unchanged')
+        logging.debug('BAZARR skipping subtitle update for episode %s as path and episode_file_id unchanged', path_mappings.path_replace(episode['path']))
     event_stream(type='episode', action='update', payload=episode['sonarrEpisodeId'])
     return 'reindexed' if file_changed else 'updated'
 
@@ -153,9 +144,9 @@ def sync_episodes(series_id: int | None = None, defer_search: bool = False, is_s
         elif selected or not values_match(previous, values):
             episodes_to_update.append(values)
 
-    if sync_monitored and settings.general.debug:
+    if sync_monitored and logging.getLogger().isEnabledFor(logging.DEBUG):
         series_title = database.execute(select(TableShows.title).where(TableShows.sonarrSeriesId == series_id)).scalar()
-        trace(f"Skipped {skipped_count} unmonitored episodes out of {len(episodes)} for {series_title}")
+        logging.debug('SYNC_EPISODES Skipped %s unmonitored episodes out of %s for %s', skipped_count, len(episodes), series_title)
     del episodes, audio_languages, file_sizes
     record = file = None
     episodes_to_delete = list(scope - current_episodes)
@@ -199,8 +190,7 @@ def sync_episodes(series_id: int | None = None, defer_search: bool = False, is_s
         if show is None:
             return
         if defer_search:
-            logging.debug(f'BAZARR searching for missing subtitles is deferred for series: '
-                          f'{show["title"]} ({show["year"]})')
+            logging.debug('BAZARR searching for missing subtitles is deferred for series: %s (%s)', show['title'], show['year'])
             return
     if not episodes_to_update and not episodes_to_add:
         return

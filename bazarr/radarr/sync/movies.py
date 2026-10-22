@@ -33,13 +33,7 @@ from .audio import movie_audio_language
 from .parser import map_movie
 from .utils import get_profile_list, get_tags, get_movies_from_radarr_api
 
-FEATURE_PREFIX = "SYNC_MOVIES "
 MovieSelection: TypeAlias = tuple[Movie, MovieFile] | FileState | Literal['preserve', 'remove']
-
-
-def trace(message: str) -> None:
-    if settings.general.debug:
-        logging.debug(FEATURE_PREFIX + message)
 
 
 def get_language_profiles() -> Sequence[tuple[int, str, str | None]]:
@@ -117,11 +111,10 @@ def update_movie(previous: RowMapping | MovieValues, updated_movie: MovieValues,
         logging.error(f"BAZARR cannot update movie {updated_movie['path']} because of {e}")
         return 'failed'
     if file_changed:
-        logging.debug(f'BAZARR updating subtitles for movie {updated_movie["path"]}')
+        logging.debug('BAZARR updating subtitles for movie %s', updated_movie['path'])
         store_subtitles_movie(updated_movie['radarrId'])
     else:
-        logging.debug(f'BAZARR skipping subtitle update for movie {updated_movie["path"]} as path '
-                      f'and movie_file_id unchanged')
+        logging.debug('BAZARR skipping subtitle update for movie %s as path and movie_file_id unchanged', updated_movie['path'])
     event_stream(type='movie', action='update', payload=updated_movie['radarrId'])
     return 'reindexed' if file_changed else 'updated'
 
@@ -147,7 +140,7 @@ def _delete_movie(movie_id: int, path: str) -> None:
         logging.error(f"BAZARR cannot delete movie {path_mappings.path_replace_movie(path)} because of {e}")
         return
     event_stream(type='movie', action='delete', payload=int(movie_id))
-    logging.debug(f'BAZARR deleted this movie from the database: {path_mappings.path_replace_movie(path)}')
+    logging.debug('BAZARR deleted this movie from the database: %s', path_mappings.path_replace_movie(path))
 
 
 def update_movies(job_id: int | None = None, wait_for_completion: bool = False) -> None:
@@ -241,11 +234,11 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                     previous_monitored: str | None = previous['monitored'] if previous is not None else None
                     if (sync_monitored and not movie.monitored and previous is not None
                             and bool_map.get(previous_monitored or '') is False):
-                        trace(f"{i}: (Skipped Unmonitored) {movie.title}")
+                        logging.debug('SYNC_MOVIES %s: (Skipped Unmonitored) %s', i, movie.title)
                         skipped_count += 1
                         continue
                     if _retains_movie(selection, file_sizes=file_sizes):
-                        trace(f"{i}: (Processing) {movie.title}")
+                        logging.debug('SYNC_MOVIES %s: (Processing) %s', i, movie.title)
                         values = _movie_values(
                             movie, file, lookups,
                             profile_id=movie_default_profile if previous is None else KEEP_PROFILE)
@@ -262,23 +255,21 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                 if record.id is not None:
                     files_missing += 1
                 if title is not None:
-                    trace(f"{i}: (Skipped File Missing) {title}")
+                    logging.debug('SYNC_MOVIES %s: (Skipped File Missing) %s', i, title)
 
-            trace(f"Skipped {files_missing} file missing movies out of {movies_count}")
+            logging.debug('SYNC_MOVIES Skipped %s file missing movies out of %s', files_missing, movies_count)
             if sync_monitored:
-                trace(f"Skipped {skipped_count} unmonitored movies out of {movies_count}")
-                trace(f"Processed {movies_count - files_missing - skipped_count} movies out of {movies_count} "
-                      f"with {movies_added} added, {movies_updated} updated and {movies_deleted} deleted")
+                logging.debug('SYNC_MOVIES Skipped %s unmonitored movies out of %s', skipped_count, movies_count)
+                logging.debug('SYNC_MOVIES Processed %s movies out of %s with %s added, %s updated and %s deleted', movies_count - files_missing - skipped_count, movies_count, movies_added, movies_updated, movies_deleted)
             else:
-                trace(f"Processed {movies_count - files_missing} movies out of {movies_count} with {movies_added} added and "
-                      f"{movies_updated} updated")
+                logging.debug('SYNC_MOVIES Processed %s movies out of %s with %s added and %s updated', movies_count - files_missing, movies_count, movies_added, movies_updated)
 
             logging.debug('BAZARR All movies synced from Radarr into database.')
     jobs_queue.update_job_name(job_id=job_id, new_job_name="Synced movies with Radarr")
 
 
 def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_signalr: bool = False) -> None:
-    logging.debug(f'BAZARR syncing this specific movie from Radarr: {movie_id}')
+    logging.debug('BAZARR syncing this specific movie from Radarr: %s', movie_id)
 
     # Check if there's a row in the database for this movie ID
     existing_movie = database.execute(
@@ -332,19 +323,16 @@ def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_
         outcome = update_movie(existing_movie, movie, check_file_identity=False)
         defer_search = defer_search or outcome == 'updated'
         if outcome != 'failed':
-            logging.debug(
-                f'BAZARR updated this movie into the database:{path_mappings.path_replace_movie(movie["path"])}')
+            logging.debug('BAZARR updated this movie into the database:%s', path_mappings.path_replace_movie(movie['path']))
     elif add_movie(movie):
-        logging.debug(f'BAZARR inserted this movie into the database:{path_mappings.path_replace_movie(movie["path"])}')
+        logging.debug('BAZARR inserted this movie into the database:%s', path_mappings.path_replace_movie(movie['path']))
 
     # Downloading missing subtitles
     if defer_search:
-        logging.debug(
-            f'BAZARR searching for missing subtitles is deferred until scheduled task execution for this movie: '
-            f'{path_mappings.path_replace_movie(movie["path"])}')
+        logging.debug('BAZARR searching for missing subtitles is deferred until scheduled task execution for this movie: %s', path_mappings.path_replace_movie(movie['path']))
     else:
         if os.path.exists(path_mappings.path_replace_movie(movie["path"])):
-            logging.debug(f'BAZARR downloading missing subtitles for this movie: {movie["title"]} ({movie["year"]})')
+            logging.debug('BAZARR downloading missing subtitles for this movie: %s (%s)', movie['title'], movie['year'])
             if _is_there_missing_subtitles(radarr_id=movie_id):
                 jobs_queue.feed_jobs_pending_queue(job_name=f'Downloading missing subtitles for {movie["title"]} '
                                                             f'({movie["year"]})',
@@ -356,11 +344,9 @@ def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_
             else:
                 if is_signalr and settings.general.notify_if_nothing_is_missing_for_signalr_event:
                     send_notifications_movie(movie_id, "There are no missing subtitles in this movie.")
-                logging.debug(f'BAZARR no missing subtitles for this movie: {movie["title"]} ({movie["year"]})')
+                logging.debug('BAZARR no missing subtitles for this movie: %s (%s)', movie['title'], movie['year'])
         else:
-            logging.debug(f'BAZARR cannot find this file yet (Radarr may be slow to import movie between disks?). '
-                          f'Searching for missing subtitles is deferred until scheduled task execution for this movie: '
-                          f'{movie["title"]} ({movie["year"]})')
+            logging.debug('BAZARR cannot find this file yet (Radarr may be slow to import movie between disks?). Searching for missing subtitles is deferred until scheduled task execution for this movie: %s (%s)', movie['title'], movie['year'])
 
 
 def _is_there_missing_subtitles(radarr_id: int) -> bool:
