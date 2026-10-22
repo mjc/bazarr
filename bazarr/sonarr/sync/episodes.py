@@ -13,7 +13,7 @@ from datetime import datetime
 from functools import reduce
 from itertools import chain
 
-from utilities.arr_files import is_usable_file
+from utilities.arr_files import FileSizes, is_usable_file
 from utilities.arr_types import WriteOutcome
 from utilities.arr_sync_state import EPISODE_STATE, values_match
 from app.database import database, TableShows, TableEpisodes, TableMissingSubtitles, update, insert, select, \
@@ -116,7 +116,7 @@ def sync_episodes(series_id: int | None = None, defer_search: bool = False, is_s
         return
 
     audio_languages: dict[int, str] = {}
-    file_sizes: dict[str, int] = {}
+    file_sizes = FileSizes(path_mappings.path_replace)
     scope = (stored_episodes.keys() & {episode.id for episode in episodes}) if selected else stored_episodes.keys()
     current_episodes: set[int] = set()
     episodes_to_update: list[EpisodeValues] = []
@@ -134,7 +134,7 @@ def sync_episodes(series_id: int | None = None, defer_search: bool = False, is_s
                 skipped_count += 1
                 continue
         try:
-            if not is_usable_file(file.path, file.size, path_replace=path_mappings.path_replace, file_sizes=file_sizes):
+            if not is_usable_file(file.path, file_sizes.resolve(file.path, file.size)):
                 continue
             parse_audio = settings.general.parse_embedded_audio_track is True if selected else parse_embedded_audio_track
             values = map_episode(record, file, audio_language=episode_audio_language(

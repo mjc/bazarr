@@ -57,7 +57,7 @@ def test_movie_size_cache_keeps_strm_setting_live(memory_session: Session,
     record.movieFile.size = 0
     getsize = Mock(return_value=0)
     monkeypatch.setattr(os.path, 'getsize', getsize)
-    sizes: dict[str, int] = {}
+    sizes = arr_files.FileSizes(lambda path: path)
     monkeypatch.setattr(movies.settings.general, 'enable_strm_support', False)
     assert not movies._retains_movie(movies._classify_movie(record), file_sizes=sizes)
     monkeypatch.setattr(movies.settings.general, 'enable_strm_support', True)
@@ -88,7 +88,8 @@ def test_complete_movie_classification_separates_file_policy(
         assert selected == (record, record.movieFile)
     else:
         assert selected == expected
-    assert movies._retains_movie(selected, file_sizes={}) is (expected == 'preserve' or (expected == 'ready' and usable))
+    assert movies._retains_movie(selected, file_sizes=arr_files.FileSizes(lambda path: path)) is (
+        expected == 'preserve' or (expected == 'ready' and usable))
 
 
 @pytest.mark.parametrize('has_file', [None, False, True])
@@ -105,7 +106,7 @@ def test_incomplete_movie_selection_never_processes_partial_metadata(
 
     expected = record.movieFile if has_file is True and file_present else ('remove' if has_file is False else 'preserve')
     assert selected == expected
-    assert movies._retains_movie(selected, file_sizes={}) is not (
+    assert movies._retains_movie(selected, file_sizes=arr_files.FileSizes(lambda path: path)) is not (
         has_file is False or (has_file is True and file_present and not usable))
     assert check.call_count == int(has_file is True and file_present)
 
@@ -197,4 +198,6 @@ def test_file_policy_handles_missing_file(monkeypatch: pytest.MonkeyPatch) -> No
         raise FileNotFoundError(path)
 
     monkeypatch.setattr(os.path, 'getsize', missing)
-    assert not arr_files.is_usable_file(record.episodeFile.path, record.episodeFile.size, path_replace=lambda path: path, file_sizes={})
+    file = record.episodeFile
+    sizes = arr_files.FileSizes(lambda path: path)
+    assert not arr_files.is_usable_file(file.path, sizes.resolve(file.path, file.size))
