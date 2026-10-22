@@ -93,12 +93,13 @@ def test_sync_checks_normalized_retry_windows(kind, row_factory, bind_wanted_dat
     }
     monkeypatch.setattr(adaptive_searching, 'get_adaptive_search_policy', lambda: policy)
     monkeypatch.setattr(wanted_state, 'get_adaptive_search_policy', lambda: policy)
-    kwargs = {'radarr_id': row.radarrId} if kind == 'movies' else {'episode_id': row.sonarrEpisodeId}
-    assert module._is_there_missing_subtitles(**kwargs) is False
+    kwargs = {'radarr_id': row.radarrId} if kind == 'movies' else {'episode_ids': [row.sonarrEpisodeId]}
+    check_missing = module._is_there_missing_subtitles if kind == 'movies' else module._get_due_missing_episode_ids
+    assert not check_missing(**kwargs)
     media_type = 'movie' if kind == 'movies' else 'series'
     media_id = row.radarrId if kind == 'movies' else row.sonarrEpisodeId
     wanted_state.refresh_failed_subtitle_attempts(media_type, media_id, [])
-    assert module._is_there_missing_subtitles(**kwargs) is True
+    assert check_missing(**kwargs)
 
 
 @pytest.mark.parametrize('kind', ['movies', 'series'])
@@ -133,8 +134,9 @@ def test_indexer_updates_normalized_missing_languages_before_sync_checks(
     }
     monkeypatch.setattr(adaptive_searching, 'get_adaptive_search_policy', lambda: policy)
     monkeypatch.setattr(wanted_state, 'get_adaptive_search_policy', lambda: policy)
-    kwargs = {'radarr_id': media_id} if kind == 'movies' else {'episode_id': media_id}
-    assert sync._is_there_missing_subtitles(**kwargs) is False
+    kwargs = {'radarr_id': media_id} if kind == 'movies' else {'episode_ids': [media_id]}
+    check_missing = sync._is_there_missing_subtitles if kind == 'movies' else sync._get_due_missing_episode_ids
+    assert not check_missing(**kwargs)
 
 
 def test_retry_upsert_canonicalizes_languages_and_preserves_timestamp_bounds(

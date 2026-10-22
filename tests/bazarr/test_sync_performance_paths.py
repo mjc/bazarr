@@ -30,18 +30,6 @@ class _Result:
         return iter(self._all_value)
 
 
-class _Column:
-    def __init__(self, name):
-        self.name = name
-
-
-def _model(**values):
-    return SimpleNamespace(
-        __table__=SimpleNamespace(columns=[_Column(name) for name in values]),
-        **values,
-    )
-
-
 def test_update_one_series_fetches_and_inserts_for_standalone_call(monkeypatch):
     from sonarr.sync import series as series_sync
 
@@ -91,7 +79,7 @@ def test_update_series_runs_one_explicit_episode_sync(monkeypatch):
     episode_sync_calls = []
 
     class _Database:
-        def execute(self, statement):
+        def execute(self, statement: Executable, parameters: dict[str, list[int]] | None = None) -> _Result:
             return _Result(all_value=[])
 
     class _MockEvent:
@@ -118,7 +106,7 @@ def test_update_series_runs_one_explicit_episode_sync(monkeypatch):
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
     monkeypatch.setattr(
         series_sync,
-        "update_one_series",
+        "_sync_series",
         lambda *args, **kwargs: update_calls.append((args, kwargs)),
     )
     monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id: episode_sync_calls.append(series_id))
@@ -137,7 +125,7 @@ def test_update_series_runs_one_explicit_episode_sync(monkeypatch):
 
     assert episode_sync_calls == [123]
     assert len(update_calls) == 1
-    assert update_calls[0][1]["sync_episodes_after_update"] is False
+    assert 'refresh_episodes' not in update_calls[0][1]
 
 
 def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):

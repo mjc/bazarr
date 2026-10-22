@@ -382,7 +382,7 @@ def test_incomplete_sync_still_processes_identifiable_entries(runtime_database, 
         monkeypatch.setattr(radarr, 'add_movie', lambda movie: processed.append(movie['radarrId']))
         radarr.update_movies(job_id=1)
     else:
-        monkeypatch.setattr(sonarr, 'update_one_series', lambda series_id, **kwargs: processed.append(series_id))
+        monkeypatch.setattr(sonarr, '_sync_series', lambda show, lookups, stored, **kwargs: processed.append(show.id))
         monkeypatch.setattr(sonarr, 'sync_episodes', lambda **kwargs: None)
         sonarr.update_series(job_id=1)
     assert processed == [8]

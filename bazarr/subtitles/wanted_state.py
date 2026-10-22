@@ -295,7 +295,7 @@ def delete_wanted_search_state(media_type, media_ids, connection=None):
         )
 
 
-def delete_media_and_wanted_search_state(media_type, table, id_column_name, media_ids):
+def delete_media_and_wanted_search_state(media_type, table, id_column_name, media_ids) -> list[int]:
     """Delete media and its normalized search state atomically."""
     media_table = getattr(table, '__table__', table)
     media_ids = _normalize_media_ids(media_ids, coerce_int=True)

@@ -14,10 +14,14 @@ from time import sleep
 
 from constants import HEADERS
 from app.event_handler import event_stream
-from sonarr.sync.episodes import sync_episodes, sync_one_episode
+from pydantic import TypeAdapter
+from sonarr.episode_snapshot import EpisodeId
+from sonarr.sync.episodes import sync_episodes
 from sonarr.sync.series import update_series, update_one_series
 from radarr.sync.movies import update_movies, update_one_movie
 from sonarr.info import get_sonarr_info, url_sonarr
+
+EPISODE_ID_ADAPTER = TypeAdapter(EpisodeId)
 from radarr.info import url_radarr
 from app.database import TableShows, TableMovies, database, select
 from app.jobs_queue import jobs_queue
@@ -304,7 +308,9 @@ def dispatcher(data):
         elif topic == 'episode':
             logging.debug(f'Event received from Sonarr for episode: {series_title} ({series_year}) - '
                           f'S{season_number:0>2}E{episode_number:0>2} - {episode_title}')
-            sync_one_episode(episode_id=media_id, defer_search=settings.sonarr.defer_search_signalr, is_signalr=True)
+            defer_episode_search = settings.sonarr.defer_search_signalr is True
+            sync_episodes(episode_ids=[EPISODE_ID_ADAPTER.validate_python(media_id)],
+                          defer_search=defer_episode_search, is_signalr=True)
         elif topic == 'movie':
             logging.debug(f'Event received from Radarr for movie: {movie_title} ({movie_year})')
             update_one_movie(movie_id=media_id, action=action, defer_search=settings.radarr.defer_search_signalr,

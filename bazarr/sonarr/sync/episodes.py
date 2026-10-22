@@ -3,413 +3,245 @@
 import os
 import logging
 import operator
-import semver
+from collections.abc import Collection, Sequence
 
-from sonarr.episode_snapshot import Episode, EpisodeFile, EpisodeValues, complete_episode_snapshot
+from sonarr.episode_snapshot import Episode, EpisodeValues, episodes_with_files
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import RowMapping
 from datetime import datetime
 from functools import reduce
+from itertools import chain
 
+from utilities.arr_files import is_usable_file
+from utilities.arr_types import WriteOutcome
 from utilities.arr_sync_state import EPISODE_STATE, values_match
 from app.database import database, TableShows, TableEpisodes, TableMissingSubtitles, update, insert, select, \
     get_exclusion_clause
 from app.config import settings
 from utilities.helper import bool_map
-from utilities.arr_files import is_usable_file
 from utilities.path_mappings import path_mappings
-from subtitles.indexer.series import store_subtitles, series_full_scan_subtitles
-from subtitles.mass_download import episode_download_subtitles
+from subtitles.indexer.series import store_subtitles
 from app.event_handler import event_stream
-from sonarr.info import get_sonarr_info
 from app.jobs_queue import jobs_queue
 from app.notifier import send_notifications
 from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due_missing_languages_map
 
 from .audio import episode_audio_language
 from .parser import map_episode
-from .utils import get_episodes_from_sonarr_api, get_episodesFiles_from_sonarr_api
+from .utils import get_episodes_from_sonarr_api
 
 
 FEATURE_PREFIX = "SYNC_EPISODES "
 
 
-def trace(message):
+def trace(message: str) -> None:
     if settings.general.debug:
         logging.debug(FEATURE_PREFIX + message)
 
 
-def _validated_episodes(episodes: list[Episode], *, series_id: int | None = None) -> list[Episode] | None:
-    if series_id is not None and any(episode.seriesId != series_id for episode in episodes):
-        logging.warning('BAZARR Skipping episode sync for series %s: response contains another series.', series_id)
-        return None
-    source_series_id = episodes[0].seriesId if episodes else series_id
-    separate = False
-    if not get_sonarr_info.is_legacy():
-        version = get_sonarr_info.semver()
-        if version is None:
-            logging.warning('BAZARR Skipping episode sync for series %s: Sonarr version is unavailable.', source_series_id)
-            return None
-        separate = version < semver.Version(4, 0, 9, '2421')
-    files: list[EpisodeFile] | None = None
-    if separate:
-        if series_id is not None:
-            result = get_episodesFiles_from_sonarr_api(apikey_sonarr=settings.sonarr.apikey, series_id=series_id)
-            if not isinstance(result, list):
-                logging.warning('BAZARR Skipping episode sync for series %s: invalid episode-file response.', series_id)
-                return None
-            files = result
-        elif episodes and episodes[0].hasFile:
-            file_id = episodes[0].episodeFileId
-            if file_id is None:
-                logging.warning('BAZARR Skipping episode %s: episodeFileId is missing.', episodes[0].id)
-                return None
-            file = get_episodesFiles_from_sonarr_api(apikey_sonarr=settings.sonarr.apikey, episode_file_id=file_id)
-            if not isinstance(file, EpisodeFile):
-                logging.warning('BAZARR Skipping episode %s: invalid response for file %s.', episodes[0].id, file_id)
-                return None
-            files = [file]
+def _add_episode(episode: EpisodeValues) -> bool:
+    try:
+        episode['created_at_timestamp'] = datetime.now()
+        database.execute(insert(TableEpisodes).values(episode))
+    except IntegrityError as e:
+        logging.error(f"BAZARR cannot insert episode {episode['path']} because of {e}")
+        del episode['created_at_timestamp']
+        return False
+    store_subtitles(episode['sonarrEpisodeId'])
+    event_stream(type='episode', action='update', payload=episode['sonarrEpisodeId'])
+    return True
+
+
+def _update_episode(episode: EpisodeValues, previous: RowMapping | None,
+                    *, check_file_identity: bool = True) -> WriteOutcome:
+    try:
+        if previous is None:
+            # An insert collided with a row created during this sync.
+            previous = database.execute(select(TableEpisodes.episode_file_id, TableEpisodes.path)
+                                        .where(TableEpisodes.sonarrEpisodeId == episode['sonarrEpisodeId'])).mappings().first()
+        previous_file: tuple[int | None, str | None] = (
+            (previous['episode_file_id'], previous['path']) if previous is not None else (None, None))
+        file_changed = previous_file != (episode['episode_file_id'], episode['path'])
+        episode['updated_at_timestamp'] = datetime.now()
+        statement = update(TableEpisodes).values(episode).where(TableEpisodes.sonarrEpisodeId == episode['sonarrEpisodeId'])
+        if check_file_identity:
+            statement = statement.where(TableEpisodes.episode_file_id.is_not_distinct_from(previous_file[0]),
+                                        TableEpisodes.path.is_not_distinct_from(previous_file[1]))
+            result = database.connection().execute(statement)
+            if result.rowcount == 0:
+                return 'failed'
         else:
-            files = []
-    completed = complete_episode_snapshot(episodes, files or (), separate_files=separate)
-    if completed is None:
-        logging.warning('BAZARR Skipping episode sync for series %s: incomplete or duplicate episode-file metadata.',
-                        source_series_id)
-    return completed
-
-
-def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr: bool = False) -> None:
-    logging.debug(f'BAZARR Starting episodes sync from Sonarr for series ID {series_id}.')
-    apikey_sonarr = settings.sonarr.apikey
-
-    # Get current episodes id in DB
-    if series_id:
-        current_episodes_in_db_row_as_dict: dict[int, RowMapping] = {
-            row['sonarrEpisodeId']: row
-            for row in database.execute(EPISODE_STATE.where(TableEpisodes.sonarrSeriesId == series_id)).mappings()
-        }
-        current_episodes_id_db_list = list(current_episodes_in_db_row_as_dict)
+            database.execute(statement)
+    except IntegrityError as e:
+        logging.error(f"BAZARR cannot update episode {episode['path']} because of {e}")
+        return 'failed'
+    if file_changed:
+        logging.debug(f'BAZARR updating subtitles for episode {path_mappings.path_replace(episode["path"])}')
+        store_subtitles(episode['sonarrEpisodeId'])
     else:
+        logging.debug(f'BAZARR skipping subtitle update for episode {path_mappings.path_replace(episode["path"])} '
+                      f'as path and episode_file_id unchanged')
+    event_stream(type='episode', action='update', payload=episode['sonarrEpisodeId'])
+    return 'reindexed' if file_changed else 'updated'
+
+
+def sync_episodes(series_id: int | None = None, defer_search: bool = False, is_signalr: bool = False,
+                  *, episode_ids: Sequence[int] | None = None) -> None:
+    selected = episode_ids is not None
+    apikey_sonarr = settings.sonarr.apikey
+    if not series_id and not episode_ids:
+        return
+    statement = (
+        select(TableEpisodes.sonarrEpisodeId, TableEpisodes.episode_file_id, TableEpisodes.path)
+        .where(TableEpisodes.sonarrEpisodeId.in_(episode_ids)) if episode_ids is not None else
+        EPISODE_STATE.where(TableEpisodes.sonarrSeriesId == series_id))
+    stored_episodes: dict[int, RowMapping] = {row['sonarrEpisodeId']: row for row in database.execute(statement).mappings()}
+    parse_embedded_audio_track = not selected and settings.general.parse_embedded_audio_track is True
+    episodes: list[Episode] | None
+    if episode_ids is None:
+        episodes = get_episodes_from_sonarr_api(apikey_sonarr=apikey_sonarr, series_id=series_id)
+    else:
+        episodes = []
+        for identifier in dict.fromkeys(episode_ids):
+            try:
+                response = get_episodes_from_sonarr_api(apikey_sonarr=apikey_sonarr, episode_id=identifier)
+            except Exception:
+                logging.exception('BAZARR cannot get episode returned by SignalR feed from Sonarr API.')
+                continue
+            if response:
+                episodes.extend(response)
+            del response
+    if not episodes:
         return
 
-    current_episodes_sonarr: list[int] = []
-    episodes_to_update: list[EpisodeValues] = []
-    episodes_to_add: list[EpisodeValues] = []
-    parse_embedded_audio_track = settings.general.parse_embedded_audio_track
     audio_languages: dict[int, str] = {}
     file_sizes: dict[str, int] = {}
+    scope = (stored_episodes.keys() & {episode.id for episode in episodes}) if selected else stored_episodes.keys()
+    current_episodes: set[int] = set()
+    episodes_to_update: list[EpisodeValues] = []
+    episodes_to_add: list[EpisodeValues] = []
+    sync_monitored = (not selected and settings.sonarr.sync_only_monitored_series is True
+                      and settings.sonarr.sync_only_monitored_episodes is True)
+    episodes_monitored: dict[int | None, str | None] = (
+        {row['episode_file_id']: row['monitored'] for row in stored_episodes.values()} if sync_monitored else {})
+    skipped_count = 0
+    for record, file in episodes_with_files(episodes):
+        if sync_monitored and not record.monitored:
+            monitored = episodes_monitored.get(file.id)
+            if monitored is not None and bool_map.get(monitored) is False:
+                current_episodes.add(record.id)
+                skipped_count += 1
+                continue
+        try:
+            if not is_usable_file(file.path, file.size, path_replace=path_mappings.path_replace, file_sizes=file_sizes):
+                continue
+            parse_audio = settings.general.parse_embedded_audio_track is True if selected else parse_embedded_audio_track
+            values = map_episode(record, file, audio_language=episode_audio_language(
+                record, file, parse_audio,
+                series_languages=audio_languages))
+        except Exception:
+            if not selected:
+                raise
+            logging.exception('BAZARR cannot get episode returned by SignalR feed from Sonarr API.')
+            current_episodes.add(record.id)
+            continue
+        current_episodes.add(record.id)
+        previous = stored_episodes.get(record.id)
+        if previous is None:
+            episodes_to_add.append(values)
+        elif selected or not values_match(previous, values):
+            episodes_to_update.append(values)
 
-    # Get episodes data for a series from Sonarr
-    episodes = get_episodes_from_sonarr_api(apikey_sonarr=apikey_sonarr, series_id=series_id)
-    if episodes:
-        if not isinstance(episodes, list):
-            return
-        episodes = _validated_episodes(episodes, series_id=series_id)
-        if episodes is None:
-            return
+    if sync_monitored and settings.general.debug:
+        series_title = database.execute(select(TableShows.title).where(TableShows.sonarrSeriesId == series_id)).scalar()
+        trace(f"Skipped {skipped_count} unmonitored episodes out of {len(episodes)} for {series_title}")
+    del episodes, audio_languages, file_sizes
+    record = file = None
+    episodes_to_delete = list(scope - current_episodes)
+    if episodes_to_delete:
+        try:
+            removed: list[int] = delete_media_and_wanted_search_state('series', TableEpisodes, 'sonarrEpisodeId', episodes_to_delete)
+        except IntegrityError as error:
+            logging.error(f"BAZARR cannot delete episodes because of {error}")
+        else:
+            for identifier in removed:
+                event_stream(type='episode', action='delete', payload=identifier)
 
-        sync_monitored = settings.sonarr.sync_only_monitored_series and settings.sonarr.sync_only_monitored_episodes
-        if sync_monitored:
-            episodes_monitored = {row['episode_file_id']: row['monitored']
-                                  for row in current_episodes_in_db_row_as_dict.values()}
-            skipped_count = 0
-
-        for episode in episodes:
-            if episode.hasFile and episode.episodeFile is not None:
-                if sync_monitored:
-                    try:
-                        monitored_status_db = bool_map[episodes_monitored[episode.episodeFile.id]]
-                    except KeyError:
-                        monitored_status_db = None
-
-                    if monitored_status_db is None:
-                        # not in db, might need to add, if we have a file on disk
-                        pass
-                    elif monitored_status_db != episode.monitored:
-                        # monitored status changed and we don't know about it until now
-                        trace(f"(Monitor Status Mismatch) {episode.title}")
-                        # pass
-                    elif not episode.monitored:
-                        # Add unmonitored episode in sonarr to current episode list, otherwise it will be deleted from db
-                        current_episodes_sonarr.append(episode.id)
-                        skipped_count += 1
-                        continue
-
-                if is_usable_file(episode.episodeFile.path, episode.episodeFile.size,
-                                  path_replace=path_mappings.path_replace, file_sizes=file_sizes):
-                    # Add episodes in sonarr to current episode list
-                    current_episodes_sonarr.append(episode.id)
-
-                    # Parse episode data
-                    parsed_episode = map_episode(
-                        episode, episode.episodeFile,
-                        audio_language=episode_audio_language(
-                            episode, episode.episodeFile, parse_embedded_audio_track,
-                            series_languages=audio_languages))
-                    if episode.id in current_episodes_in_db_row_as_dict:
-                        if not values_match(current_episodes_in_db_row_as_dict[episode.id], parsed_episode):
-                            episodes_to_update.append(parsed_episode)
-                    else:
-                        episodes_to_add.append(parsed_episode)
-    else:
+    for values in episodes_to_add:
+        if not _add_episode(values) and not selected:
+            episodes_to_update.append(values)
+    deferred: set[int] = set()
+    written: list[EpisodeValues] = []
+    for values in episodes_to_update:
+        outcome = _update_episode(values, stored_episodes.get(values['sonarrEpisodeId']), check_file_identity=not selected)
+        if selected and outcome == 'updated':
+            deferred.add(values['sonarrEpisodeId'])
+        if selected or outcome != 'failed':
+            written.append(values)
+    episodes_to_update = written
+    if selected and defer_search:
+        deferred.update(values['sonarrEpisodeId'] for values in chain(episodes_to_update, episodes_to_add))
+    for values in chain(episodes_to_update, episodes_to_add):
+        if values['sonarrEpisodeId'] in deferred:
+            logging.debug('BAZARR searching for missing subtitles is deferred for episode: %s',
+                          path_mappings.path_replace(values['path']))
+    if selected and all(values['sonarrEpisodeId'] in deferred for values in chain(episodes_to_update, episodes_to_add)):
         return
 
-    if sync_monitored:
-        # try to avoid unnecessary database calls
-        if settings.general.debug:
-            series_title = database.execute(select(TableShows.title).where(TableShows.sonarrSeriesId == series_id)).first()[0]
-            trace(f"Skipped {skipped_count} unmonitored episodes out of {len(episodes)} for {series_title}")
-
-    # Remove old episodes from DB
-    episodes_to_delete = list(set(current_episodes_id_db_list) - set(current_episodes_sonarr))
-
-    if len(episodes_to_delete):
-        try:
-            deleted_episode_ids = delete_media_and_wanted_search_state(
-                'series', TableEpisodes, 'sonarrEpisodeId', episodes_to_delete,
-            )
-        except IntegrityError as e:
-            logging.error(f"BAZARR cannot delete episodes because of {e}")
-        else:
-            for removed_episode in deleted_episode_ids:
-                event_stream(type='episode', action='delete', payload=removed_episode)
-
-    # Insert new episodes in DB
-    if len(episodes_to_add):
-        for added_episode in episodes_to_add:
-            try:
-                added_episode['created_at_timestamp'] = datetime.now()
-                database.execute(insert(TableEpisodes).values(added_episode))
-            except IntegrityError as e:
-                logging.error(f"BAZARR cannot insert episodes because of {e}. We'll try to update it instead.")
-                del added_episode['created_at_timestamp']
-                episodes_to_update.append(added_episode)
-            else:
-                store_subtitles(added_episode['sonarrEpisodeId'])
-                event_stream(type='episode', payload=added_episode['sonarrEpisodeId'])
-
-    # Update existing episodes in DB
-    episodes_updated: list[EpisodeValues] = []
-    if episodes_to_update:
-        for updated_episode in episodes_to_update:
-            try:
-                previous_episode_id = updated_episode['sonarrEpisodeId']
-                previous = current_episodes_in_db_row_as_dict.get(previous_episode_id)
-                if previous is None:
-                    # An insert may have collided with a row created during this sync.
-                    row = database.execute(select(TableEpisodes.episode_file_id, TableEpisodes.path)
-                                           .where(TableEpisodes.sonarrEpisodeId == previous_episode_id)).first()
-                    previous_episode_file_id, previous_episode_path = row if row else (None, None)
-                else:
-                    previous_episode_file_id = previous['episode_file_id']
-                    previous_episode_path = previous['path']
-
-                updated_episode['updated_at_timestamp'] = datetime.now()
-                result = database.connection().execute(
-                    update(TableEpisodes).values(updated_episode)
-                    .where(TableEpisodes.sonarrEpisodeId == updated_episode['sonarrEpisodeId'],
-                           TableEpisodes.episode_file_id.is_not_distinct_from(previous_episode_file_id),
-                           TableEpisodes.path.is_not_distinct_from(previous_episode_path)))
-                if result.rowcount == 0:
-                    continue
-            except IntegrityError as e:
-                logging.error(f"BAZARR cannot update episodes because of {e}")
-            else:
-                episodes_updated.append(updated_episode)
-                if (previous_episode_file_id != updated_episode['episode_file_id'] or
-                        previous_episode_path != updated_episode['path']):
-                    # Store subtitles for updated episode where path or episode_file_id changed
-                    logging.debug(f'BAZARR updating subtitles for episode '
-                                  f'{path_mappings.path_replace(updated_episode["path"])}')
-                    store_subtitles(previous_episode_id)
-                else:
-                    logging.debug(f'BAZARR skipping subtitle update for episode '
-                                  f'{path_mappings.path_replace(updated_episode["path"])} as path and episode_file_id '
-                                  f'unchanged')
-                event_stream(type='episode', action='update', payload=previous_episode_id)
-
-    # Downloading missing subtitles
-    series_data = database.execute(
-        select(TableShows.title,
-               TableShows.year,
-               TableShows.path)
-        .where(TableShows.sonarrSeriesId == series_id)
-    ).first()
-    if not series_data:
-        pass
-    else:
+    series_ids = ({values['sonarrSeriesId'] for values in chain(episodes_to_update, episodes_to_add)
+                   if values['sonarrEpisodeId'] not in deferred} if selected else {series_id})
+    shows = {row['sonarrSeriesId']: row for row in database.execute(
+        select(TableShows.sonarrSeriesId, TableShows.title, TableShows.year)
+        .where(TableShows.sonarrSeriesId.in_(series_ids))).mappings()}
+    if not selected:
+        show = shows.get(series_id)
+        if show is None:
+            return
         if defer_search:
-            logging.debug(
-                f'BAZARR searching for missing subtitles is deferred until scheduled task execution for this series: '
-                f'{series_data.title} ({series_data.year})')
-        else:
-            due_episode_ids = (_get_due_missing_episode_ids(series_id=series_id)
-                               if episodes_updated or episodes_to_add else set())
-            for episode in episodes_updated + episodes_to_add:
-                episode_title = (f'{series_data.title} - S{episode["season"]:02d}E{episode["episode"]:02d} '
-                                 f'- {episode["title"]}')
-                if episode['sonarrEpisodeId'] in due_episode_ids:
-                    if os.path.exists(path_mappings.path_replace(episode['path'])):
-                        logging.debug(f'BAZARR downloading missing subtitles for this episode: {episode_title}')
-                        jobs_queue.feed_jobs_pending_queue(job_name=f'Downloading missing subtitles for '
-                                                                    f'{episode_title}',
-                                                           module='subtitles.mass_download.series',
-                                                           func='episode_download_subtitles',
-                                                           args=[],
-                                                           kwargs={'no': episode['sonarrEpisodeId']},
-                                                           is_signalr=is_signalr)
-                    else:
-                        logging.debug(f'BAZARR cannot find this episode file yet (Sonarr may be slow to import episode '
-                                      f'between disks?). Searching for missing subtitles is deferred until scheduled '
-                                      f'task execution for this episode: {episode_title}')
-                else:
-                    if is_signalr and settings.general.notify_if_nothing_is_missing_for_signalr_event:
-                        send_notifications(series_id, episode['sonarrEpisodeId'],
-                                           "There are no missing subtitles in this episode.")
-                    logging.debug(f'BAZARR no missing subtitles for this episode: {episode_title}')
-
-    logging.debug(f'BAZARR All episodes from series ID {series_id} synced from Sonarr into database.')
-
-
-def sync_one_episode(episode_id, defer_search=False, is_signalr=False):
-    logging.debug(f'BAZARR syncing this specific episode from Sonarr: {episode_id}')
-    apikey_sonarr = settings.sonarr.apikey
-
-    # Check if there's a row in database for this episode ID
-    existing_episode = database.execute(
-        select(TableEpisodes.path, TableEpisodes.episode_file_id)
-        .where(TableEpisodes.sonarrEpisodeId == episode_id)) \
-        .first()
-
-    try:
-        # Get episode data from sonarr api
-        episode = None
-        episode_data = get_episodes_from_sonarr_api(apikey_sonarr=apikey_sonarr, episode_id=episode_id)
-        if not isinstance(episode_data, list) or len(episode_data) != 1 or episode_data[0].id != episode_id:
+            logging.debug(f'BAZARR searching for missing subtitles is deferred for series: '
+                          f'{show["title"]} ({show["year"]})')
             return
-        completed = _validated_episodes(episode_data)
-        if completed is None:
-            return
-        record = completed[0]
-        file = record.episodeFile
-        if file is not None:
-            if is_usable_file(file.path, file.size, path_replace=path_mappings.path_replace, file_sizes={}):
-                episode = map_episode(
-                    record, file,
-                    audio_language=episode_audio_language(
-                        record, file, settings.general.parse_embedded_audio_track, series_languages={}))
-    except Exception:
-        logging.exception('BAZARR cannot get episode returned by SignalR feed from Sonarr API.')
+    if not episodes_to_update and not episodes_to_add:
         return
-
-    # Drop useless events
-    if not episode and not existing_episode:
-        return
-
-    # Remove episode from DB
-    if not episode and existing_episode:
-        try:
-            deleted_episode_ids = delete_media_and_wanted_search_state(
-                'series', TableEpisodes, 'sonarrEpisodeId', [episode_id],
-            )
-        except IntegrityError as e:
-            logging.error(f"BAZARR cannot delete episode {existing_episode.path} because of {e}")
+    existing_paths = {values['sonarrEpisodeId']: os.path.exists(path_mappings.path_replace(values['path']))
+                      for values in chain(episodes_to_update, episodes_to_add)
+                      if values['sonarrEpisodeId'] not in deferred} if selected else {}
+    due = (_get_due_missing_episode_ids(episode_ids={identifier for identifier, exists in existing_paths.items() if exists})
+           if selected else _get_due_missing_episode_ids(series_id=series_id))
+    for values in chain(episodes_to_update, episodes_to_add):
+        identifier = values['sonarrEpisodeId']
+        if identifier in deferred:
+            continue
+        show = shows.get(values['sonarrSeriesId'])
+        title: str | None = show['title'] if show is not None else None
+        episode_title = (f'{title} - S{values["season"]:02d}E{values["episode"]:02d} - {values["title"]}')
+        exists = existing_paths[identifier] if selected else (
+            os.path.exists(path_mappings.path_replace(values['path'])) if identifier in due else True)
+        if not exists:
+            logging.debug('BAZARR cannot find this episode file yet; searching is deferred: %s', episode_title)
+        elif identifier in due:
+            jobs_queue.feed_jobs_pending_queue(job_name=f'Downloading missing subtitles for {title if selected else episode_title}',
+                                               module='subtitles.mass_download.series', func='episode_download_subtitles',
+                                               args=[], kwargs={'no': identifier}, is_signalr=is_signalr)
         else:
-            if deleted_episode_ids:
-                event_stream(type='episode', action='delete', payload=int(episode_id))
-                logging.debug(
-                    f'BAZARR deleted this episode from the database:{path_mappings.path_replace(existing_episode.path)}')
-        return
-
-    assert episode is not None
-
-    # Update existing episodes in DB
-    if existing_episode:
-        try:
-            episode['updated_at_timestamp'] = datetime.now()
-            database.execute(
-                update(TableEpisodes)
-                .values(episode)
-                .where(TableEpisodes.sonarrEpisodeId == episode_id))
-        except IntegrityError as e:
-            logging.error(f"BAZARR cannot update episode {episode['path']} because of {e}")
-        else:
-            if (existing_episode.episode_file_id != episode['episode_file_id'] or
-                    existing_episode.path != episode['path']):
-                # Store subtitles for updated episode where path or episode_file_id changed
-                logging.debug(f'BAZARR updating subtitles for episode {path_mappings.path_replace(episode["path"])}')
-                store_subtitles(episode_id)
-            else:
-                logging.debug(f'BAZARR skipping subtitle update for episode '
-                              f'{path_mappings.path_replace(episode["path"])} as path and episode_file_id unchanged')
-                defer_search = True
-
-            event_stream(type='episode', action='update', payload=episode['sonarrEpisodeId'])
-            logging.debug(
-                f'BAZARR updated this episode into the database:{path_mappings.path_replace(episode["path"])}')
-
-    # Insert new episodes in DB
-    elif episode and not existing_episode:
-        try:
-            episode['created_at_timestamp'] = datetime.now()
-            database.execute(
-                insert(TableEpisodes)
-                .values(episode))
-        except IntegrityError as e:
-            logging.error(f"BAZARR cannot insert episode {episode['path']} because of {e}")
-        else:
-            store_subtitles(episode_id)
-            event_stream(type='episode', action='update', payload=episode['sonarrEpisodeId'])
-            logging.debug(
-                f'BAZARR inserted this episode into the database:{path_mappings.path_replace(episode["path"])}')
-
-    # Downloading missing subtitles
-    if defer_search:
-        logging.debug(
-            f'BAZARR searching for missing subtitles is deferred until scheduled task execution for this episode: '
-            f'{path_mappings.path_replace(episode["path"])}')
-    else:
-        series_title = database.execute(
-            select(TableShows.title)
-            .where(TableShows.sonarrSeriesId == episode["sonarrSeriesId"])
-        ).first()[0]
-        episode_full_title = (f'{series_title} - S{episode["season"]:02d}E{episode["episode"]:02d} - '
-                              f'{episode["title"]}')
-
-        if os.path.exists(path_mappings.path_replace(episode["path"])):
-            logging.debug(f'BAZARR downloading missing subtitles for this episode: {episode_full_title}')
-            if _is_there_missing_subtitles(episode_id=episode_id):
-                jobs_queue.feed_jobs_pending_queue(job_name=f'Downloading missing subtitles for {series_title}',
-                                                   module='subtitles.mass_download.series',
-                                                   func='episode_download_subtitles',
-                                                   args=[],
-                                                   kwargs={'no': episode_id},
-                                                   is_signalr=is_signalr)
-            else:
-                if is_signalr and settings.general.notify_if_nothing_is_missing_for_signalr_event:
-                    send_notifications(episode["sonarrSeriesId"], episode_id,
-                                       "There are no missing subtitles in this episode.")
-                logging.debug(f'BAZARR no missing subtitles for this episode: {episode_full_title}')
-        else:
-            logging.debug(f'BAZARR cannot find this file yet (Sonarr may be slow to import episode between disks?). '
-                          f'Searching for missing subtitles is deferred until scheduled task execution for this episode'
-                          f': {episode_full_title}')
+            if is_signalr and settings.general.notify_if_nothing_is_missing_for_signalr_event:
+                send_notifications(values['sonarrSeriesId'], identifier, "There are no missing subtitles in this episode.")
+            logging.debug('BAZARR no missing subtitles for this episode: %s', episode_title)
 
 
-def _is_there_missing_subtitles(series_id: int | None = None, episode_id: int | None = None) -> bool:
-    return bool(_get_due_missing_episode_ids(series_id=series_id, episode_id=episode_id))
-
-
-def _get_due_missing_episode_ids(series_id: int | None = None, episode_id: int | None = None) -> set[int]:
+def _get_due_missing_episode_ids(series_id: int | None = None,
+                                  *, episode_ids: Collection[int] | None = None) -> set[int]:
     episodes_conditions = [(TableMissingSubtitles.media_type == 'series'),
                            (TableMissingSubtitles.media_id == TableEpisodes.sonarrEpisodeId)]
-    if all([series_id, episode_id]) or not any([series_id, episode_id]):
-        return set()
+    if episode_ids is not None:
+        if not episode_ids or series_id is not None:
+            return set()
+        episodes_conditions.append(TableEpisodes.sonarrEpisodeId.in_(episode_ids))
     elif series_id:
         episodes_conditions.append(TableEpisodes.sonarrSeriesId == series_id)
-    elif episode_id:
-        episodes_conditions.append(TableEpisodes.sonarrEpisodeId == episode_id)
+    else:
+        return set()
     episodes_conditions += get_exclusion_clause('series')
     missing_episodes = database.execute(
         select(TableMissingSubtitles.language, TableEpisodes.sonarrEpisodeId)

@@ -181,7 +181,7 @@ def test_radarr_movie_sync_skips_file_payloads_without_movie_id(monkeypatch, syn
         "get_movies_from_radarr_api",
         lambda apikey_radarr: [{"hasFile": True, "title": "Missing ID", "movieFile": {"size": 999999}}],
     )
-    monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter([])))
+    monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(mappings=lambda: iter([])))
     monkeypatch.setattr(
         radarr_movies.jobs_queue,
         "update_job_progress",
@@ -222,7 +222,7 @@ def test_radarr_movie_sync_handles_malformed_movie_file_fields(monkeypatch, sync
             {"id": 2, "hasFile": True, "title": "Missing Path", "movieFile": {"size": None}},
         ],
     )
-    monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter([])))
+    monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(mappings=lambda: iter([])))
     monkeypatch.setattr(
         radarr_movies.jobs_queue,
         "update_job_progress",
@@ -274,7 +274,7 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
             },
         ],
     )
-    monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter([])))
+    monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(mappings=lambda: iter([])))
     monkeypatch.setattr(
         radarr_movies,
         "map_movie",
@@ -328,7 +328,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
     monkeypatch.setattr(
         radarr_movies.database,
         "execute",
-        lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter([])),
+        lambda *args, **kwargs: SimpleNamespace(mappings=lambda: iter([])),
     )
     monkeypatch.setattr(
         radarr_movies,
@@ -407,12 +407,12 @@ def test_sonarr_series_sync_processes_valid_entries_in_mixed_payload(monkeypatch
     monkeypatch.setattr(
         sonarr_series.database,
         "execute",
-        lambda *args, **kwargs: SimpleNamespace(all=lambda: [], mappings=lambda: iter([])),
+        lambda *args, **kwargs: SimpleNamespace(mappings=lambda: iter([])),
     )
     monkeypatch.setattr(sonarr_series, "get_profile_list", lambda: [])
     monkeypatch.setattr(sonarr_series, "get_tags", Mock(return_value=[]))
     monkeypatch.setattr(sonarr_series, "get_language_profiles", lambda: [])
-    monkeypatch.setattr(sonarr_series, "update_one_series", lambda identifier, **kwargs: processed.append(identifier))
+    monkeypatch.setattr(sonarr_series, "_sync_series", lambda show, lookups, stored, **kwargs: processed.append(show.id))
     monkeypatch.setattr(sonarr_series, "sync_episodes", lambda series_id: synced_series.append(series_id))
     monkeypatch.setattr(
         sonarr_series.jobs_queue,

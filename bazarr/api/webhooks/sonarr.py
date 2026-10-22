@@ -5,7 +5,7 @@ from flask_restx import Resource, Namespace, fields
 
 from app.config import settings
 from app.database import TableEpisodes, TableShows, database, select
-from sonarr.sync.episodes import sync_one_episode
+from sonarr.sync.episodes import sync_episodes
 from subtitles.mass_download import episode_download_subtitles
 from subtitles.indexer.series import store_subtitles
 from utilities.path_mappings import path_mappings
@@ -108,7 +108,7 @@ class WebHooksSonarr(Resource):
                     "No episode found for episode file ID %s, attempting to sync from Sonarr.",
                     efid,
                 )
-                sync_one_episode(sonarr_episode_ids[i])
+                sync_episodes(episode_ids=[sonarr_episode_ids[i]])
                 episode = database.execute(q).first()
             if not episode:
                 logging.debug(

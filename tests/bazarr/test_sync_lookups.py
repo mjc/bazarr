@@ -73,13 +73,12 @@ def configure_movies(monkeypatch: pytest.MonkeyPatch, session: Session, count: i
         record.title = f'Changed {identifier}'
         records.append(record)
     session.commit()
-    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: records)
+    monkeypatch.setattr(movies, 'get_movies_from_radarr_api', lambda **kwargs: records.copy())
     return records
 
 
 def configure_episodes(monkeypatch: pytest.MonkeyPatch, session: Session, count: int) -> list[Episode]:
     monkeypatch.setattr(episodes, 'database', session)
-    monkeypatch.setattr(episodes.get_sonarr_info, 'is_legacy', lambda: True)
     monkeypatch.setattr(episode_audio, 'database', session)
     monkeypatch.setattr(episodes.settings.general, 'parse_embedded_audio_track', False)
     monkeypatch.setattr(episodes.settings.sonarr, 'sync_only_monitored_series', False)
@@ -430,7 +429,7 @@ def test_episode_sync_preserves_concurrently_replaced_file(changed: str, memory_
 
     monkeypatch.setattr(episodes, 'get_episodes_from_sonarr_api', replace_file)
     monkeypatch.setattr(episodes, 'event_stream', lambda **kwargs: pytest.fail('Stale episode update'))
-    monkeypatch.setattr(episodes, '_is_there_missing_subtitles',
+    monkeypatch.setattr(episodes, '_get_due_missing_episode_ids',
                         lambda **kwargs: pytest.fail('A stale update must not schedule a search'))
     sql_reads.clear()
 
