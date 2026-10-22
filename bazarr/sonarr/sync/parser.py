@@ -96,10 +96,9 @@ def seriesParser(show: Series, action: str, lookups: ArrSyncLookups,
         tag_profile = lookups.matching_profile(tags)
         if tag_profile:
             parsed_series['profileId'] = tag_profile
-        remove_profile_tags_list = general_settings.remove_profile_tags
-        if len(remove_profile_tags_list) > 0:
-            if set(tags) & set(remove_profile_tags_list):
-                parsed_series['profileId'] = None
+        remove_profile_tags = general_settings.remove_profile_tags
+        if remove_profile_tags and not set(remove_profile_tags).isdisjoint(tags):
+            parsed_series['profileId'] = None
 
     return parsed_series
 

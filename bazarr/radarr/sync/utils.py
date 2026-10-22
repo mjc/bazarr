@@ -9,7 +9,8 @@ from pydantic import Field
 from app.config import settings
 from radarr.info import get_radarr_info, url_api_radarr
 from constants import HEADERS
-from utilities.arr_decoding import ArrRecordDecoder, DefaultOnError, PartialResult, RecordPayload
+from utilities.arr_decoding import ArrRecordDecoder, DefaultOnError, InvalidAsNone, PartialResult, RecordPayload
+from utilities.arr_types import ArrTag, AudioProfile, LegacyAudioProfile, RadarrAudioProfile
 from radarr.movie_snapshot import IncompleteMovie, Movie
 
 MovieRecord: TypeAlias = Annotated[
@@ -18,10 +19,15 @@ MovieRecord: TypeAlias = Annotated[
 ]
 MOVIE_DECODER = ArrRecordDecoder[Movie, IncompleteMovie](RecordPayload[Movie], RecordPayload[MovieRecord])
 
+LEGACY_PROFILE_DECODER = ArrRecordDecoder[LegacyAudioProfile, None](
+    RecordPayload[LegacyAudioProfile], RecordPayload[InvalidAsNone[LegacyAudioProfile]])
+PROFILE_DECODER = ArrRecordDecoder[RadarrAudioProfile, None](
+    RecordPayload[RadarrAudioProfile], RecordPayload[InvalidAsNone[RadarrAudioProfile]])
+TAG_DECODER = ArrRecordDecoder[ArrTag, None](RecordPayload[ArrTag], RecordPayload[InvalidAsNone[ArrTag]])
 
-def get_profile_list():
+
+def get_profile_list() -> list[AudioProfile] | None:
     apikey_radarr = settings.radarr.apikey
-    profiles_list = []
     # Get profiles data from radarr
     url_radarr_api_movies = (f"{url_api_radarr()}{'quality' if url_api_radarr().endswith('v3/') else ''}profile?"
                              f"apikey={apikey_radarr}")
@@ -36,30 +42,21 @@ def get_profile_list():
     except requests.exceptions.RequestException:
         logging.exception("BAZARR Error trying to get profiles from Radarr.")
     else:
-        # Parsing data returned from radarr
-        if get_radarr_info.is_legacy():
-            for profile in profiles_json.json():
-                if not isinstance(profile, dict):
-                    continue
-                profile_id = profile.get('id')
-                language = profile.get('language')
-                if profile_id is not None and isinstance(language, str):
-                    profiles_list.append([profile_id, language.capitalize()])
-        else:
-            for profile in profiles_json.json():
-                if not isinstance(profile, dict):
-                    continue
-                profile_id = profile.get('id')
-                language = profile.get('language')
-                if profile_id is not None and isinstance(language, dict) and isinstance(language.get('name'), str):
-                    profiles_list.append([profile_id, language['name'].capitalize()])
-
-    return profiles_list
+        with profiles_json:
+            if profiles_json.status_code != 200:
+                return None
+            if get_radarr_info.is_legacy():
+                profiles = LEGACY_PROFILE_DECODER.decode_response(profiles_json)
+                return ([(profile.id, profile.language.capitalize()) for profile in profiles if profile is not None]
+                        if profiles is not None else None)
+            profiles = PROFILE_DECODER.decode_response(profiles_json)
+            return ([(profile.id, profile.language.name.capitalize()) for profile in profiles if profile is not None]
+                    if profiles is not None else None)
+    return None
 
 
-def get_tags():
+def get_tags() -> list[ArrTag] | None:
     apikey_radarr = settings.radarr.apikey
-    tagsDict = []
 
     # Get tags data from Radarr
     url_radarr_api_series = f"{url_api_radarr()}tag?apikey={apikey_radarr}"
@@ -68,21 +65,19 @@ def get_tags():
         tagsDict = requests.get(url_radarr_api_series, timeout=int(settings.radarr.http_timeout), verify=False, headers=HEADERS)
     except requests.exceptions.ConnectionError:
         logging.exception("BAZARR Error trying to get tags from Radarr. Connection Error.")
-        return []
+        return None
     except requests.exceptions.Timeout:
         logging.exception("BAZARR Error trying to get tags from Radarr. Timeout Error.")
-        return []
+        return None
     except requests.exceptions.RequestException:
         logging.exception("BAZARR Error trying to get tags from Radarr.")
-        return []
-    except requests.exceptions.HTTPError:
-        logging.exception("BAZARR Exception while trying to get tags from Radarr.")
-        return []
+        return None
     else:
-        try:
-            return tagsDict.json()
-        except Exception:
-            return []
+        with tagsDict:
+            if tagsDict.status_code != 200:
+                return None
+            tags = TAG_DECODER.decode_response(tagsDict)
+            return [tag for tag in tags if tag is not None] if tags is not None else None
 
 
 def get_movies_from_radarr_api(apikey_radarr: str, radarr_id: int | None = None) -> PartialResult[Movie, IncompleteMovie]:

@@ -9,6 +9,7 @@ from sonarr.series_snapshot import Series
 from sonarr.sync import utils as sonarr
 from tests.bazarr.test_arr_typed_decoding import make_response
 from tests.helpers.arr_fixtures import episode_payload, episode_record, movie_payload, series_payload, stub_arr_api
+from utilities.json_types import JsonValue
 
 
 @pytest.mark.parametrize('kind', ['series', 'episodes', 'files', 'movies'])
@@ -146,3 +147,27 @@ def test_series_fixture_wraps_single_record_like_http(monkeypatch: pytest.Monkey
     assert len(records) == 1
     assert isinstance(records[0], Series)
     assert records[0].id == 123
+
+
+def test_episode_response_is_released_before_fetching_separate_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    from weakref import ReferenceType, ref
+    import requests
+
+    responses: list[ReferenceType[requests.Response]] = []
+    payload = episode_payload()
+    monkeypatch.setattr(sonarr, 'url_api_sonarr', lambda: 'http://example.invalid/api/v3/')
+    monkeypatch.setattr(sonarr.get_sonarr_info, 'is_legacy', lambda: False)
+    monkeypatch.setattr(sonarr.get_sonarr_info, 'semver', lambda: sonarr.semver.Version(4, 0, 8))
+
+    def fetch(url: str, **kwargs: JsonValue) -> requests.Response:
+        if 'episodeFile?' in url:
+            assert responses[0]() is None
+            return make_response(json.dumps([payload['episodeFile']]).encode())
+        response = make_response(json.dumps([payload]).encode())
+        responses.append(ref(response))
+        return response
+
+    monkeypatch.setattr(sonarr.requests, 'get', fetch)
+    episodes = sonarr.get_episodes_from_sonarr_api('key', series_id=7)
+    assert episodes is not None and len(episodes) == 1
+    assert episodes[0].episodeFile is not None and episodes[0].episodeFile.id == 11

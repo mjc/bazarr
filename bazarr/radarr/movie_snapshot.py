@@ -2,13 +2,16 @@
 
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Annotated, TypedDict
+from typing import Annotated, TypeAlias, TypedDict
 from typing_extensions import NotRequired
 
 from pydantic import Field, StrictBool, StrictInt
 
 from utilities.arr_types import Language, FileQuality, DisplayText, RadarrFileSizeBytes, Year, OmittedInt
 from utilities.arr_decoding import InvalidAsNone
+
+MovieId: TypeAlias = Annotated[StrictInt, Field(gt=0)]
+MovieFileId: TypeAlias = Annotated[StrictInt, Field(gt=0)]
 
 
 @dataclass(slots=True)
@@ -27,7 +30,7 @@ class MovieMediaInfo:
 
 @dataclass(slots=True, kw_only=True)
 class MovieFile:
-    id: StrictInt
+    id: MovieFileId
     path: str
     size: RadarrFileSizeBytes
     quality: FileQuality
@@ -57,7 +60,7 @@ class MovieLanguage:
 
 @dataclass(slots=True, kw_only=True)
 class Movie:
-    id: StrictInt
+    id: MovieId
     title: str
     tmdbId: StrictInt | str | StrictBool
     year: Year | None
@@ -77,7 +80,7 @@ class Movie:
 
 @dataclass(frozen=True, slots=True)
 class FileState:
-    id: Annotated[StrictInt, Field(gt=0)]
+    id: MovieFileId
     path: str
     size: RadarrFileSizeBytes
 
@@ -88,13 +91,13 @@ class FileState:
 
 @dataclass(frozen=True, slots=True)
 class IncompleteMovie:
-    id: InvalidAsNone[StrictInt] = None
+    id: InvalidAsNone[MovieId] = None
     hasFile: InvalidAsNone[StrictBool] = None
     movieFile: InvalidAsNone[FileState] = None
 
 
 class MovieValues(TypedDict):
-    radarrId: int
+    radarrId: MovieId
     title: str
     path: str
     tmdbId: str
@@ -112,7 +115,7 @@ class MovieValues(TypedDict):
     audio_codec: str | None
     overview: str
     imdbId: str | None
-    movie_file_id: int
+    movie_file_id: MovieFileId
     tags: str
     file_size: int
     originalLanguage: str | None

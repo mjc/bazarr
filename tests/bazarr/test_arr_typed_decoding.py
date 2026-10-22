@@ -15,13 +15,18 @@ from tests.helpers.arr_fixtures import episode_payload, movie_payload, series_pa
 from utilities.json_types import JsonValue
 
 
-def make_response(body: bytes, encoding: str | None = 'utf-8', *, compressed: bool = False) -> requests.Response:
-    response = requests.Response()
+class StreamResponse(requests.Response):
+    def __init__(self, raw: HTTPResponse) -> None:
+        super().__init__()
+        self.raw: HTTPResponse = raw
+
+
+def make_response(body: bytes, encoding: str | None = 'utf-8', *, compressed: bool = False) -> StreamResponse:
+    headers = {'Content-Encoding': 'gzip'} if compressed else {}
+    response = StreamResponse(HTTPResponse(body=BytesIO(gzip.compress(body) if compressed else body),
+                                           headers=headers, preload_content=False, decode_content=False))
     response.status_code = 200
     response.encoding = encoding
-    headers = {'Content-Encoding': 'gzip'} if compressed else {}
-    response.raw = HTTPResponse(body=BytesIO(gzip.compress(body) if compressed else body),
-                                headers=headers, preload_content=False, decode_content=False)
     return response
 
 
@@ -39,7 +44,7 @@ def test_json_decodes_directly_into_records(kind: str, many: bool, compressed: b
     payload['unused'] = unused
     body = json.dumps([payload] if many else payload).encode()
     with make_response(body, compressed=compressed) as response:
-        result = decoder.decode_response(response)
+        result = decoder.decode_response(response, single=not many)
     record = result[0] if isinstance(result, list) else result
     assert isinstance(record, record_type)
     assert record.id == payload['id']
@@ -113,7 +118,7 @@ def test_invalid_json_keeps_requests_error_details(body: bytes) -> None:
             baseline.json()
     with make_response(body) as response:
         with pytest.raises(requests.JSONDecodeError) as actual:
-            EPISODE_DECODER.decode_complete_response(response)
+            _ = EPISODE_DECODER.decode_complete_response(response)
     assert (actual.value.msg, actual.value.doc, actual.value.pos) == (
         original.value.msg, original.value.doc, original.value.pos)
 
@@ -123,7 +128,9 @@ def test_typed_records_preserve_encoding_behavior(encoding: str | None) -> None:
     payload = series_payload(title='Français')
     body = json.dumps(payload, ensure_ascii=False).encode(encoding or 'utf-32')
     with make_response(body, encoding) as response:
-        record = SERIES_DECODER.decode_response(response)
+        records = SERIES_DECODER.decode_response(response, single=True)
+    assert records is not None
+    record, = records
     assert isinstance(record, Series)
     assert record.title == 'Français'
 
@@ -131,7 +138,9 @@ def test_typed_records_preserve_encoding_behavior(encoding: str | None) -> None:
 def test_invalid_utf8_is_replaced_as_in_requests() -> None:
     body = json.dumps(series_payload()).encode().replace(b'Series', b'\xffSeries')
     with make_response(body) as response:
-        record = SERIES_DECODER.decode_response(response)
+        records = SERIES_DECODER.decode_response(response, single=True)
+    assert records is not None
+    record, = records
     assert isinstance(record, Series)
     assert record.title == '\ufffdSeries'
 

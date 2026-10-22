@@ -2,12 +2,18 @@
 
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Annotated, TypedDict
+from collections.abc import Sequence
+from typing import Annotated, TypeAlias, TypedDict
 from typing_extensions import NotRequired
 
 from pydantic import Field, StrictBool, StrictInt
 
-from utilities.arr_types import Language, FileQuality, OmittedInt
+from utilities.arr_types import Language, FileQuality
+from sonarr.series_snapshot import SeriesId
+
+EpisodeId: TypeAlias = Annotated[StrictInt, Field(gt=0)]
+EpisodeFileId: TypeAlias = Annotated[StrictInt, Field(gt=0)]
+EpisodeFileReferenceId: TypeAlias = Annotated[StrictInt, Field(ge=0)]
 
 
 @dataclass(slots=True)
@@ -18,7 +24,7 @@ class MediaInfo:
 
 @dataclass(slots=True, kw_only=True)
 class EpisodeFile:
-    id: Annotated[StrictInt, Field(gt=0)]
+    id: EpisodeFileId
     path: str
     size: Annotated[StrictInt, Field(ge=0)]
     quality: FileQuality
@@ -34,22 +40,22 @@ class EpisodeFile:
 
 @dataclass(slots=True, kw_only=True)
 class Episode:
-    id: Annotated[StrictInt, Field(gt=0)]
-    seriesId: Annotated[StrictInt, Field(gt=0)]
+    id: EpisodeId
+    seriesId: SeriesId
     title: str
     hasFile: StrictBool
     monitored: StrictBool
     seasonNumber: StrictInt
     episodeNumber: StrictInt
-    episodeFileId: OmittedInt = None
+    episodeFileId: EpisodeFileReferenceId = 0
     episodeFile: EpisodeFile | None = None
     absoluteEpisodeNumber: StrictInt | None = None
     tvdbId: StrictInt | None = None
 
 
 class EpisodeValues(TypedDict):
-    sonarrSeriesId: int
-    sonarrEpisodeId: int
+    sonarrSeriesId: SeriesId
+    sonarrEpisodeId: EpisodeId
     title: str
     path: str
     season: int
@@ -60,7 +66,7 @@ class EpisodeValues(TypedDict):
     resolution: str | None
     video_codec: str | None
     audio_codec: str | None
-    episode_file_id: int
+    episode_file_id: EpisodeFileId
     audio_language: str
     file_size: int
     absoluteEpisode: int | None
@@ -69,12 +75,10 @@ class EpisodeValues(TypedDict):
     updated_at_timestamp: NotRequired[datetime]
 
 
-def complete_episode_snapshot(episodes: list[Episode], episode_files: list[EpisodeFile] | None = None,
+def complete_episode_snapshot(episodes: list[Episode], episode_files: Sequence[EpisodeFile] = (),
                               *, separate_files: bool = False) -> list[Episode] | None:
     files_by_id: dict[int, EpisodeFile] = {}
     if separate_files:
-        if episode_files is None:
-            return None
         for file in episode_files:
             if file.id in files_by_id:
                 return None
@@ -85,18 +89,16 @@ def complete_episode_snapshot(episodes: list[Episode], episode_files: list[Episo
             return None
         seen_ids.add(episode.id)
         if not episode.hasFile:
+            episode.episodeFile = None
             continue
         if separate_files:
             file_id = episode.episodeFileId
-            if file_id is None or file_id not in files_by_id:
+            if file_id not in files_by_id:
                 return None
         elif episode.episodeFile is None:
             return None
     if separate_files:
         for episode in episodes:
             if episode.hasFile:
-                file_id = episode.episodeFileId
-                if file_id is None:
-                    return None
-                episode.episodeFile = files_by_id[file_id]
+                episode.episodeFile = files_by_id[episode.episodeFileId]
     return episodes

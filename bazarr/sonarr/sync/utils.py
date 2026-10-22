@@ -1,31 +1,41 @@
 # coding=utf-8
 
+from typing import overload
+
 import requests
 import logging
+import semver
 
 from app.config import settings
 from sonarr.info import get_sonarr_info, url_api_sonarr
 from constants import HEADERS
 from utilities.arr_decoding import ArrRecordDecoder, CompleteResult, InvalidAsNone, RecordPayload
+from utilities.arr_types import ArrTag, AudioProfile, LegacyAudioProfile, SonarrAudioProfile
 from sonarr.series_snapshot import Series
-from sonarr.episode_snapshot import Episode, EpisodeFile
+from sonarr.episode_snapshot import Episode, EpisodeFile, complete_episode_snapshot
 
 SERIES_DECODER = ArrRecordDecoder[Series, None](RecordPayload[Series], RecordPayload[InvalidAsNone[Series]])
 EPISODE_DECODER = ArrRecordDecoder[Episode, None](RecordPayload[Episode], RecordPayload[InvalidAsNone[Episode]])
 EPISODEFILE_DECODER = ArrRecordDecoder[EpisodeFile, None](RecordPayload[EpisodeFile], RecordPayload[InvalidAsNone[EpisodeFile]])
 
+LEGACY_PROFILE_DECODER = ArrRecordDecoder[LegacyAudioProfile, None](
+    RecordPayload[LegacyAudioProfile], RecordPayload[InvalidAsNone[LegacyAudioProfile]])
+PROFILE_DECODER = ArrRecordDecoder[SonarrAudioProfile, None](
+    RecordPayload[SonarrAudioProfile], RecordPayload[InvalidAsNone[SonarrAudioProfile]])
+TAG_DECODER = ArrRecordDecoder[ArrTag, None](RecordPayload[ArrTag], RecordPayload[InvalidAsNone[ArrTag]])
 
-def get_profile_list():
+
+def get_profile_list() -> list[AudioProfile] | None:
     apikey_sonarr = settings.sonarr.apikey
-    profiles_list = []
 
     # Get profiles data from Sonarr
-    if get_sonarr_info.is_legacy():
+    legacy = get_sonarr_info.is_legacy()
+    if legacy:
         url_sonarr_api_series = f"{url_api_sonarr()}profile?apikey={apikey_sonarr}"
     else:
         if not get_sonarr_info.version().startswith('3.'):
             # return an empty list when using Sonarr >= v4 that does not support series languages profiles anymore
-            return profiles_list
+            return []
         url_sonarr_api_series = f"{url_api_sonarr()}languageprofile?apikey={apikey_sonarr}"
 
     try:
@@ -41,30 +51,20 @@ def get_profile_list():
         logging.exception("BAZARR Error trying to get profiles from Sonarr.")
         return None
     else:
-        # Parsing data returned from Sonarr
-        if get_sonarr_info.is_legacy():
-            for profile in profiles_json.json():
-                if not isinstance(profile, dict):
-                    continue
-                profile_id = profile.get('id')
-                language = profile.get('language')
-                if profile_id is not None and isinstance(language, str):
-                    profiles_list.append([profile_id, language.capitalize()])
-        else:
-            for profile in profiles_json.json():
-                if not isinstance(profile, dict):
-                    continue
-                profile_id = profile.get('id')
-                name = profile.get('name')
-                if profile_id is not None and isinstance(name, str):
-                    profiles_list.append([profile_id, name.capitalize()])
-
-    return profiles_list
+        with profiles_json:
+            if profiles_json.status_code != 200:
+                return None
+            if legacy:
+                profiles = LEGACY_PROFILE_DECODER.decode_response(profiles_json)
+                return ([(profile.id, profile.language.capitalize()) for profile in profiles if profile is not None]
+                        if profiles is not None else None)
+            profiles = PROFILE_DECODER.decode_response(profiles_json)
+            return ([(profile.id, profile.name.capitalize()) for profile in profiles if profile is not None]
+                    if profiles is not None else None)
 
 
-def get_tags():
+def get_tags() -> list[ArrTag] | None:
     apikey_sonarr = settings.sonarr.apikey
-    tagsDict = []
 
     # Get tags data from Sonarr
     url_sonarr_api_series = f"{url_api_sonarr()}tag?apikey={apikey_sonarr}"
@@ -73,18 +73,32 @@ def get_tags():
         tagsDict = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
     except requests.exceptions.ConnectionError:
         logging.exception("BAZARR Error trying to get tags from Sonarr. Connection Error.")
-        return []
+        return None
     except requests.exceptions.Timeout:
         logging.exception("BAZARR Error trying to get tags from Sonarr. Timeout Error.")
-        return []
+        return None
     except requests.exceptions.RequestException:
         logging.exception("BAZARR Error trying to get tags from Sonarr.")
-        return []
+        return None
     else:
-        return tagsDict.json()
+        with tagsDict:
+            if tagsDict.status_code != 200:
+                return None
+            tags = TAG_DECODER.decode_response(tagsDict)
+            return [tag for tag in tags if tag is not None] if tags is not None else None
 
 
-def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None) -> list[Series | None] | None:
+@overload
+def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int) -> list[Series] | None: ...
+
+
+@overload
+def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: None = None) -> list[Series | None] | None: ...
+
+
+def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None) -> (
+    list[Series] | list[Series | None] | None
+):
     url_sonarr_api_series = (f"{url_api_sonarr()}series/{sonarr_series_id if sonarr_series_id else ''}?"
                              f"apikey={apikey_sonarr}")
     try:
@@ -111,9 +125,10 @@ def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None 
         with r:
             if r.status_code != 200:
                 return None
-            result = SERIES_DECODER.decode_response(r)
-            if isinstance(result, Series):
-                return [result]
+            result = SERIES_DECODER.decode_response(r, single=sonarr_series_id is not None)
+            if sonarr_series_id is not None:
+                if result is None or len(result) != 1 or result[0] is None or result[0].id != sonarr_series_id:
+                    return None
             return result
 
 
@@ -148,7 +163,46 @@ def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = Non
         with r:
             if r.status_code != 200:
                 return None
-            return EPISODE_DECODER.decode_complete_response(r)
+            episodes = EPISODE_DECODER.decode_complete_response(r, single=series_id is None)
+        del r
+        if episodes is not None and any(episode.seriesId != series_id if series_id is not None
+                                        else episode.id != episode_id for episode in episodes):
+            logging.warning(
+                'BAZARR Skipping episode sync for series %s: response contains another series or episode.', series_id)
+            return None
+        if not episodes:
+            return episodes
+        source_series_id = episodes[0].seriesId
+        separate = False
+        if not get_sonarr_info.is_legacy():
+            version = get_sonarr_info.semver()
+            if version is None:
+                logging.warning('BAZARR Skipping episode sync for series %s: Sonarr version is unavailable.', source_series_id)
+                return None
+            separate = version < semver.Version(4, 0, 9, '2421')
+        files: list[EpisodeFile] = []
+        if separate:
+            if series_id is not None:
+                result = get_episodesFiles_from_sonarr_api(apikey_sonarr=apikey_sonarr, series_id=series_id)
+                if result is None:
+                    logging.warning('BAZARR Skipping episode sync for series %s: invalid episode-file response.', series_id)
+                    return None
+                files = result
+            elif episodes[0].hasFile:
+                file_id = episodes[0].episodeFileId
+                if not file_id:
+                    logging.warning('BAZARR Skipping episode %s: episodeFileId is missing.', episodes[0].id)
+                    return None
+                result = get_episodesFiles_from_sonarr_api(apikey_sonarr=apikey_sonarr, episode_file_id=file_id)
+                if result is None:
+                    logging.warning('BAZARR Skipping episode %s: invalid response for file %s.', episodes[0].id, file_id)
+                    return None
+                files = result
+        completed = complete_episode_snapshot(episodes, files, separate_files=separate)
+        if completed is None:
+            logging.warning('BAZARR Skipping episode sync for series %s: incomplete or duplicate episode-file metadata.',
+                            source_series_id)
+        return completed
 
 
 def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None, episode_file_id: int | None = None) -> CompleteResult[EpisodeFile]:
@@ -182,7 +236,10 @@ def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None 
         with r:
             if r.status_code != 200:
                 return None
-            return EPISODEFILE_DECODER.decode_complete_response(r)
+            files = EPISODEFILE_DECODER.decode_complete_response(r, single=episode_file_id is not None)
+            if episode_file_id is not None and files and files[0].id != episode_file_id:
+                return None
+            return files
 
 
 def get_history_from_sonarr_api(apikey_sonarr, episode_id):
