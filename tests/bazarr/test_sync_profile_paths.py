@@ -154,7 +154,7 @@ def test_radarr_movie_sync_finalizes_job_for_non_list_payload(monkeypatch, sync_
         lambda **kwargs: names.append(kwargs["new_job_name"]),
     )
 
-    radarr_movies.update_movies(job_id="job")
+    radarr_movies.update_movies(job_id=1)
 
     assert names == ["Synced movies with Radarr"]
 
@@ -189,7 +189,7 @@ def test_radarr_movie_sync_skips_file_payloads_without_movie_id(monkeypatch, syn
         lambda **kwargs: names.append(kwargs["new_job_name"]),
     )
 
-    radarr_movies.update_movies(job_id="job")
+    radarr_movies.update_movies(job_id=1)
 
     assert progress[0]["progress_max"] == 1
     assert names == ["Synced movies with Radarr"]
@@ -230,7 +230,7 @@ def test_radarr_movie_sync_handles_malformed_movie_file_fields(monkeypatch, sync
         lambda **kwargs: names.append(kwargs["new_job_name"]),
     )
 
-    radarr_movies.update_movies(job_id="job")
+    radarr_movies.update_movies(job_id=1)
 
     assert progress[0]["progress_max"] == 2
     assert names == ["Synced movies with Radarr"]
@@ -287,7 +287,7 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
         lambda **kwargs: names.append(kwargs["new_job_name"]),
     )
 
-    radarr_movies.update_movies(job_id="job")
+    radarr_movies.update_movies(job_id=1)
 
     assert progress[0]["progress_max"] == 2
     assert names == ["Synced movies with Radarr"]
@@ -331,7 +331,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
         lambda movie, **kwargs: parsed_movies.append(movie.title) or {"radarrId": movie.id, "title": movie.title, "path": movie.movieFile.path},
     )
     monkeypatch.setattr(radarr_movies, "add_movie", lambda movie: parsed_movies.append(f"added:{movie['title']}"))
-    monkeypatch.setattr(radarr_movies, "update_movie", lambda movie: parsed_movies.append(f"updated:{movie['title']}"))
+    monkeypatch.setattr(radarr_movies, "update_movie", lambda previous_file, movie: parsed_movies.append(f"updated:{movie['title']}") or True)
     monkeypatch.setattr(
         radarr_movies.jobs_queue,
         "update_job_progress",
@@ -343,7 +343,7 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
         lambda **kwargs: names.append(kwargs["new_job_name"]),
     )
 
-    radarr_movies.update_movies(job_id="job")
+    radarr_movies.update_movies(job_id=1)
 
     assert progress[0]["progress_max"] == 4
     assert parsed_movies == ["Good Movie", "added:Good Movie"]
@@ -377,7 +377,7 @@ def test_sonarr_series_sync_returns_for_malformed_payload(monkeypatch, sync_job)
     )
     monkeypatch.setattr(sonarr_series.gc, "collect", lambda: None)
 
-    sonarr_series.update_series(job_id="job")
+    sonarr_series.update_series(job_id=1)
 
     assert names == ["Synced series with Sonarr"]
 
@@ -420,7 +420,7 @@ def test_sonarr_series_sync_processes_valid_entries_in_mixed_payload(monkeypatch
     )
     monkeypatch.setattr(sonarr_series.gc, "collect", lambda: None)
 
-    sonarr_series.update_series(job_id="job")
+    sonarr_series.update_series(job_id=1)
 
     assert progress[0]["progress_max"] == 3
     assert processed == [1]
