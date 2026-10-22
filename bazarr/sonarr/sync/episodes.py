@@ -4,14 +4,15 @@ import os
 import logging
 import operator
 import semver
-from typing import TypedDict
 
 from sonarr.episode_snapshot import Episode, EpisodeFile, EpisodeValues, complete_episode_snapshot
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.engine import RowMapping
 from datetime import datetime
 from functools import reduce
 
+from utilities.arr_sync_state import EPISODE_STATE, values_match
 from app.database import database, TableShows, TableEpisodes, TableMissingSubtitles, update, insert, select, \
     get_exclusion_clause
 from app.config import settings
@@ -29,13 +30,6 @@ from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due
 from .audio import episode_audio_language
 from .parser import map_episode
 from .utils import get_episodes_from_sonarr_api, get_episodesFiles_from_sonarr_api
-
-
-class StoredEpisode(TypedDict):
-    sonarrEpisodeId: int
-    episode_file_id: int | None
-    path: str
-    monitored: str | None
 
 
 FEATURE_PREFIX = "SYNC_EPISODES "
@@ -91,9 +85,9 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
 
     # Get current episodes id in DB
     if series_id:
-        current_episodes_in_db_row_as_dict: dict[int, StoredEpisode] = {
-            row[0].sonarrEpisodeId: row[0].to_dict()
-            for row in database.execute(select(TableEpisodes).where(TableEpisodes.sonarrSeriesId == series_id)).all()
+        current_episodes_in_db_row_as_dict: dict[int, RowMapping] = {
+            row['sonarrEpisodeId']: row
+            for row in database.execute(EPISODE_STATE.where(TableEpisodes.sonarrSeriesId == series_id)).mappings()
         }
         current_episodes_id_db_list = list(current_episodes_in_db_row_as_dict)
     else:
@@ -154,7 +148,7 @@ def sync_episodes(series_id: int | None, defer_search: bool = False, is_signalr:
                             episode, episode.episodeFile, parse_embedded_audio_track,
                             series_languages=audio_languages))
                     if episode.id in current_episodes_in_db_row_as_dict:
-                        if not set(parsed_episode.items()).issubset(set(current_episodes_in_db_row_as_dict[episode.id].items())):
+                        if not values_match(current_episodes_in_db_row_as_dict[episode.id], parsed_episode):
                             episodes_to_update.append(parsed_episode)
                     else:
                         episodes_to_add.append(parsed_episode)

@@ -9,6 +9,7 @@ from radarr.movie_snapshot import IncompleteMovie, Movie, MovieValues
 
 from datetime import datetime
 from functools import reduce
+from sqlalchemy.engine import RowMapping
 
 from app.config import settings
 from app.database import TableMovies, TableLanguagesProfiles, TableMissingSubtitles, database, insert, update, \
@@ -22,6 +23,7 @@ from subtitles.indexer.movies import store_subtitles_movie
 from utilities.helper import bool_map
 from utilities.arr_sync_lookups import ArrSyncLookups, default_profile_id
 from utilities.arr_types import KEEP_PROFILE
+from utilities.arr_sync_state import MOVIE_STATE, values_match
 from utilities.path_mappings import path_mappings
 from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due_missing_languages_for_media
 
@@ -143,12 +145,8 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
             movies_count = len(movies)
             jobs_queue.update_job_progress(job_id=job_id, progress_max=movies_count)
             # Get current movies in DB
-            current_movies_in_db = {
-                row[0].radarrId: {
-                    column.name: getattr(row[0], column.name)
-                    for column in row[0].__table__.columns
-                }
-                for row in database.execute(select(TableMovies)).all()
+            current_movies_in_db: dict[int, RowMapping | MovieValues] = {
+                row['radarrId']: row for row in database.execute(MOVIE_STATE).mappings()
             }
             current_movies_id_db = set(current_movies_in_db)
 
@@ -230,9 +228,10 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                 if previous is None:
                     add_movie(parsed_movie)
                     movies_added.append(parsed_movie['title'])
-                elif not parsed_movie.items() <= previous.items():
+                elif not values_match(previous, parsed_movie):
                     if update_movie((previous['movie_file_id'], previous['path']), parsed_movie):
-                        previous.update(parsed_movie)
+                        _ = parsed_movie.setdefault('profileId', previous.get('profileId'))
+                        current_movies_in_db[movie_id] = parsed_movie
                         movies_updated.append(parsed_movie['title'])
 
             trace(f"Skipped {files_missing} file missing movies out of {movies_count}")

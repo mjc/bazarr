@@ -23,6 +23,12 @@ class _Result:
     def all(self):
         return self._all_value
 
+    def mappings(self):
+        return self
+
+    def __iter__(self):
+        return iter(self._all_value)
+
 
 class _Column:
     def __init__(self, name):
@@ -211,14 +217,17 @@ def test_update_series_returns_early_when_sonarr_api_returns_none(monkeypatch):
 def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatch):
     from sonarr.sync import series as series_sync
 
-    existing_series = _model(sonarrSeriesId=123, path="/series/path")
+    from sonarr.sync.parser import map_series
+
+    record = series_record(series_payload())
+    existing_series = map_series(record, audio_language='[]', tags=[])
     execute_calls = []
     episode_sync_calls = []
 
     class _Database:
         def execute(self, statement):
             execute_calls.append(statement)
-            return _Result(first_value=(existing_series,))
+            return _Result(first_value=existing_series)
 
     monkeypatch.setattr(series_sync, "database", _Database())
     monkeypatch.setattr(
@@ -234,17 +243,12 @@ def test_unchanged_series_skips_update_but_manual_call_syncs_episodes(monkeypatc
     monkeypatch.setattr(series_sync, "get_profile_list", lambda: [])
     monkeypatch.setattr(series_sync, "get_tags", Mock(return_value=[]))
     monkeypatch.setattr(series_sync, "get_language_profiles", lambda: [])
-    monkeypatch.setattr(
-        series_sync,
-        "map_series",
-        lambda *args, **kwargs: {"sonarrSeriesId": 123, "path": "/series/path"},
-    )
+    monkeypatch.setattr(series_sync, 'get_series_from_sonarr_api', Mock(return_value=[record]))
     monkeypatch.setattr(series_sync, "sync_episodes", lambda series_id: episode_sync_calls.append(series_id))
 
     series_sync.update_one_series(
         123,
         action="updated",
-        series_data=[series_record(series_payload())],
         sync_episodes_after_update=True,
     )
 
@@ -294,11 +298,19 @@ def test_episode_parser_uses_reported_size_before_filesystem_stat(monkeypatch):
 def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
     from constants import MINIMUM_VIDEO_SIZE
     from radarr.sync import movies as movies_sync
+    from radarr.sync.parser import map_movie
+    from radarr.movie_snapshot import Movie
+    from radarr.sync.utils import MOVIE_DECODER
 
-    movie_rows = [
-        (_model(radarrId=1, title="Movie 1", path="/movies/one.mkv", movie_file_id=101, monitored="True"),),
-        (_model(radarrId=2, title="Old Movie 2", path="/movies/two.mkv", movie_file_id=102, monitored="True"),),
-    ]
+    movie_rows = []
+    for identifier, title, path in [(1, 'Movie 1', '/movies/one.mkv'), (2, 'Old Movie 2', '/movies/two.mkv')]:
+        record = MOVIE_DECODER.complete_from_value(
+            movie_payload(movie_id=identifier, title=title, path=path, file_id=identifier + 100,
+                          size=MINIMUM_VIDEO_SIZE + 1))
+        assert isinstance(record, Movie)
+        record.normalize(legacy=False)
+        assert record.movieFile is not None
+        movie_rows.append(map_movie(record, record.movieFile, audio_language='[]', tags=[], profile_id=None))
     updated_movies = []
 
     class _Database:
@@ -314,13 +326,7 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
             self.cancel_event = _MockEvent()
 
     def _movie_parser(movie, **kwargs):
-        return {
-            "radarrId": movie.id,
-            "title": movie.title,
-            "path": movie.movieFile.path,
-            "movie_file_id": movie.movieFile.id,
-            "monitored": str(movie.monitored),
-        }
+        return map_movie(movie, **kwargs)
 
     monkeypatch.setattr(movies_sync, "database", _Database())
     monkeypatch.setattr(
@@ -362,8 +368,10 @@ def test_update_movies_compares_against_matching_radarr_id(monkeypatch):
 
     movies_sync.update_movies(job_id=1)
 
-    assert updated_movies == [{"radarrId": 2, "title": "New Movie 2", "path": "/movies/two.mkv",
-                               "movie_file_id": 102, "monitored": "True"}]
+    assert len(updated_movies) == 1
+    assert updated_movies[0]['radarrId'] == 2
+    assert updated_movies[0]['title'] == 'New Movie 2'
+    assert updated_movies[0]['path'] == '/movies/two.mkv'
 
 
 def test_get_providers_expired_throttle_cleanup_is_idempotent(monkeypatch):
@@ -401,13 +409,15 @@ def test_incomplete_episode_snapshot_skips_writes_and_keeps_existing_id(
     reads: list[Executable] = []
     parsed: list[Episode] = []
     episode = episode_record(episode_payload())
-    row = SimpleNamespace(sonarrEpisodeId=episode.id, to_dict=lambda: {'sonarrEpisodeId': episode.id})
+    from sonarr.sync.parser import map_episode
+    assert episode.episodeFile is not None
+    row = map_episode(episode, episode.episodeFile, audio_language='[]')
 
     class Database:
         def execute(self, statement: Executable) -> _Result:
             assert str(statement).startswith('SELECT')
             reads.append(statement)
-            return _Result(all_value=[(row,)] if existing and len(reads) == 1 else [])
+            return _Result(all_value=[row] if existing and len(reads) == 1 else [])
 
     monkeypatch.setattr(episode_sync, 'database', Database())
     monkeypatch.setattr(episode_sync, 'settings', SimpleNamespace(
