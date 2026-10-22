@@ -13,12 +13,13 @@ from app.config import settings
 from sonarr.rootfolder import check_sonarr_rootfolder
 from app.database import TableShows, TableLanguagesProfiles, database, insert, update, select, text_boolean
 from utilities.arr_sync_lookups import ArrSyncLookups, default_profile_id
+from utilities.arr_types import KEEP_PROFILE
 from utilities.path_mappings import path_mappings
 from app.event_handler import event_stream
 from app.jobs_queue import jobs_queue, JobCanceled
 
 from .episodes import sync_episodes
-from .parser import seriesParser
+from .parser import map_series
 from .utils import get_profile_list, get_tags, get_series_from_sonarr_api
 
 from subtitles.wanted_state import delete_series_and_wanted_search_state
@@ -181,12 +182,25 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
             return
 
     if (not isinstance(series_data, list) or len(series_data) != 1
-            or not isinstance(series_data[0], Series) or series_data[0].id != int(series_id)):
+            or not isinstance(series_data[0], Series) or series_data[0].id != series_id):
         return
-    if action == 'updated' and existing_series:
+
+    if action != 'updated':
+        return
+    show = series_data[0]
+    tags = lookups.tags(show.tags)
+    general = settings.general
+    audio_language = ('[]' if general.parse_embedded_audio_track else
+                      lookups.audio_language_values.get(show.languageProfileId, '[]'))
+    tag_enabled = general.serie_tag_enabled
+    series = map_series(
+        show, audio_language=audio_language, tags=tags,
+        profile_id=lookups.profile_id(
+            tags, KEEP_PROFILE if existing_series else serie_default_profile,
+            enabled=tag_enabled, remove_tags=general.remove_profile_tags if tag_enabled else ()))
+
+    if existing_series:
         # Update existing series in DB
-        series = seriesParser(series_data[0], action='update', lookups=lookups,
-                              serie_default_profile=serie_default_profile)
         existing_series_model = existing_series[0]
         existing_series_values = {
             column.name: getattr(existing_series_model, column.name)
@@ -194,7 +208,7 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
         }
         if series.items() <= existing_series_values.items():
             if sync_episodes_after_update and not is_signalr:
-                sync_episodes(series_id=int(series_id))
+                sync_episodes(series_id=series['sonarrSeriesId'])
             return
 
         try:
@@ -211,15 +225,12 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
                 # The one that gets there doesn't include the episodeChanged flag.
                 # The episodes are synced only when this function is called from the
                 # frontend sync button in the episodes' page.
-                sync_episodes(series_id=int(series_id))
-            event_stream(type='series', action='update', payload=int(series_id))
+                sync_episodes(series_id=series['sonarrSeriesId'])
+            event_stream(type='series', action='update', payload=series['sonarrSeriesId'])
             logging.debug(
                 f'BAZARR updated this series into the database:{path_mappings.path_replace(series["path"])}')
-    elif action == 'updated' and not existing_series:
+    else:
         # Insert new series in DB
-        series = seriesParser(series_data[0], action='insert', lookups=lookups,
-                              serie_default_profile=serie_default_profile)
-
         try:
             series['created_at_timestamp'] = datetime.now()
             database.execute(
@@ -228,6 +239,6 @@ def update_one_series(series_id: int, action: str, is_signalr: bool = False, syn
         except IntegrityError as e:
             logging.error(f"BAZARR cannot insert series {series['path']} because of {e}")
         else:
-            event_stream(type='series', action='update', payload=int(series_id))
+            event_stream(type='series', action='update', payload=series['sonarrSeriesId'])
             logging.debug(
                 f'BAZARR inserted this series into the database:{path_mappings.path_replace(series["path"])}')

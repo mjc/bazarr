@@ -9,7 +9,7 @@ import semver
 from app.config import settings
 from sonarr.info import get_sonarr_info, url_api_sonarr
 from constants import HEADERS
-from utilities.arr_decoding import ArrRecordDecoder, CompleteResult, InvalidAsNone, RecordPayload
+from utilities.arr_decoding import ArrRecordDecoder, InvalidAsNone, RecordPayload
 from utilities.arr_types import ArrTag, AudioProfile, LegacyAudioProfile, SonarrAudioProfile
 from sonarr.series_snapshot import Series
 from sonarr.episode_snapshot import Episode, EpisodeFile, complete_episode_snapshot
@@ -29,8 +29,7 @@ def get_profile_list() -> list[AudioProfile] | None:
     apikey_sonarr = settings.sonarr.apikey
 
     # Get profiles data from Sonarr
-    legacy = get_sonarr_info.is_legacy()
-    if legacy:
+    if get_sonarr_info.is_legacy():
         url_sonarr_api_series = f"{url_api_sonarr()}profile?apikey={apikey_sonarr}"
     else:
         if not get_sonarr_info.version().startswith('3.'):
@@ -54,12 +53,10 @@ def get_profile_list() -> list[AudioProfile] | None:
         with profiles_json:
             if profiles_json.status_code != 200:
                 return None
-            if legacy:
-                profiles = LEGACY_PROFILE_DECODER.decode_response(profiles_json)
-                return ([(profile.id, profile.language.capitalize()) for profile in profiles if profile is not None]
-                        if profiles is not None else None)
-            profiles = PROFILE_DECODER.decode_response(profiles_json)
-            return ([(profile.id, profile.name.capitalize()) for profile in profiles if profile is not None]
+            decoder = LEGACY_PROFILE_DECODER if get_sonarr_info.is_legacy() else PROFILE_DECODER
+            profiles = decoder.decode_response(profiles_json)
+            return ([(profile.id, (profile.language if get_sonarr_info.is_legacy() else profile.name).capitalize())
+                     for profile in profiles if profile is not None]
                     if profiles is not None else None)
 
 
@@ -84,8 +81,7 @@ def get_tags() -> list[ArrTag] | None:
         with tagsDict:
             if tagsDict.status_code != 200:
                 return None
-            tags = TAG_DECODER.decode_response(tagsDict)
-            return [tag for tag in tags if tag is not None] if tags is not None else None
+            return TAG_DECODER.decode_complete_response(tagsDict)
 
 
 @overload
@@ -99,13 +95,14 @@ def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: None = None
 def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None = None) -> (
     list[Series] | list[Series | None] | None
 ):
-    url_sonarr_api_series = (f"{url_api_sonarr()}series/{sonarr_series_id if sonarr_series_id else ''}?"
+    api_url = url_api_sonarr()
+    url_sonarr_api_series = (f"{api_url}series/{sonarr_series_id if sonarr_series_id else ''}?"
                              f"apikey={apikey_sonarr}")
     try:
         r = requests.get(url_sonarr_api_series, timeout=int(settings.sonarr.http_timeout), verify=False, headers=HEADERS)
         r.raise_for_status()
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code:
+        if e.response is not None and e.response.status_code:
             raise requests.exceptions.HTTPError
         logging.exception("BAZARR Error trying to get series from Sonarr. Http error.")
         return
@@ -125,14 +122,18 @@ def get_series_from_sonarr_api(apikey_sonarr: str, sonarr_series_id: int | None 
         with r:
             if r.status_code != 200:
                 return None
-            result = SERIES_DECODER.decode_response(r, single=sonarr_series_id is not None)
-            if sonarr_series_id is not None:
-                if result is None or len(result) != 1 or result[0] is None or result[0].id != sonarr_series_id:
-                    return None
-            return result
+            series = SERIES_DECODER.decode_response(r, single=sonarr_series_id is not None)
+            if sonarr_series_id is not None and (
+                    series is None or len(series) != 1 or series[0] is None or series[0].id != sonarr_series_id):
+                return None
+            if series is not None and not api_url.endswith('v3/'):
+                for show in series:
+                    if show is not None:
+                        show.languageProfileId = show.qualityProfileId
+            return series
 
 
-def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None, episode_id: int | None = None) -> CompleteResult[Episode]:
+def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None, episode_id: int | None = None) -> list[Episode] | None:
     if series_id:
         url_sonarr_api_episode = (f"{url_api_sonarr()}episode?seriesId={series_id}&includeEpisodeFile=true&"
                                   f"apikey={apikey_sonarr}")
@@ -205,7 +206,7 @@ def get_episodes_from_sonarr_api(apikey_sonarr: str, series_id: int | None = Non
         return completed
 
 
-def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None, episode_file_id: int | None = None) -> CompleteResult[EpisodeFile]:
+def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None = None, episode_file_id: int | None = None) -> list[EpisodeFile] | None:
     if series_id:
         url_sonarr_api_episodeFiles = f"{url_api_sonarr()}episodeFile?seriesId={series_id}&apikey={apikey_sonarr}"
     elif episode_file_id:
@@ -236,7 +237,7 @@ def get_episodesFiles_from_sonarr_api(apikey_sonarr: str, series_id: int | None 
         with r:
             if r.status_code != 200:
                 return None
-            files = EPISODEFILE_DECODER.decode_complete_response(r, single=episode_file_id is not None)
+            files = EPISODEFILE_DECODER.decode_complete_response(r, single=series_id is None)
             if episode_file_id is not None and files and files[0].id != episode_file_id:
                 return None
             return files

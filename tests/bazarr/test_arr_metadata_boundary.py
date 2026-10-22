@@ -41,7 +41,7 @@ def test_profile_boundary_filters_invalid_rows_before_indexing(kind: str, legacy
     profiles = module.get_profile_list()
     assert profiles is not None
     assert profiles == [(1, 'English'), (1.0, 'English'), (True, 'English'), ('1', 'English')]
-    assert ArrSyncLookups([], [], profiles).audio_languages(1) == ['English'] * 3
+    assert ArrSyncLookups([], [], profiles).audio_language_values.get(1, '[]') == str(['English'] * 3)
     assert response.raw.closed
 
 

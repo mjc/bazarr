@@ -21,11 +21,13 @@ from radarr.rootfolder import check_radarr_rootfolder
 from subtitles.indexer.movies import store_subtitles_movie
 from utilities.helper import bool_map
 from utilities.arr_sync_lookups import ArrSyncLookups, default_profile_id
+from utilities.arr_types import KEEP_PROFILE
 from utilities.path_mappings import path_mappings
 from subtitles.wanted_state import delete_media_and_wanted_search_state, get_due_missing_languages_for_media
 
 from sqlalchemy.exc import IntegrityError
-from .parser import movieParser
+from .audio import movie_audio_language
+from .parser import map_movie
 from .utils import get_profile_list, get_tags, get_movies_from_radarr_api
 
 FEATURE_PREFIX = "SYNC_MOVIES "
@@ -84,7 +86,7 @@ def update_movie(previous_file: tuple[int | None, str | None], updated_movie: Mo
 
 
 # Insert new movies in DB
-def add_movie(added_movie):
+def add_movie(added_movie: MovieValues) -> None:
     try:
         added_movie['created_at_timestamp'] = datetime.now()
         database.execute(
@@ -94,7 +96,7 @@ def add_movie(added_movie):
         logging.error(f"BAZARR cannot insert movie {added_movie['path']} because of {e}")
     else:
         store_subtitles_movie(added_movie['radarrId'])
-        event_stream(type='movie', action='update', payload=int(added_movie['radarrId']))
+        event_stream(type='movie', action='update', payload=added_movie['radarrId'])
 
 
 def update_movies(job_id: int | None = None, wait_for_completion: bool = False) -> None:
@@ -214,8 +216,17 @@ def update_movies(job_id: int | None = None, wait_for_completion: bool = False) 
                     files_missing += 1
                     continue
                 trace(f"{i}: (Processing) {movie.title}")
-                parsed_movie = movieParser(movie, file=movie_file, action='update' if previous is not None else 'insert',
-                                           lookups=lookups, movie_default_profile=movie_default_profile)
+                general = settings.general
+                audio_language = movie_audio_language(
+                    movie, movie_file, lookups,
+                    parse_embedded_audio_track=general.parse_embedded_audio_track)
+                tags = lookups.tags(movie.tags)
+                tag_enabled = general.movie_tag_enabled
+                parsed_movie = map_movie(
+                    movie, file=movie_file, audio_language=audio_language, tags=tags,
+                    profile_id=lookups.profile_id(
+                        tags, movie_default_profile if previous is None else KEEP_PROFILE,
+                        enabled=tag_enabled, remove_tags=general.remove_profile_tags if tag_enabled else ()))
                 if previous is None:
                     add_movie(parsed_movie)
                     movies_added.append(parsed_movie['title'])
@@ -286,8 +297,17 @@ def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_
         if usable is None or (usable and isinstance(movie_data, IncompleteMovie)):
             return
         if usable and isinstance(movie_data, Movie) and movie_data.movieFile is not None and action == 'updated':
-            movie = movieParser(movie_data, file=movie_data.movieFile, action='update' if existing_movie else 'insert',
-                                lookups=lookups, movie_default_profile=movie_default_profile)
+            general = settings.general
+            audio_language = movie_audio_language(
+                movie_data, movie_data.movieFile, lookups,
+                parse_embedded_audio_track=general.parse_embedded_audio_track)
+            tags = lookups.tags(movie_data.tags)
+            tag_enabled = general.movie_tag_enabled
+            movie = map_movie(
+                movie_data, file=movie_data.movieFile, audio_language=audio_language, tags=tags,
+                profile_id=lookups.profile_id(
+                    tags, KEEP_PROFILE if existing_movie else movie_default_profile,
+                    enabled=tag_enabled, remove_tags=general.remove_profile_tags if tag_enabled else ()))
     except Exception:
         logging.exception('BAZARR cannot get movie returned by SignalR feed from Radarr API.')
         return
@@ -336,7 +356,7 @@ def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_
                               f'{path_mappings.path_replace_movie(movie["path"])} as path and movie_file_id unchanged')
                 defer_search = True
 
-            event_stream(type='movie', action='update', payload=int(movie_id))
+            event_stream(type='movie', action='update', payload=movie['radarrId'])
             logging.debug(
                 f'BAZARR updated this movie into the database:{path_mappings.path_replace_movie(movie["path"])}')
 
@@ -352,7 +372,7 @@ def update_one_movie(movie_id: int, action: str, defer_search: bool = False, is_
                           f"of {e}")
         else:
             store_subtitles_movie(movie_id)
-            event_stream(type='movie', action='update', payload=int(movie_id))
+            event_stream(type='movie', action='update', payload=movie['radarrId'])
             logging.debug(
                 f'BAZARR inserted this movie into the database:{path_mappings.path_replace_movie(movie["path"])}')
 

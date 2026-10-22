@@ -2,26 +2,22 @@
 
 import os
 
-from app.config import settings
-from languages.get_languages import audio_language_from_name
-from radarr.info import get_radarr_info
 from radarr.movie_snapshot import Movie, MovieFile, MovieValues
-from utilities.arr_sync_lookups import ArrSyncLookups
+from utilities.arr_types import KEEP_PROFILE, ProfileAssignment
 from utilities.media_codecs import radarr_audio_codec, radarr_video_codec
-from utilities.video_analyzer import embedded_audio_reader
-from utilities.path_mappings import path_mappings
 
 
-def movieParser(movie: Movie, file: MovieFile, action: str, lookups: ArrSyncLookups,
-                movie_default_profile: int | None) -> MovieValues:
-    legacy = get_radarr_info.is_legacy()
-    images = movie.images or []
+def map_movie(movie: Movie, file: MovieFile, *,
+              audio_language: str, tags: list[str],
+              profile_id: ProfileAssignment = KEEP_PROFILE) -> MovieValues:
+    images = movie.images or ()
     poster = ''
     if images:
         poster_big = images[0].url
-        poster = f'{os.path.splitext(poster_big)[0]}-500{os.path.splitext(poster_big)[1]}'
+        stem, extension = os.path.splitext(poster_big)
+        poster = f'{stem}-500{extension}'
     fanart = images[1].url if len(images) > 1 else ''
-    titles = movie.alternativeTitles if legacy else movie.alternateTitles
+    titles = movie.alternateTitles
     alternative_titles = str([item.title for item in titles]) if titles is not None else None
     quality = file.quality.quality
     try:
@@ -33,25 +29,12 @@ def movieParser(movie: Movie, file: MovieFile, action: str, lookups: ArrSyncLook
     media = file.mediaInfo
     if media:
         video_codec = radarr_video_codec(
-            media.videoFormat if legacy else media.videoCodec, media.videoCodecID, media.videoCodecLibrary)
+            media.videoCodec, media.videoCodecID, media.videoCodecLibrary)
         audio_codec = radarr_audio_codec(
-            media.audioFormat if legacy else media.audioCodec, media.audioCodecID, media.audioProfile,
+            media.audioCodec, media.audioCodecID, media.audioProfile,
             media.audioAdditionalFeatures)
     else:
         video_codec = audio_codec = None
-    general_settings = settings.general
-    parse_audio = general_settings.parse_embedded_audio_track
-    if parse_audio:
-        audio_language = embedded_audio_reader(path_mappings.path_replace_movie(file.path),
-                                               file_size=file.size, movie_file_id=file.id, use_cache=True)
-    elif legacy:
-        audio_languages = media.audioLanguages if media else None
-        audio_language = [language.strip() for language in audio_languages.split('/')] if audio_languages is not None else []
-        if not audio_language:
-            audio_language = lookups.audio_languages(movie.qualityProfileId)
-    else:
-        audio_language = [audio_language_from_name(language.name) for language in file.languages or []]
-    tags = lookups.tags(movie.tags)
     original = movie.originalLanguage
     parsed: MovieValues = {'radarrId': movie.id,
                           'title': movie.title,
@@ -59,7 +42,7 @@ def movieParser(movie: Movie, file: MovieFile, action: str, lookups: ArrSyncLook
                           'tmdbId': str(movie.tmdbId),
                           'poster': poster,
                           'fanart': fanart,
-                          'audio_language': str(audio_language),
+                          'audio_language': audio_language,
                           'sceneName': file.sceneName,
                           'monitored': str(movie.monitored),
                           'year': str(movie.year),
@@ -75,13 +58,6 @@ def movieParser(movie: Movie, file: MovieFile, action: str, lookups: ArrSyncLook
                           'tags': str(tags),
                           'file_size': file.size,
                           'originalLanguage': original.name if original is not None else None}
-    if action == 'insert':
-        parsed['profileId'] = movie_default_profile
-    if general_settings.movie_tag_enabled:
-        tag_profile = lookups.matching_profile(tags)
-        if tag_profile:
-            parsed['profileId'] = tag_profile
-        remove_profile_tags = general_settings.remove_profile_tags
-        if remove_profile_tags and not set(remove_profile_tags).isdisjoint(tags):
-            parsed['profileId'] = None
+    if profile_id is not KEEP_PROFILE:
+        parsed['profileId'] = profile_id
     return parsed

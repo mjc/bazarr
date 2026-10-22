@@ -12,10 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.database import TableEpisodes, TableLanguagesProfiles, TableMovies, TableShows
 from radarr.movie_snapshot import Movie
-from radarr.sync import movies, parser as movie_parser
+from radarr.sync import movies, audio as movie_audio, parser as movie_parser
 from radarr.sync.utils import MOVIE_DECODER
 from sonarr.episode_snapshot import Episode
-from sonarr.sync import episodes, parser as episode_parser
+from sonarr.sync import episodes, audio as episode_audio, parser as episode_parser
 from utilities.arr_sync_lookups import ArrSyncLookups
 from tests.helpers.arr_fixtures import episode_payload, episode_record, movie_payload
 
@@ -44,7 +44,6 @@ def sql_reads(memory_session: Session) -> Iterator[list[str]]:
 def configure_movies(monkeypatch: pytest.MonkeyPatch, session: Session, count: int,
                      *, monitored_only: bool = False) -> list[Movie]:
     monkeypatch.setattr(movies, 'database', session)
-    monkeypatch.setattr(movie_parser.get_radarr_info, 'is_legacy', lambda: False)
     for name in ('movie_default_enabled', 'movie_tag_enabled', 'parse_embedded_audio_track', 'debug'):
         monkeypatch.setattr(movies.settings.general, name, False)
     monkeypatch.setattr(movies.settings.radarr, 'apikey', 'key')
@@ -66,7 +65,10 @@ def configure_movies(monkeypatch: pytest.MonkeyPatch, session: Session, count: i
             movie_id=identifier, path=f'/movies/{identifier}.mkv', file_id=identifier + 1000))
         assert isinstance(record, Movie)
         assert record.movieFile is not None
-        values = movie_parser.movieParser(record, record.movieFile, 'insert', ArrSyncLookups([], [], []), None)
+        values = movie_parser.map_movie(record, record.movieFile, tags=[], profile_id=None,
+                                        audio_language=movie_audio.movie_audio_language(
+                                            record, record.movieFile, ArrSyncLookups([], [], []),
+                                            parse_embedded_audio_track=False))
         session.add(TableMovies(**values))
         record.title = f'Changed {identifier}'
         records.append(record)
@@ -77,7 +79,8 @@ def configure_movies(monkeypatch: pytest.MonkeyPatch, session: Session, count: i
 
 def configure_episodes(monkeypatch: pytest.MonkeyPatch, session: Session, count: int) -> list[Episode]:
     monkeypatch.setattr(episodes, 'database', session)
-    monkeypatch.setattr(episode_parser, 'database', session)
+    monkeypatch.setattr(episodes.get_sonarr_info, 'is_legacy', lambda: True)
+    monkeypatch.setattr(episode_audio, 'database', session)
     monkeypatch.setattr(episodes.settings.general, 'parse_embedded_audio_track', False)
     monkeypatch.setattr(episodes.settings.sonarr, 'sync_only_monitored_series', False)
     monkeypatch.setattr(episodes, 'store_subtitles', lambda identifier: pytest.fail('File identity did not change'))
@@ -90,7 +93,8 @@ def configure_episodes(monkeypatch: pytest.MonkeyPatch, session: Session, count:
         assert record.episodeFile is not None
         record.episodeFile.id = identifier + 1000
         record.episodeFile.path = f'/show/{identifier}.mkv'
-        values = episode_parser.episodeParser(record, record.episodeFile, parse_embedded_audio_track=False, audio_languages={})
+        values = episode_parser.map_episode(record, record.episodeFile, audio_language=episode_audio.episode_audio_language(
+            record, record.episodeFile, False, series_languages={}))
         assert values is not None
         session.add(TableEpisodes(**values))
         record.title = f'Changed {identifier}'
@@ -257,17 +261,18 @@ def test_episode_reads_do_not_grow_with_series(count: int, missing_language: boo
 @pytest.mark.parametrize('stored', ["['English']", None])
 def test_episode_language_fallback_is_once_per_series(stored: str | None, memory_session: Session,
                                                     monkeypatch: pytest.MonkeyPatch, sql_reads: list[str]) -> None:
-    monkeypatch.setattr(episode_parser, 'database', memory_session)
+    monkeypatch.setattr(episode_audio, 'database', memory_session)
     memory_session.add_all([TableShows(sonarrSeriesId=identifier, title='Show', path=f'/show/{identifier}',
                                       audio_language=stored) for identifier in (7, 8)])
     memory_session.commit()
-    cache: dict[int, str | None] = {}
+    cache: dict[int, str] = {}
     sql_reads.clear()
     for series_id in (7, 7, 8, 8, 7):
         record = episode_record(episode_payload(series_id=series_id))
         assert record.episodeFile is not None
         record.episodeFile.language = None
-        values = episode_parser.episodeParser(record, record.episodeFile, parse_embedded_audio_track=False, audio_languages=cache)
+        values = episode_parser.map_episode(record, record.episodeFile, audio_language=episode_audio.episode_audio_language(
+            record, record.episodeFile, False, series_languages=cache))
         assert values is not None
         assert values['audio_language'] == str(stored)
     assert len(sql_reads) == 2
@@ -277,7 +282,8 @@ def test_episode_language_fallback_is_once_per_series(stored: str | None, memory
     record = episode_record(episode_payload())
     assert record.episodeFile is not None
     record.episodeFile.language = None
-    values = episode_parser.episodeParser(record, record.episodeFile, parse_embedded_audio_track=False, audio_languages={})
+    values = episode_parser.map_episode(record, record.episodeFile, audio_language=episode_audio.episode_audio_language(
+            record, record.episodeFile, False, series_languages={}))
     assert values is not None
     assert values['audio_language'] == "['French']"
     assert len(sql_reads) == 1
@@ -343,7 +349,8 @@ def test_episode_insert_collision_reads_the_new_row(memory_session: Session,
                                                     monkeypatch: pytest.MonkeyPatch, sql_reads: list[str]) -> None:
     records = configure_episodes(monkeypatch, memory_session, 1)
     assert records[0].episodeFile is not None
-    stored_values = episode_parser.episodeParser(records[0], records[0].episodeFile, False, audio_languages={})
+    stored_values = episode_parser.map_episode(records[0], records[0].episodeFile, audio_language=episode_audio.episode_audio_language(
+            records[0], records[0].episodeFile, False, series_languages={}))
     assert stored_values is not None
     stored_values['title'] = 'Inserted concurrently'
     memory_session.execute(delete(TableEpisodes))

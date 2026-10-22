@@ -1,7 +1,5 @@
 import json
 import importlib
-from collections.abc import Iterator
-from unittest import mock
 
 import pytest
 from alembic.migration import MigrationContext
@@ -17,7 +15,6 @@ from sonarr.series_snapshot import Series, SeriesValues
 from sonarr.sync import parser
 from sonarr.sync.utils import SERIES_DECODER
 from utilities.json_types import JsonValue
-from utilities.arr_sync_lookups import ArrSyncLookups
 from subtitles.refiners import database as refiner
 
 migration = importlib.import_module('migrations.versions.ca7df64674ee_')
@@ -39,14 +36,6 @@ def _series(**overrides: JsonValue) -> Series:
     return record
 
 
-@pytest.fixture
-def sonarr_info() -> Iterator[mock.Mock]:
-    info = mock.Mock()
-    info.is_legacy.return_value = False
-    with mock.patch.object(parser, 'get_sonarr_info', info):
-        yield info
-
-
 TMDB_IDS = sorted(
     {0, 1, 603, 2**31 - 1}
     | {2**bit + offset for bit in range(1, 31) for offset in (-1, 0, 1)}
@@ -54,18 +43,17 @@ TMDB_IDS = sorted(
 
 
 def _parse_series(show: Series) -> SeriesValues:
-    return parser.seriesParser(show, action='update', lookups=ArrSyncLookups([], [], []),
-                               serie_default_profile=None)
+    return parser.map_series(show, audio_language='[]', tags=[])
 
 
 @pytest.mark.parametrize('tmdb_id', [None, *TMDB_IDS])
-def test_series_parser_preserves_tmdb_id(sonarr_info: mock.Mock, tmdb_id: int | None) -> None:
+def test_series_parser_preserves_tmdb_id(tmdb_id: int | None) -> None:
     parsed = _parse_series(_series(tmdbId=tmdb_id))
     assert parsed['tmdbId'] == (None if tmdb_id is None or tmdb_id == 0 else tmdb_id)
 
 
 @pytest.mark.parametrize('tmdb_id', TMDB_IDS)
-def test_tmdb_id_is_independent_of_sonarr_and_tvdb_ids(sonarr_info: mock.Mock, tmdb_id: int) -> None:
+def test_tmdb_id_is_independent_of_sonarr_and_tvdb_ids(tmdb_id: int) -> None:
     sonarr_id, tvdb_id = tmdb_id + 1, tmdb_id + 2
     parsed = _parse_series(_series(tmdbId=tmdb_id, id=sonarr_id, tvdbId=tvdb_id))
     assert parsed['tmdbId'] == (None if tmdb_id == 0 else tmdb_id)
@@ -90,7 +78,7 @@ def test_invalid_tmdb_id_preserves_valid_neighboring_records(invalid_id: JsonVal
     assert isinstance(last, Series) and last.id == 3 and last.tmdbId == 604
 
 
-def test_series_parser_without_tmdb_id_key(sonarr_info: mock.Mock) -> None:
+def test_series_parser_without_tmdb_id_key() -> None:
     parsed = _parse_series(_series())
 
     assert parsed['tmdbId'] is None
@@ -140,7 +128,7 @@ def test_refine_from_db_leaves_series_tmdb_id_empty_when_unknown(refiner_session
 
 @pytest.mark.parametrize('tmdb_id', [None, *TMDB_IDS])
 def test_tmdb_id_survives_parsing_storage_and_refinement(
-    sonarr_info: mock.Mock, refiner_session: Session, tmdb_id: int | None,
+    refiner_session: Session, tmdb_id: int | None,
 ) -> None:
     values = _parse_series(_series(tmdbId=tmdb_id))
     refiner_session.add(TableShows(**values))

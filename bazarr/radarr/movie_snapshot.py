@@ -77,6 +77,27 @@ class Movie:
     originalLanguage: MovieLanguage | None = None
     qualityProfileId: OmittedInt = None
 
+    def normalize(self, *, legacy: bool) -> None:
+        """Use common title, codec and audio-language sources during sync."""
+        if legacy:
+            self.alternateTitles = self.alternativeTitles
+        else:
+            self.alternativeTitles = None
+            self.qualityProfileId = None
+        file = self.movieFile
+        if file is None:
+            return
+        if legacy:
+            file.languages = None
+        media = file.mediaInfo
+        if media is not None:
+            if legacy:
+                media.videoCodec = media.videoFormat
+                media.audioCodec = media.audioFormat
+            else:
+                media.audioLanguages = None
+                media.videoFormat = media.audioFormat = None
+
 
 @dataclass(frozen=True, slots=True)
 class FileState:

@@ -277,9 +277,10 @@ def test_radarr_movie_sync_skips_large_file_with_malformed_required_fields(monke
     monkeypatch.setattr(radarr_movies.database, "execute", lambda *args, **kwargs: SimpleNamespace(all=lambda: []))
     monkeypatch.setattr(
         radarr_movies,
-        "movieParser",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("movieParser should not be called")),
+        "map_movie",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("map_movie should not be called")),
     )
+    monkeypatch.setattr(radarr_movies, 'movie_audio_language', lambda *args, **kwargs: "[]")
     monkeypatch.setattr(
         radarr_movies.jobs_queue,
         "update_job_progress",
@@ -331,9 +332,10 @@ def test_radarr_movie_sync_processes_valid_entries_in_mixed_payload(monkeypatch,
     )
     monkeypatch.setattr(
         radarr_movies,
-        "movieParser",
+        "map_movie",
         lambda movie, **kwargs: parsed_movies.append(movie.title) or {"radarrId": movie.id, "title": movie.title, "path": movie.movieFile.path},
     )
+    monkeypatch.setattr(radarr_movies, 'movie_audio_language', lambda *args, **kwargs: "[]")
     monkeypatch.setattr(radarr_movies, "add_movie", lambda movie: parsed_movies.append(f"added:{movie['title']}"))
     monkeypatch.setattr(radarr_movies, "update_movie", lambda previous_file, movie: parsed_movies.append(f"updated:{movie['title']}") or True)
     monkeypatch.setattr(

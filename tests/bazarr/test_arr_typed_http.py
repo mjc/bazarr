@@ -20,6 +20,7 @@ def test_media_helpers_return_typed_records(kind: str, many: bool, monkeypatch: 
         fetch = lambda: sonarr.get_series_from_sonarr_api('key', None if many else 123)
     elif kind == 'episodes':
         module, payload, record_type = sonarr, episode_payload(), Episode
+        monkeypatch.setattr(sonarr.get_sonarr_info, 'is_legacy', lambda: True)
         fetch = lambda: sonarr.get_episodes_from_sonarr_api('key', series_id=7 if many else None,
                                                          episode_id=None if many else 101)
     elif kind == 'files':
@@ -34,7 +35,7 @@ def test_media_helpers_return_typed_records(kind: str, many: bool, monkeypatch: 
     response = make_response(json.dumps([payload] if many else payload).encode(), compressed=True)
     monkeypatch.setattr(module.requests, 'get', lambda *args, **kwargs: response)
     result = fetch()
-    if many or kind == 'series':
+    if many or kind in ('series', 'episodes', 'files', 'movies'):
         assert isinstance(result, list)
         assert len(result) == 1
         result = result[0]
@@ -61,7 +62,9 @@ def test_typed_response_keeps_requests_encoding_fallback(encoding: str | None) -
     payload = series_payload(title='Français')
     body = json.dumps(payload, ensure_ascii=False).encode(encoding if encoding not in (None, 'unknown-codec') else 'utf-8')
     with make_response(body, encoding) as response:
-        record = sonarr.SERIES_DECODER.decode_response(response)
+        records = sonarr.SERIES_DECODER.decode_response(response, single=True)
+    assert records is not None
+    record = records[0]
     assert isinstance(record, Series)
     assert record.title == 'Français'
 
@@ -69,7 +72,9 @@ def test_typed_response_keeps_requests_encoding_fallback(encoding: str | None) -
 def test_invalid_utf8_keeps_requests_replacement() -> None:
     body = json.dumps(series_payload()).encode().replace(b'Series', b'Seri\xffes')
     with make_response(body) as response:
-        record = sonarr.SERIES_DECODER.decode_response(response)
+        records = sonarr.SERIES_DECODER.decode_response(response, single=True)
+    assert records is not None
+    record = records[0]
     assert isinstance(record, Series)
     assert record.title == 'Seri\ufffdes'
 
