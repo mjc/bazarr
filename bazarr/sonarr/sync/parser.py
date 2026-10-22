@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import os
+import re
 from datetime import datetime
 
 from dateutil import parser
@@ -9,6 +10,25 @@ from sonarr.series_snapshot import Series, SeriesValues
 from utilities.arr_types import KEEP_PROFILE, ProfileAssignment
 from utilities.media_codecs import sonarr_codecs
 from sonarr.episode_snapshot import Episode, EpisodeFile, EpisodeValues
+
+
+_LAST_AIRED_TIMESTAMP = re.compile(
+    r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
+    r'(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?'
+)
+
+
+def _parse_last_aired(value: str) -> datetime:
+    if _LAST_AIRED_TIMESTAMP.fullmatch(value):
+        try:
+            # Python 3.10 requires an explicit UTC offset instead of Z.
+            return datetime.fromisoformat(value.replace('Z', '+00:00'))
+        except ValueError:
+            pass
+    aired = parser.parse(value)
+    if not isinstance(aired, datetime):
+        raise ValueError('Invalid last-aired date')
+    return aired
 
 
 def map_series(show: Series, *, audio_language: str, tags: list[str],
@@ -30,10 +50,7 @@ def map_series(show: Series, *, audio_language: str, tags: list[str],
 
     lastAired = None
     if show.lastAired:
-        aired = parser.parse(show.lastAired)
-        if not isinstance(aired, datetime):
-            raise ValueError('Invalid last-aired date')
-        lastAired = aired.strftime('%Y-%m-%d')
+        lastAired = _parse_last_aired(show.lastAired).strftime('%Y-%m-%d')
 
     original = show.originalLanguage
 
